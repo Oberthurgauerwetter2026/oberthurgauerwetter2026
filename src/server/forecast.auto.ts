@@ -688,7 +688,7 @@ export async function runAutoForecast(creatorId: string | null) {
   const biasLookback = Math.max(2, Math.min(14, (settings as any)?.bias_lookback_days ?? 7));
   const biasStrength = Math.max(0, Math.min(100, (settings as any)?.bias_strength ?? 70));
   const bias = biasEnabled && biasStations.length
-    ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
+    ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e: unknown) => { console.warn("bias compute failed", e); return null; })
     : null;
 
   const withTopo = (dayIndex: number) => {
