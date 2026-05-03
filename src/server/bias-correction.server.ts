@@ -62,7 +62,7 @@ function pairHourly(
   model: Awaited<ReturnType<typeof fetchModelHistory>>,
 ) {
   const m = new Map(model.map((r) => [r.time.slice(0, 13), r])); // bis Stunde
-  const pairs: Array<{ obs_t: number | null; mod_t: number | null; obs_w: number | null; mod_w: number | null; obs_p: number | null; mod_p: number | null; ageH: number }> = [];
+  const pairs: Array<{ obs_t: number | null; mod_t: number | null; obs_w: number | null; mod_w: number | null; obs_p: number | null; mod_p: number | null; obs_c: number | null; mod_c: number | null; ageH: number }> = [];
   const now = Date.now();
   for (const o of smn) {
     const key = o.time.slice(0, 13);
@@ -72,6 +72,7 @@ function pairHourly(
       obs_t: o.temp_c, mod_t: mr.t,
       obs_w: o.wind_kmh, mod_w: mr.w,
       obs_p: o.precip_mm, mod_p: mr.p,
+      obs_c: o.cloud_pct, mod_c: mr.c,
       ageH: (now - new Date(o.time).getTime()) / 3600_000,
     });
   }
