@@ -942,6 +942,19 @@ export function buildSystemPrompt(settings: any): string {
   ].join("\n");
 }
 
+// Veredelt einen MOSMIX-Tag mit den abgeleiteten Wind-Labels (Kompass + Stärke)
+function enrichMosmixDay(day: any): any {
+  if (!day) return day;
+  const dirAvg = day.wind_dir_avg;
+  const windMax = day.wind_max?.avg ?? null;
+  return {
+    ...day,
+    wind_dir_compass: dirAvg != null ? compassToName(dirAvg) : null,
+    wind_label: buildWindLabel(dirAvg, windMax),
+    sky_label: isClearSkyDay(day) ? "Sonnig und wolkenlos" : null,
+  };
+}
+
 // ===== Public server functions =====
 
 export const generateForecast = createServerFn({ method: "POST" })
