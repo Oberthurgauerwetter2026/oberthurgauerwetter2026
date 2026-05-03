@@ -17,6 +17,10 @@ export type Database = {
       app_settings: {
         Row: {
           ai_prompt_template: string | null
+          bias_enabled: boolean
+          bias_lookback_days: number
+          bias_stations: string
+          bias_strength: number
           id: string
           location_lat: number | null
           location_lon: number | null
@@ -45,6 +49,10 @@ export type Database = {
         }
         Insert: {
           ai_prompt_template?: string | null
+          bias_enabled?: boolean
+          bias_lookback_days?: number
+          bias_stations?: string
+          bias_strength?: number
           id?: string
           location_lat?: number | null
           location_lon?: number | null
@@ -73,6 +81,10 @@ export type Database = {
         }
         Update: {
           ai_prompt_template?: string | null
+          bias_enabled?: boolean
+          bias_lookback_days?: number
+          bias_stations?: string
+          bias_strength?: number
           id?: string
           location_lat?: number | null
           location_lon?: number | null
