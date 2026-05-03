@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { getOrSetCache } from "./weather-cache.server";
+import { fetchMosmixShortTerm } from "./mosmix.server";
 
 // ===== Helpers =====
 async function ensureStaff(supabase: any, userId: string) {
