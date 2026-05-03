@@ -1132,8 +1132,9 @@ export const regenerateEntry = createServerFn({ method: "POST" })
       .from("forecast_entries")
       .select("*")
       .eq("id", data.entryId)
-      .single();
+      .maybeSingle();
     if (error) throw new Error(error.message);
+    if (!entry) throw new Error("Eintrag nicht gefunden (ID ungültig oder keine Berechtigung).");
 
     const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:\n${JSON.stringify(entry.weather_data, null, 2)}`;
     const body = enforceSkyConsistency(await generateText(promptTemplate, userPrompt), entry.weather_data);
