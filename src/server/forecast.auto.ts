@@ -628,7 +628,7 @@ export async function runAutoForecast(creatorId: string | null) {
     (settings as any)?.models_longterm ?? undefined,
   );
   const topo = await ensureTopography(settings);
-  const stationBiases = await buildStationBiases();
+  const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
   const withTopo = (d: any) => {
     if (!d) return d;
     const out: any = { ...d, topography: applyTopography(d, topo) };
