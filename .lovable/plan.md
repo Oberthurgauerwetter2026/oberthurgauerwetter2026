@@ -1,35 +1,33 @@
 ## Ziel
 
-Reale Bewölkung von SwissMetNet (SMN) parsen und in die bestehende Bias-Korrektur aufnehmen, damit Modell-Bewölkung gegen Realität abgeglichen wird – analog zu Temperatur, Wind und Niederschlag.
+Verhindern, dass die KI in „Heute"-Einträgen Tageszeiten erwähnt, die bereits vergangen sind (z. B. „vor allem am Morgen" um 15 Uhr).
 
-## Änderungen
+## Änderung
 
-### 1. `src/server/swissmetnet.server.ts` — Bewölkung mitparsen
-- Spalte `nto000d0` (Gesamtbedeckung in Achteln 0–8) lesen.
-- In `SmnHourly["rows"]` neues Feld `cloud_pct: number | null` ergänzen (Achtel × 12.5, gerundet auf ganze %).
-- Werte > 8 (z. B. 9 = nicht bestimmbar) → `null`.
+In `src/server/forecast.functions.ts` und `src/server/forecast.auto.ts`: neue Helfer-Funktion `buildTimeOfDayHint(hour)` und Aufruf in `buildFirstEntryContext`.
 
-### 2. `src/server/bias-correction.server.ts` — Cloud-Bias berechnen
-- `fetchModelHistory` zusätzlich `cloudcover` (hourly) anfordern und im Rückgabeobjekt als `c: number | null` führen.
-- `pairHourly` um `obs_c` / `mod_c` erweitern.
-- `BiasResult` um `delta_cloud: number` ergänzen (additiv, %, geclampt ±30, Stärke-skaliert).
-- `applyBiasToDay`:
-  - `cloudcover` (avg/min/max) additiv um `delta_cloud` verschieben, hart auf 0–100 clampen.
-  - Nur anwenden, wenn `cloudcover_source === "model"` (nicht überschreiben, wenn aus Sonnenscheindauer abgeleitet).
-- `bias_correction`-Metadata um `delta_cloud` erweitern.
+### Logik
+Aus aktueller Zürcher Stunde wird abgeleitet, welche Tageszeit-Begriffe noch erlaubt bzw. verboten sind:
 
-### 3. Konsistenz / UI
-- `forecast.functions.ts` & `forecast.auto.ts`: keine Logikänderung nötig — `applyBiasToDay` wird bereits aufgerufen. Lediglich der Prompt-Hinweis (`windowHint` / Bias-Block) bekommt einen Satz: „Bewölkung ist mit SMN-Beobachtungen kalibriert (Δ Wolken: X %)".
-- Kein DB-Schema-Change, keine neuen Secrets.
+| Tageszeit | gilt als „vorbei" ab |
+|---|---|
+| frühe Morgenstunden | 05:00 |
+| Morgen | 10:00 |
+| Vormittag | 12:00 |
+| Mittag | 14:00 |
+| Nachmittag | 17:00 |
+| Abend | 22:00 |
+| Nacht | nie (Fenster reicht bis 05 Folgetag) |
 
-## Technische Details
+`windowHint` wird ergänzt:
+> „AKTUELLE UHRZEIT: HH:00 (Europe/Zurich). Erwähne AUSSCHLIESSLICH noch kommende Tageszeiten: {liste}. Folgende Tageszeiten sind bereits vergangen und dürfen NICHT erwähnt werden: {liste}."
 
-- Halbwertszeit der Gewichtung (~2 Tage) bleibt identisch.
-- Formel: `delta_cloud = clamp(weighted(obs_c - mod_c) * strength, -30, +30)`.
-- Cache-Key der Bias-Berechnung muss invalidiert werden — durch Erweiterung der Modellabfrage-URL (neuer Parameter `cloudcover`) bekommt `om:hist:*` automatisch frische Daten beim nächsten Lauf; alter Cache läuft in 1 h regulär aus.
+Gilt sowohl für vollen „Heute"-Eintrag (vor 12 Uhr) als auch für Teilfenster „Nachmittag & Abend" / „Abend & Nacht" — additiv zum bestehenden Fenster-Hinweis.
 
-## Out of Scope (für später)
+### Statischer Systemprompt
+`forecast.functions.ts` Zeile ~913: Bullet leicht entschärfen — „beschreibe den **verbleibenden** Tagesverlauf chronologisch; verwende nur die im userPrompt aufgeführten erlaubten Tageszeiten".
 
-- Echtzeit-Nowcast-Anker für die ersten 1–3 h.
-- UI-Vergleichszeile „Modell vs. SMN letzte 24 h".
-- Cloud-Faktor multiplikativ (additiv ist für Bewölkung in % robuster).
+## Scope
+- Folgetage (Morgen, Übermorgen, …) unverändert.
+- Keine DB-/Schema-Änderung.
+- Beide Codepfade (Auto-Generierung in `forecast.auto.ts` + manueller Generate-Flow in `forecast.functions.ts`) bekommen identische Logik.
