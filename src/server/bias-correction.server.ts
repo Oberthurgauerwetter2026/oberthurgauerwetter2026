@@ -116,7 +116,7 @@ export async function computeBiasCorrection(
 ): Promise<BiasResult> {
   const stations = await fetchSmnRecent(stationAbbrs, lookbackDays * 24);
   if (!stations.length) {
-    return { applied: false, stations: [], delta_temp: 0, factor_wind: 1, factor_precip: 1, lookback_days: lookbackDays, samples: 0, reason: "no SMN data" };
+    return { applied: false, stations: [], delta_temp: 0, factor_wind: 1, factor_precip: 1, delta_cloud: 0, lookback_days: lookbackDays, samples: 0, reason: "no SMN data" };
   }
 
   // Pairs über alle Stationen sammeln
@@ -128,18 +128,20 @@ export async function computeBiasCorrection(
   }
 
   if (allPairs.length < 12) {
-    return { applied: false, stations: stations.map((s) => s.station), delta_temp: 0, factor_wind: 1, factor_precip: 1, lookback_days: lookbackDays, samples: allPairs.length, reason: "too few pairs" };
+    return { applied: false, stations: stations.map((s) => s.station), delta_temp: 0, factor_wind: 1, factor_precip: 1, delta_cloud: 0, lookback_days: lookbackDays, samples: allPairs.length, reason: "too few pairs" };
   }
 
   const t = weighted(allPairs, (p) => [p.obs_t, p.mod_t]);
   const w = weightedRatio(allPairs, (p) => [p.obs_w, p.mod_w]);
   const r = weightedRatio(allPairs, (p) => [p.obs_p, p.mod_p]);
+  const c = weighted(allPairs, (p) => [p.obs_c, p.mod_c]);
 
   const s = clamp(strengthPct, 0, 100) / 100;
   // Stärke skaliert die Korrektur (0% = keine, 100% = volle)
   const dT  = clamp(t.delta * s, -5, 5);
   const fW  = clamp(1 + (w.ratio - 1) * s, 0.5, 1.8);
   const fP  = clamp(1 + (r.ratio - 1) * s, 0.4, 2.5);
+  const dC  = clamp(c.delta * s, -30, 30);
 
   return {
     applied: true,
@@ -147,6 +149,7 @@ export async function computeBiasCorrection(
     delta_temp: Math.round(dT * 10) / 10,
     factor_wind: Math.round(fW * 100) / 100,
     factor_precip: Math.round(fP * 100) / 100,
+    delta_cloud: Math.round(dC),
     lookback_days: lookbackDays,
     samples: allPairs.length,
   };
