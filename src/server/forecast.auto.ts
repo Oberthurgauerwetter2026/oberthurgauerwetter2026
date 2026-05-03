@@ -3,6 +3,7 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { buildSystemPrompt } from "./forecast.functions";
 import { getOrSetCache } from "./weather-cache.server";
+import { fetchMosmixShortTerm } from "./mosmix.server";
 
 const DAILY_VARS = [
   "temperature_2m_max", "temperature_2m_min", "precipitation_sum",
