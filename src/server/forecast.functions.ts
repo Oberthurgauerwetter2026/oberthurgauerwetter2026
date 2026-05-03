@@ -839,6 +839,32 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   };
 }
 
+// Builds the first ("today") entry data + title + prompt-hint based on Zurich hour.
+// < 12: full day. >= 12: rest-of-day window via formatEveningNight().
+function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
+  const hour = currentZurichHour();
+  const useEvening = hour >= 12;
+  const evening = useEvening ? formatEveningNight(weather) : null;
+  let firstData: any;
+  let windowHint = "";
+  if (useEvening && evening) {
+    const base = withTopo(0) ?? {};
+    firstData = { ...evening, date: today, topography: base.topography ?? null };
+    windowHint = `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ${evening.window_label}. Beziehe dich nur auf diese Stunden, NICHT auf den schon vergangenen Tagesabschnitt. Beschreibe den Verlauf chronologisch innerhalb dieses Fensters.`;
+  } else {
+    firstData = withTopo(0);
+  }
+  const firstTitle = useEvening
+    ? restOfDayTitle(hour, today)
+    : (() => {
+        const date = new Date(today);
+        const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
+        const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
+        return `Heute, ${weekday} ${formatted}`;
+      })();
+  return { firstData, firstTitle, windowHint, hour };
+}
+
 // ===== AI text generation =====
 async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
@@ -885,6 +911,7 @@ ABSOLUT VERBINDLICHE REGELN:
 - Sachlich, nüchtern, präzise. Kurze, prägnante Sätze. Häufig Halbsätze mit Gedankenstrich " - " (Leerzeichen-Bindestrich-Leerzeichen).
 - Absätze sind durch eine Leerzeile getrennt (\\n\\n). Jeder Absatz ist sehr kurz (1-3 Sätze).
 - Alle Einträge (auch der erste „Heute"-Eintrag) basieren auf TAGES-Werten. Für „Heute" beschreibe den Tagesverlauf chronologisch (Morgen → Mittag → Nachmittag → Abend) mit Tageszeit-Bezug.
+- AUSNAHME: Wenn der Eintragstitel "Heute Nachmittag & Nacht" oder "Heute Abend & Nacht" lautet, beziehen sich die mitgelieferten Werte (window_label, tmin, tmax, precip_total, wind_max, sunshine_h) AUSSCHLIESSLICH auf dieses Fenster (jetzt bis 06:00 Folgetag). Beschreibe nur diesen Zeitraum chronologisch — der bereits vergangene Tagesabschnitt darf NICHT erwähnt werden.
 
 PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebelartige Wolkenfelder", "Restbewölkung", "Bisenströmung", "veränderlich bewölkt", "ziemlich sonnig", "Schaueraktivität", "mittelhohe und hohe Wolkenfelder", "Bewölkungsverdichtung", "trockene Phasen", "sonnige Lücken", "mit Blick nach Baden-Württemberg", "Alpstein", "Vorarlberg", "umliegende Berg- und Hügelzüge", "südlichere Regionen".
 
@@ -1082,14 +1109,10 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
     {
-      const todayData = withTopo(0);
-      const date = new Date(today);
-      const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
-      const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
-      const firstTitle = `Heute, ${weekday} ${formatted}`;
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(todayData, null, 2)}`;
+      const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
       tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
-        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, todayData), weather_data: todayData,
+        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, firstData), weather_data: firstData,
       })));
     }
 
@@ -1209,14 +1232,10 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any; forecast_id: string }>> = [];
 
     {
-      const todayData = withTopo(0);
-      const date = new Date(today);
-      const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
-      const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
-      const firstTitle = `Heute, ${weekday} ${formatted}`;
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(todayData, null, 2)}`;
+      const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
       tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
-        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, todayData), weather_data: todayData, forecast_id: data.forecastId,
+        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, firstData), weather_data: firstData, forecast_id: data.forecastId,
       })));
     }
 

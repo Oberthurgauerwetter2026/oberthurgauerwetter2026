@@ -434,6 +434,30 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   };
 }
 
+function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
+  const hour = currentZurichHour();
+  const useEvening = hour >= 12;
+  const evening = useEvening ? formatEveningNight(weather) : null;
+  let firstData: any;
+  let windowHint = "";
+  if (useEvening && evening) {
+    const base = withTopo(0) ?? {};
+    firstData = { ...evening, date: today, topography: base.topography ?? null };
+    windowHint = `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ${evening.window_label}. Beziehe dich nur auf diese Stunden, NICHT auf den schon vergangenen Tagesabschnitt. Beschreibe den Verlauf chronologisch innerhalb dieses Fensters.`;
+  } else {
+    firstData = withTopo(0);
+  }
+  const firstTitle = useEvening
+    ? restOfDayTitle(hour, today)
+    : (() => {
+        const date = new Date(today);
+        const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
+        const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
+        return `Heute, ${weekday} ${formatted}`;
+      })();
+  return { firstData, firstTitle, windowHint, hour };
+}
+
 async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
@@ -719,24 +743,22 @@ export async function runAutoForecast(creatorId: string | null) {
   };
   const today = weather.daily.time[0];
 
+  const autoHour = currentZurichHour();
+  const autoNote = autoHour < 12 ? "Auto-generiert (Morgen)" : autoHour < 17 ? "Auto-generiert (Nachmittag)" : "Auto-generiert (Abend)";
   const { data: forecast, error: fErr } = await supabaseAdmin
-    .from("forecasts").insert({ forecast_date: today, status: "draft", created_by: creatorId, notes: "Auto-generiert (18:00)" })
+    .from("forecasts").insert({ forecast_date: today, status: "draft", created_by: creatorId, notes: autoNote })
     .select().single();
   if (fErr) throw new Error(fErr.message);
 
   const entries: Array<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any; forecast_id: string }> = [];
 
   {
-    const todayData = withTopo(0);
-    const date = new Date(today);
-    const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
-    const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
-    const firstTitle = `Heute, ${weekday} ${formatted}`;
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
     const body = enforceSkyConsistency(
-      await generateText(promptTemplate, `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(todayData, null, 2)}`),
-      todayData,
+      await generateText(promptTemplate, `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`),
+      firstData,
     );
-    entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: todayData, forecast_id: forecast.id });
+    entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: firstData, forecast_id: forecast.id });
   }
   for (let i = 1; i <= 5; i++) {
     const day = withTopo(i);
