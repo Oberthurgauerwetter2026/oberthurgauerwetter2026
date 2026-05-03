@@ -470,11 +470,18 @@ async function fetchWeather(
   midModels = normalizeModels(midModels);
   longModels = normalizeModels(longModels);
   // Avoid rate-limit bursts: query the model tiers sequentially and tolerate one tier failing.
+  // Short-tier (Tag 0-1) ist immer live; mid/long werden bis Mitternacht gecacht.
   const shortData = await fetchOpenMeteoOptional(lat, lon, shortModels, true);
   await wait(500);
-  const midData = await fetchOpenMeteoOptional(lat, lon, midModels, false);
+  const midData = await getOrSetCache(
+    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+  );
   await wait(500);
-  const longData = await fetchOpenMeteoOptional(lat, lon, longModels, false);
+  const longData = await getOrSetCache(
+    `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, longModels, false),
+  );
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
   if (!daily) throw new Error("Open-Meteo liefert aktuell keine Wetterdaten. Bitte später erneut versuchen.");
   return {
