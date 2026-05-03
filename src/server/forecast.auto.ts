@@ -2,6 +2,7 @@
 // avoids the auth middleware so it can be triggered by cron).
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { buildSystemPrompt } from "./forecast.functions";
+import { getOrSetCache } from "./weather-cache.server";
 
 const DAILY_VARS = [
   "temperature_2m_max", "temperature_2m_min", "precipitation_sum",
