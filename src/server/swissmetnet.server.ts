@@ -36,6 +36,7 @@ function parseCsv(csv: string, abbr: string): SmnHourly["rows"] {
   const idxTemp = header.indexOf("tre200h0");   // °C, Lufttemperatur 2 m, Stundenmittel
   const idxPrec = header.indexOf("rre150h0");   // mm, Niederschlag 1 h
   const idxWind = header.indexOf("fkl010h0");   // m/s, Wind Stundenmittel
+  const idxCloud = header.indexOf("nto000d0");  // Achtel 0–8, Gesamtbedeckung Stundenmittel
   if (idxTime < 0) return [];
 
   const out: SmnHourly["rows"] = [];
@@ -57,11 +58,16 @@ function parseCsv(csv: string, abbr: string): SmnHourly["rows"] {
     const tempC = idxTemp >= 0 ? num(cols[idxTemp]) : null;
     const precMm = idxPrec >= 0 ? num(cols[idxPrec]) : null;
     const windMs = idxWind >= 0 ? num(cols[idxWind]) : null;
+    const cloudOkta = idxCloud >= 0 ? num(cols[idxCloud]) : null;
+    const cloudPct = cloudOkta == null || cloudOkta < 0 || cloudOkta > 8
+      ? null
+      : Math.round(cloudOkta * 12.5);
     out.push({
       time: iso,
       temp_c: tempC,
       precip_mm: precMm,
       wind_kmh: windMs == null ? null : Math.round(windMs * 3.6 * 10) / 10,
+      cloud_pct: cloudPct,
     });
   }
   return out;
