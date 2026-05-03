@@ -29,8 +29,12 @@ function nextMidnightZurich(): string {
 export async function getOrSetCache<T>(
   cacheKey: string,
   fetcher: () => Promise<T>,
+  ttlMs?: number,
 ): Promise<T> {
   const nowIso = new Date().toISOString();
+  const expiresAt = ttlMs != null
+    ? new Date(Date.now() + ttlMs).toISOString()
+    : nextMidnightZurich();
   try {
     const { data } = await supabaseAdmin
       .from("weather_cache")
