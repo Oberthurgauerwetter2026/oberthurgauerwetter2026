@@ -690,7 +690,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   if (!h?.time) return null;
   const today = weather.daily.time[0];
   const tomorrow = weather.daily.time[1];
-  // Dynamic start: from "now" (current Zurich hour) until 06:00 next day.
+  // Dynamic start: from "now" (current Zurich hour) until 05:00 next day.
   // Cap minimum at 0 (full day) and maximum at 23 (latest sensible evening start).
   const rawStart = startHourOverride ?? currentZurichHour();
   const startHour = Math.max(0, Math.min(23, rawStart));
@@ -699,7 +699,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     .filter(({ t }) => {
       const dt = new Date(t);
       const dateStr = t.slice(0, 10);
-      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 6);
+      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 5);
     });
   if (!slice.length) return null;
 
@@ -813,7 +813,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
 
   // Human-readable window description for the prompt
-  const endHour = 6;
+  const endHour = 5;
   const window_label =
     startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend und Nacht`
     : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Nachmittag, Abend und Nacht`
@@ -911,7 +911,7 @@ ABSOLUT VERBINDLICHE REGELN:
 - Sachlich, nüchtern, präzise. Kurze, prägnante Sätze. Häufig Halbsätze mit Gedankenstrich " - " (Leerzeichen-Bindestrich-Leerzeichen).
 - Absätze sind durch eine Leerzeile getrennt (\\n\\n). Jeder Absatz ist sehr kurz (1-3 Sätze).
 - Alle Einträge (auch der erste „Heute"-Eintrag) basieren auf TAGES-Werten. Für „Heute" beschreibe den Tagesverlauf chronologisch (Morgen → Mittag → Nachmittag → Abend) mit Tageszeit-Bezug.
-- AUSNAHME: Wenn der Eintragstitel "Heute Nachmittag & Abend" oder "Heute Abend & Nacht" lautet, beziehen sich die mitgelieferten Werte (window_label, tmin, tmax, precip_total, wind_max, sunshine_h) AUSSCHLIESSLICH auf dieses Fenster (jetzt bis 06:00 Folgetag). Beschreibe nur diesen Zeitraum chronologisch — der bereits vergangene Tagesabschnitt darf NICHT erwähnt werden.
+- AUSNAHME: Wenn der Eintragstitel "Heute Nachmittag & Abend" oder "Heute Abend & Nacht" lautet, beziehen sich die mitgelieferten Werte (window_label, tmin, tmax, precip_total, wind_max, sunshine_h) AUSSCHLIESSLICH auf dieses Fenster (jetzt bis 05:00 Folgetag). Beschreibe nur diesen Zeitraum chronologisch — der bereits vergangene Tagesabschnitt darf NICHT erwähnt werden.
 
 PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebelartige Wolkenfelder", "Restbewölkung", "Bisenströmung", "veränderlich bewölkt", "ziemlich sonnig", "Schaueraktivität", "mittelhohe und hohe Wolkenfelder", "Bewölkungsverdichtung", "trockene Phasen", "sonnige Lücken", "mit Blick nach Baden-Württemberg", "Alpstein", "Vorarlberg", "umliegende Berg- und Hügelzüge", "südlichere Regionen".
 

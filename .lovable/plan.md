@@ -1,11 +1,7 @@
-# Label-Korrektur: „Nachmittag & Abend"
+# Endzeit-Korrektur: 05:00 statt 06:00
 
-Den Titel für das Zeitfenster 12:00–16:59 Uhr von „Heute Nachmittag & Nacht" auf „Heute Nachmittag & Abend" ändern.
+Datenfenster für „Heute Nachmittag & Abend" und „Heute Abend & Nacht" endet künftig um 05:00 Uhr Folgetag (statt 06:00).
 
 ## Änderungen
-
-- `src/server/forecast.functions.ts` Zeile 684: String-Literal anpassen
-- `src/server/forecast.auto.ts` Zeile 291: String-Literal anpassen
-- `src/server/forecast.functions.ts` Zeile 914: Prompt-Hinweis anpassen (Titel-Auflistung)
-
-Datenfenster (jetzt → 06:00 Folgetag) bleibt unverändert.
+- `src/server/forecast.functions.ts` Z.693 (Kommentar), Z.702 (`< 5`), Z.816 (`endHour = 5`), Z.914 (Prompt-Hinweis: „bis 05:00")
+- `src/server/forecast.auto.ts` Z.307 (`< 5`), Z.411 (`endHour = 5`)

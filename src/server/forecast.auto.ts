@@ -304,7 +304,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     .filter(({ t }) => {
       const dt = new Date(t);
       const dateStr = t.slice(0, 10);
-      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 6);
+      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 5);
     });
   if (!slice.length) return null;
 
@@ -408,7 +408,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   const wind_max = hourlyWinds.length ? r1(Math.max(...hourlyWinds)) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
 
-  const endHour = 6;
+  const endHour = 5;
   const window_label =
     startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend und Nacht`
     : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Nachmittag, Abend und Nacht`
