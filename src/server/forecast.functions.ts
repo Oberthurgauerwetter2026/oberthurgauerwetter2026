@@ -1028,7 +1028,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
     {
-      const todayData = withTopo(formatDayData(weather, 0));
+      const todayData = withTopo(0);
       const date = new Date(today);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
