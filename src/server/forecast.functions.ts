@@ -1052,9 +1052,22 @@ export const generateForecast = createServerFn({ method: "POST" })
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
+    const biasEnabled = settings?.bias_enabled !== false;
+    const biasStations = (settings?.bias_stations ?? "GUT,STG,TAE")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const biasLookback = Math.max(2, Math.min(14, settings?.bias_lookback_days ?? 7));
+    const biasStrength = Math.max(0, Math.min(100, settings?.bias_strength ?? 70));
+    const bias: BiasResult | null = biasEnabled && biasStations.length
+      ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
+      : null;
     const withTopo = (dayIndex: number) => {
-      const out = buildDay(dayIndex);
+      let out = buildDay(dayIndex);
       if (!out) return null;
+      // Bias nur anwenden wenn MOSMIX nicht schon korrigiert hat (also bei Tag >=2 oder fehlendem MOSMIX)
+      const mosmixApplied = out?.source === "mosmix";
+      if (bias && bias.applied && !mosmixApplied) {
+        out = applyBiasToDay(out, bias);
+      }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       return out;
     };
