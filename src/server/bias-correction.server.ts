@@ -24,13 +24,13 @@ async function fetchModelHistory(
   lat: number,
   lon: number,
   pastDays: number,
-): Promise<Array<{ time: string; t: number | null; w: number | null; p: number | null }>> {
-  const cacheKey = `om:hist:${lat.toFixed(3)},${lon.toFixed(3)}:d${pastDays}`;
+): Promise<Array<{ time: string; t: number | null; w: number | null; p: number | null; c: number | null }>> {
+  const cacheKey = `om:hist:v2:${lat.toFixed(3)},${lon.toFixed(3)}:d${pastDays}`;
   return getOrSetCache(cacheKey, async () => {
     const url = new URL("https://api.open-meteo.com/v1/forecast");
     url.searchParams.set("latitude", String(lat));
     url.searchParams.set("longitude", String(lon));
-    url.searchParams.set("hourly", "temperature_2m,precipitation,wind_speed_10m");
+    url.searchParams.set("hourly", "temperature_2m,precipitation,wind_speed_10m,cloudcover");
     url.searchParams.set("past_days", String(Math.min(14, Math.max(2, pastDays))));
     url.searchParams.set("forecast_days", "1");
     url.searchParams.set("models", "meteoswiss_icon_ch1");
@@ -42,7 +42,7 @@ async function fetchModelHistory(
       return [];
     }
     const j = await res.json() as {
-      hourly?: { time?: string[]; temperature_2m?: number[]; precipitation?: number[]; wind_speed_10m?: number[] };
+      hourly?: { time?: string[]; temperature_2m?: number[]; precipitation?: number[]; wind_speed_10m?: number[]; cloudcover?: number[] };
     };
     const h = j.hourly;
     if (!h?.time) return [];
@@ -51,6 +51,7 @@ async function fetchModelHistory(
       t: h.temperature_2m?.[i] ?? null,
       w: h.wind_speed_10m?.[i] ?? null,
       p: h.precipitation?.[i] ?? null,
+      c: h.cloudcover?.[i] ?? null,
     }));
   }, 60 * 60 * 1000);
 }
