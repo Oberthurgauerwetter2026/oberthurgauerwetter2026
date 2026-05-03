@@ -48,6 +48,10 @@ function SettingsPage() {
     radar_enabled: true,
     radar_radius_km: 15,
     radar_correction_strength: 70,
+    bias_enabled: true,
+    bias_stations: "GUT,STG,TAE",
+    bias_lookback_days: 7,
+    bias_strength: 70,
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -79,6 +83,10 @@ function SettingsPage() {
         radar_enabled: (settings as any).radar_enabled ?? true,
         radar_radius_km: (settings as any).radar_radius_km ?? 15,
         radar_correction_strength: (settings as any).radar_correction_strength ?? 70,
+        bias_enabled: (settings as any).bias_enabled ?? true,
+        bias_stations: (settings as any).bias_stations ?? "GUT,STG,TAE",
+        bias_lookback_days: (settings as any).bias_lookback_days ?? 7,
+        bias_strength: (settings as any).bias_strength ?? 70,
       });
     }
     if (session && !defaults) {
@@ -323,6 +331,64 @@ function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               0% = nur Anzeige der Beobachtung, kein Eingriff. 100% = volle Anpassung der Tagessumme
               an das Verhältnis Radar/Modell. Standard: 70%.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Bias-Korrektur (SwissMetNet)</CardTitle>
+          <CardDescription>
+            Vergleicht reale Messungen Schweizer MeteoSchweiz-Stationen der letzten Tage mit
+            den Modell-Vorhersagen für denselben Zeitraum und berechnet einen mittleren Bias
+            (Temperatur additiv, Wind/Niederschlag multiplikativ). Wird auf Tag 2+ angewandt;
+            für Tag 0/1 bleibt MOSMIX die Primärquelle.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label>Bias-Korrektur aktivieren</Label>
+              <p className="text-xs text-muted-foreground">Eigene „SuperHD-light"-Korrektur per Stationsabgleich.</p>
+            </div>
+            <Switch
+              checked={form.bias_enabled}
+              onCheckedChange={(v) => setForm({ ...form, bias_enabled: v })}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>SMN-Stationen (Kürzel, komma-getrennt)</Label>
+            <Input
+              value={form.bias_stations}
+              onChange={(e) => setForm({ ...form, bias_stations: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Verfügbar u.a.: GUT (Güttingen), STG (St. Gallen), TAE (Aadorf/Tänikon),
+              SMA (Zürich-Fluntern), KLO (Kloten).
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Vergleichszeitraum ({form.bias_lookback_days} Tage)</Label>
+            <Input
+              type="number"
+              min={2}
+              max={14}
+              value={form.bias_lookback_days}
+              onChange={(e) => setForm({ ...form, bias_lookback_days: parseInt(e.target.value || "7", 10) })}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Stärke der Korrektur ({form.bias_strength}%)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={form.bias_strength}
+              onChange={(e) => setForm({ ...form, bias_strength: parseInt(e.target.value || "70", 10) })}
+            />
+            <p className="text-xs text-muted-foreground">
+              0% = keine Korrektur. 100% = voller berechneter Bias. Standard: 70%.
             </p>
           </div>
         </CardContent>

@@ -5,6 +5,7 @@ import { buildSystemPrompt } from "./forecast.functions";
 import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
+import { computeBiasCorrection, applyBiasToDay } from "./bias-correction.server";
 
 function applyRadarToDay(out: any, dayIndex: number, radar: RadarSnapshot | null, settings: any) {
   if (dayIndex !== 0 || !radar) return;
@@ -681,6 +682,15 @@ export async function runAutoForecast(creatorId: string | null) {
     ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
     : null;
 
+  const biasEnabled = (settings as any)?.bias_enabled !== false;
+  const biasStations = (((settings as any)?.bias_stations ?? "GUT,STG,TAE") as string)
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  const biasLookback = Math.max(2, Math.min(14, (settings as any)?.bias_lookback_days ?? 7));
+  const biasStrength = Math.max(0, Math.min(100, (settings as any)?.bias_strength ?? 70));
+  const bias = biasEnabled && biasStations.length
+    ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e: unknown) => { console.warn("bias compute failed", e); return null; })
+    : null;
+
   const withTopo = (dayIndex: number) => {
     const omDay = formatDayData(weather, dayIndex);
     if (!omDay) return null;
@@ -696,10 +706,13 @@ export async function runAutoForecast(creatorId: string | null) {
     } else {
       base = omDay;
     }
-    const out: any = { ...base, topography: applyTopography(base, topo) };
+    let out: any = { ...base, topography: applyTopography(base, topo) };
     if (!mosmix) {
       const st = applyStationBias(base, stationBiases);
       if (st) out.stations = st;
+    }
+    if (bias && bias.applied && !mosmix) {
+      out = applyBiasToDay(out, bias);
     }
     applyRadarToDay(out, dayIndex, radarSnapshot, settings);
     return out;

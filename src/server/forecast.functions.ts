@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
+import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
@@ -1051,9 +1052,22 @@ export const generateForecast = createServerFn({ method: "POST" })
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
+    const biasEnabled = settings?.bias_enabled !== false;
+    const biasStations = (settings?.bias_stations ?? "GUT,STG,TAE")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const biasLookback = Math.max(2, Math.min(14, settings?.bias_lookback_days ?? 7));
+    const biasStrength = Math.max(0, Math.min(100, settings?.bias_strength ?? 70));
+    const bias: BiasResult | null = biasEnabled && biasStations.length
+      ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
+      : null;
     const withTopo = (dayIndex: number) => {
-      const out = buildDay(dayIndex);
+      let out = buildDay(dayIndex);
       if (!out) return null;
+      // Bias nur anwenden wenn MOSMIX nicht schon korrigiert hat (also bei Tag >=2 oder fehlendem MOSMIX)
+      const mosmixApplied = out?.source === "mosmix";
+      if (bias && bias.applied && !mosmixApplied) {
+        out = applyBiasToDay(out, bias);
+      }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       return out;
     };
@@ -1148,6 +1162,15 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
 
+    const biasEnabled = settings?.bias_enabled !== false;
+    const biasStations = (settings?.bias_stations ?? "GUT,STG,TAE")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const biasLookback = Math.max(2, Math.min(14, settings?.bias_lookback_days ?? 7));
+    const biasStrength = Math.max(0, Math.min(100, settings?.bias_strength ?? 70));
+    const bias: BiasResult | null = biasEnabled && biasStations.length
+      ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
+      : null;
+
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
@@ -1163,10 +1186,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       } else {
         base = omDay;
       }
-      const out: any = { ...base, topography: applyTopography(base, topo) };
+      let out: any = { ...base, topography: applyTopography(base, topo) };
       if (!mosmix) {
         const st = applyStationBias(base, stationBiases);
         if (st) out.stations = st;
+      }
+      if (bias && bias.applied && !mosmix) {
+        out = applyBiasToDay(out, bias);
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       return out;
@@ -1393,6 +1419,10 @@ export const updateSettings = createServerFn({ method: "POST" })
         radar_enabled: z.boolean().optional(),
         radar_radius_km: z.number().int().min(1).max(100).optional(),
         radar_correction_strength: z.number().int().min(0).max(100).optional(),
+        bias_enabled: z.boolean().optional(),
+        bias_stations: z.string().max(500).optional(),
+        bias_lookback_days: z.number().int().min(2).max(14).optional(),
+        bias_strength: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )
