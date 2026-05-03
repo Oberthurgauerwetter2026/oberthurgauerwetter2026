@@ -1343,6 +1343,8 @@ export const updateSettings = createServerFn({ method: "POST" })
         prompt_sky: z.string().max(50000).optional().nullable(),
         prompt_temp: z.string().max(50000).optional().nullable(),
         prompt_wind: z.string().max(50000).optional().nullable(),
+        mosmix_enabled: z.boolean().optional(),
+        mosmix_stations: z.string().max(500).optional(),
       })
       .parse(d)
   )
