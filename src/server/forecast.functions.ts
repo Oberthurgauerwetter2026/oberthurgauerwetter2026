@@ -1093,11 +1093,37 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     );
     const topo = await ensureTopography(supabase, settings);
     const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-    const withTopo = (d: any) => {
-      if (!d) return d;
-      const out: any = { ...d, topography: applyTopography(d, topo) };
-      const st = applyStationBias(d, stationBiases);
-      if (st) out.stations = st;
+
+    const mosmixEnabled = settings?.mosmix_enabled !== false;
+    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const mosmixByDate = mosmixEnabled
+      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
+          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
+          return new Map<string, any>();
+        })
+      : new Map<string, any>();
+
+    const withTopo = (dayIndex: number) => {
+      const omDay = formatDayData(weather, dayIndex);
+      if (!omDay) return null;
+      const mosmix = dayIndex <= 1 ? mosmixByDate.get(omDay.date) : null;
+      let base: any;
+      if (mosmix) {
+        base = enrichMosmixDay({
+          ...mosmix,
+          weathercode: omDay.weathercode,
+          precip_prob: omDay.precip_prob,
+          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
+        });
+      } else {
+        base = omDay;
+      }
+      const out: any = { ...base, topography: applyTopography(base, topo) };
+      if (!mosmix) {
+        const st = applyStationBias(base, stationBiases);
+        if (st) out.stations = st;
+      }
       return out;
     };
     const today = weather.daily.time[0];
