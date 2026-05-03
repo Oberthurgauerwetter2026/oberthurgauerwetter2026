@@ -5,6 +5,7 @@ import { buildSystemPrompt } from "./forecast.functions";
 import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
+import { computeBiasCorrection, applyBiasToDay } from "./bias-correction.server";
 
 function applyRadarToDay(out: any, dayIndex: number, radar: RadarSnapshot | null, settings: any) {
   if (dayIndex !== 0 || !radar) return;
