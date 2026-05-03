@@ -275,6 +275,61 @@ function SettingsPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Radar-Abgleich (MeteoSchweiz / Open-Meteo)</CardTitle>
+          <CardDescription>
+            Vergleicht die aktuell beobachteten Niederschläge (Radar-assimiliertes ICON-CH1, gleiche
+            Datenquelle wie openrad.ch) mit den modellierten Werten und korrigiert die Tagessumme
+            für <strong>Tag 0</strong>, falls die Realität deutlich vom Modell abweicht.
+            Cache: 5 Minuten. Kein Eingriff in Tag 1+.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
+              <Label>Radar-Korrektur aktivieren</Label>
+              <p className="text-xs text-muted-foreground">
+                Beobachtete Niederschläge der letzten 3 h überschreiben modellierte Werte für heute,
+                wenn der Unterschied signifikant ist.
+              </p>
+            </div>
+            <Switch
+              checked={form.radar_enabled}
+              onCheckedChange={(v) => setForm({ ...form, radar_enabled: v })}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Auswertungs-Radius (km)</Label>
+            <Input
+              type="number"
+              min={1}
+              max={100}
+              value={form.radar_radius_km}
+              onChange={(e) => setForm({ ...form, radar_radius_km: parseInt(e.target.value || "15", 10) })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Aktuell wird ein Punkt-Sample am Standort verwendet; der Radius ist als Vorbereitung für
+              eine flächige Auswertung hinterlegt.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Stärke der Radar-Korrektur ({form.radar_correction_strength}%)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={form.radar_correction_strength}
+              onChange={(e) => setForm({ ...form, radar_correction_strength: parseInt(e.target.value || "70", 10) })}
+            />
+            <p className="text-xs text-muted-foreground">
+              0% = nur Anzeige der Beobachtung, kein Eingriff. 100% = volle Anpassung der Tagessumme
+              an das Verhältnis Radar/Modell. Standard: 70%.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Allgemeiner Stil & Tonalität</CardTitle>
           <CardDescription>
             Grundregeln für Sprache, Satzbau und Vokabular. Leer lassen für die Standard-Vorlage.
