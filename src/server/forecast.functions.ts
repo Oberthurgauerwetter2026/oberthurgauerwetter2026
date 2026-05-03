@@ -1419,6 +1419,10 @@ export const updateSettings = createServerFn({ method: "POST" })
         radar_enabled: z.boolean().optional(),
         radar_radius_km: z.number().int().min(1).max(100).optional(),
         radar_correction_strength: z.number().int().min(0).max(100).optional(),
+        bias_enabled: z.boolean().optional(),
+        bias_stations: z.string().max(500).optional(),
+        bias_lookback_days: z.number().int().min(2).max(14).optional(),
+        bias_strength: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )
