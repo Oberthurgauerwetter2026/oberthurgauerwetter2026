@@ -697,7 +697,7 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: todayData, forecast_id: forecast.id });
   }
   for (let i = 1; i <= 5; i++) {
-    const day = withTopo(formatDayData(weather, i));
+    const day = withTopo(i);
     if (!day) continue;
     const date = new Date(day.date);
     const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
