@@ -1164,7 +1164,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     {
-      const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(formatDayData(weather, i))).filter(Boolean);
+      const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
         tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
