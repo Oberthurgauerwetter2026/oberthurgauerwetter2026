@@ -1162,6 +1162,15 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
 
+    const biasEnabled = settings?.bias_enabled !== false;
+    const biasStations = (settings?.bias_stations ?? "GUT,STG,TAE")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const biasLookback = Math.max(2, Math.min(14, settings?.bias_lookback_days ?? 7));
+    const biasStrength = Math.max(0, Math.min(100, settings?.bias_strength ?? 70));
+    const bias: BiasResult | null = biasEnabled && biasStations.length
+      ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
+      : null;
+
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
@@ -1177,10 +1186,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       } else {
         base = omDay;
       }
-      const out: any = { ...base, topography: applyTopography(base, topo) };
+      let out: any = { ...base, topography: applyTopography(base, topo) };
       if (!mosmix) {
         const st = applyStationBias(base, stationBiases);
         if (st) out.stations = st;
+      }
+      if (bias && bias.applied && !mosmix) {
+        out = applyBiasToDay(out, bias);
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       return out;
