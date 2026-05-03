@@ -1144,6 +1144,10 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         })
       : new Map<string, any>();
 
+    const radarSnapshot = (settings?.radar_enabled !== false)
+      ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
+      : null;
+
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
@@ -1164,6 +1168,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         const st = applyStationBias(base, stationBiases);
         if (st) out.stations = st;
       }
+      applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       return out;
     };
     const today = weather.daily.time[0];
