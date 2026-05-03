@@ -1,64 +1,85 @@
-## Ziel
+# Eigene Bias-Korrektur mit SwissMetNet-Stationen
 
-Aktuelle Radar-Niederschlagsdaten (openrad.ch nutzt im Hintergrund MeteoSwiss-Radar) mit den modellierten Werten abgleichen, um die Niederschlagsvorhersage für **Tag 0** (und die nächsten ~2 h) zu schärfen.
+Erweiterung der bestehenden DWD-MOSMIX-Logik um Schweizer Mess-Stationen (SwissMetNet via Open-Data-Portal von MeteoSchweiz). Damit wird das „SuperHD"-Prinzip von Kachelmann nachgebildet: Modell-Vorhersagen werden gegen reale Stations-Messungen der letzten Tage abgeglichen, ein gleitender Bias berechnet und auf die kommende Vorhersage angewendet.
 
-## Was openrad.ch liefert — und was wir wirklich nutzen
+## Datenquelle
 
-`openrad.ch` ist nur ein Viewer; es gibt keine offizielle API. Der zugrundeliegende Datensatz ist die **MeteoSwiss Radar-Composite** (`CPC` / `RZC`), kostenlos via **opendata.swiss / MeteoSwiss STAC-API** verfügbar (5-min-Raster, ganz CH inkl. Bodensee/Thurgau). Wir greifen direkt auf diese Quelle zu — keine HTML-Abhängigkeit von openrad.ch.
+**MeteoSchweiz Open Data — SMN** (`opendatadocs.meteoswiss.ch`)
+- Kostenlos, offiziell, ohne API-Key
+- CSV-Endpoints mit 10-min und stündlichen Werten je Station
+- Relevante Stationen (Region Oberthurgau): GUT (Güttingen), STG (St. Gallen), SMA (Zürich-Fluntern), KLO (Kloten), TAE (Aadorf/Tänikon)
+- Parameter: Temperatur (`tre200s0`), Wind (`fkl010z0`), Niederschlag (`rre150z0`), Sonnenschein (`sre000z0`), Bewölkung
 
-Fallback, falls die MeteoSwiss-Quelle blockt: **Open-Meteo `radar`-Endpoint** bzw. **DWD RADOLAN/RV** (Süd­deutschland deckt das Hinterland Friedrichshafens ab). Beide liefern georeferenzierte Niederschlagsraster.
+## Funktionsweise
 
-## Vorgehen
+```text
+            Letzte 7 Tage                Aktuell / nächste Tage
+   ┌─────────────────────────┐      ┌────────────────────────┐
+   │  Modell-Forecast (alt)  │      │  Modell-Forecast (neu) │
+   │            ↕             │      │           +            │
+   │  SMN-Messung (real)     │      │   Bias-Korrektur       │
+   └────────┬────────────────┘      └───────────┬────────────┘
+            │ Δ pro Parameter                   │
+            └──→ gleitender Bias  ─────────────→┘
+                 (T, Wind, Niederschlag-Faktor)
+```
 
-### 1. Server-Modul `src/server/radar.server.ts`
-- Funktion `fetchRecentRadar(lat, lon, radiusKm)`:
-  - Lädt die letzten ~12 Radar-Frames (= 1 h) als GeoTIFF/PNG aus dem MeteoSwiss-Bucket
-  - Extrahiert Pixel im Radius um den Standort
-  - Liefert: `{ tsISO, mmPerH }[]` plus Aggregate `last1h_mm`, `last3h_mm`
-- Cache: 5 min in `weather_cache` (über das vorhandene `getOrSetCache` mit `ttlMs`).
+## Umsetzung
 
-### 2. Vergleich Modell vs. Radar (`src/server/radar-bias.server.ts`)
-- Holt für die gleiche Stunde die modellierte Niederschlagsmenge (Open-Meteo, bestes Kurzfristmodell — meist `meteoswiss_icon_ch1`).
-- Berechnet pro Stunde:
-  - **Bias** `radar - model` (mm)
-  - **Verhältnis** `radar / max(model, 0.05)` (gedeckelt 0.2–5.0)
-- Wenn Radar deutlich abweicht (>0.3 mm absolut **und** >50 % relativ über die letzte Stunde):
-  - Tag 0 `precip_sum` korrigieren via Verhältnis (gedeckelt) für die noch verbleibenden Stunden
-  - `precip_prob` nur erhöhen, nicht senken (vermeidet falsche Trockenmeldung)
-- Ergebnis wird in `forecast_entries.weather_data.radar_correction` protokolliert (nachvollziehbar).
+### 1. Neuer Server-Modul `src/server/swissmetnet.server.ts`
+- `fetchSmnRecent(stationIds, hours)` — lädt CSV-Reihen der letzten 168 h
+- 1 h Cache (`getOrSetCache`)
+- Robustes CSV-Parsing, Worker-tauglich (kein Node-spezifisches FS)
 
-### 3. Kurz-Nowcast (0–2 h)
-- Einfache Persistenz: `mmPerH` der letzten 30 min wird als Erwartung für die nächsten 60–120 min übernommen, linear ausklingend.
-- Wird im UI / Bericht als „Aktuelle Radarlage" zusätzlich angezeigt (nicht in `precip_sum` von Tag 0 doppelt einrechnen).
+### 2. Neuer Server-Modul `src/server/bias-correction.server.ts`
+- `computeBias(stationData, modelHistory)` — vergleicht SMN-Messung mit Open-Meteo-Modell-Hindcast (`past_days=7`)
+- Liefert pro Parameter:
+  - **Temperatur:** mittlerer additiver Bias (°C)
+  - **Wind:** multiplikativer Faktor
+  - **Niederschlag:** Verhältnis (clamped 0.5–2.0)
+- Gewichtung: jüngere Tage zählen mehr (exponentielle Glättung)
+- `applyBias(dayData, bias)` — wendet Korrektur auf Tage 0–2 an
 
-### 4. Integration in `forecast.functions.ts` / `forecast.auto.ts`
-- Reihenfolge bleibt: Open-Meteo → MOSMIX (Tag 0/1) → **Radar-Korrektur (nur Tag 0)** → Topo → Stationsbias (sofern kein MOSMIX).
-- Radar wird **nicht** mit MOSMIX-Niederschlag verrechnet, sondern *nach* MOSMIX angewendet, da Radar = beobachtete Realität.
+### 3. Integration in `forecast.functions.ts` und `forecast.auto.ts`
+- Nach MOSMIX-Schritt, vor Radar-Schritt
+- Nur für Tage, an denen MOSMIX *nicht* schon korrigiert hat (also Tag 2 — Tag 0/1 macht MOSMIX besser)
+- Optional auch für CH-Region zusätzlich zu MOSMIX wenn die Distanz zur nächsten DWD-Station > 30 km
+
+### 4. Erweiterte Modell-Defaults
+- `models_shortterm`: zusätzlich `ukmo_seamless`
+- `models_midterm`: zusätzlich `meteofrance_arpege_europe`
+- `models_longterm`: zusätzlich `ukmo_seamless`
+→ Default-Wert in DB-Migration aktualisieren (bestehende Werte bleiben unverändert)
 
 ### 5. Settings-UI (`src/routes/_app.settings.tsx`)
-Neue Karte **„Radar-Abgleich (MeteoSwiss)"**:
-- Switch `radar_enabled` (Default an)
-- Slider `radar_radius_km` (Default 15, identisch zum allg. Radius)
-- Slider `radar_correction_strength` (0–100 %, Default 70 %) — dämpft die Korrektur
-- Info-Text mit Hinweis auf 5-min-Auflösung und 5-min-Cache.
+Neue Karte **„Bias-Korrektur (SwissMetNet)"**:
+- Toggle `bias_enabled`
+- Input `bias_stations` (z.B. `GUT,STG,TAE`)
+- Slider `bias_lookback_days` (3–14, Default 7)
+- Slider `bias_strength` (0–100 %, Default 70)
 
-### 6. DB-Migration
-`app_settings` um drei Spalten erweitern:
-- `radar_enabled boolean not null default true`
-- `radar_radius_km integer not null default 15`
-- `radar_correction_strength integer not null default 70`
+### 6. Datenbank-Migration
+Neue Spalten in `app_settings`:
+- `bias_enabled boolean default true`
+- `bias_stations text default 'GUT,STG,TAE'`
+- `bias_lookback_days int default 7`
+- `bias_strength int default 70`
 
-## Was bewusst **nicht** gemacht wird
+## Was du danach siehst
 
-- Kein Scraping von `openrad.ch` (instabil, keine Lizenz für Datenweitergabe).
-- Keine eigene Radar-Extrapolation per ML — Aufwand zu hoch, MeteoSwiss INCA reicht für unsere Zwecke nicht via offene API.
-- Kein Eingriff in Tag 1+ (Radar hat keinen Mehrwert >3 h).
+Im `weather_data`-JSON pro Tag ein neues Feld:
+```json
+"bias_correction": {
+  "applied": true,
+  "stations": ["GUT","STG"],
+  "delta_temp": -0.4,
+  "factor_wind": 1.08,
+  "factor_precip": 0.92,
+  "lookback_days": 7
+}
+```
 
-## Risiken / offene Punkte
+Damit: voll transparenter, eigener „SuperHD-light"-Layer ohne Kachelmann-Lizenz, vollständig legal, mit Open-Data-Quellen.
 
-- **Datenformat**: MeteoSwiss liefert `RZC`/`CPC` als binäres Grid. Falls das Parsing im Worker zu schwer wird (Sharp/GDAL nicht verfügbar), Fallback auf den **Open-Meteo `precipitation_radar`**-Endpoint, der bereits Punktwerte als JSON liefert — dann entfällt das Geo-Parsing komplett.
-- **Latenz**: Radar ist ~10 min alt, was für stündliche Bias-Korrektur völlig ausreicht.
-
-## Frage vor Umsetzung
-
-Soll ich direkt den **Open-Meteo Radar-Endpoint** verwenden (deutlich einfacher, JSON, keine GeoTIFF-Hürde, gleiche MeteoSwiss-Quelle im Hintergrund) oder echt die MeteoSwiss STAC-API anbinden (mehr Kontrolle, mehr Aufwand)?
+## Aufwand
+~3 neue/angepasste Dateien, 1 Migration. Erste sinnvolle Korrekturen ab Tag 2 (für Tag 0/1 bleibt MOSMIX überlegen, da bereits stations-kalibriert).
