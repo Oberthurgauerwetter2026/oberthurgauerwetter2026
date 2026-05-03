@@ -11,6 +11,7 @@ export type BiasResult = {
   delta_temp: number;       // °C, additiv (model + delta -> realistisch)
   factor_wind: number;      // multiplikativ (clamped)
   factor_precip: number;    // multiplikativ (clamped)
+  delta_cloud: number;      // %, additiv (clamped ±30)
   lookback_days: number;
   samples: number;
   reason?: string;
