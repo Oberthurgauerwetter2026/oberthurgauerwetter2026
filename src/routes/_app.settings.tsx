@@ -71,6 +71,8 @@ function SettingsPage() {
         prompt_sky: (settings as any).prompt_sky ?? "",
         prompt_temp: (settings as any).prompt_temp ?? "",
         prompt_wind: (settings as any).prompt_wind ?? "",
+        mosmix_enabled: (settings as any).mosmix_enabled ?? true,
+        mosmix_stations: (settings as any).mosmix_stations ?? "10935,10929",
       });
     }
     if (session && !defaults) {
