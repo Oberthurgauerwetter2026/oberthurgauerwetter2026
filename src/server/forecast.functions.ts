@@ -942,7 +942,7 @@ ABSOLUT VERBINDLICHE REGELN:
 - KEINE Floskeln wie "insgesamt", "alles in allem", "zusammenfassend".
 - Sachlich, nüchtern, präzise. Kurze, prägnante Sätze. Häufig Halbsätze mit Gedankenstrich " - " (Leerzeichen-Bindestrich-Leerzeichen).
 - Absätze sind durch eine Leerzeile getrennt (\\n\\n). Jeder Absatz ist sehr kurz (1-3 Sätze).
-- Alle Einträge (auch der erste „Heute"-Eintrag) basieren auf TAGES-Werten. Für „Heute" beschreibe den Tagesverlauf chronologisch (Morgen → Mittag → Nachmittag → Abend) mit Tageszeit-Bezug.
+- Alle Einträge (auch der erste „Heute"-Eintrag) basieren auf TAGES-Werten. Für „Heute" beschreibe den VERBLEIBENDEN Tagesverlauf chronologisch — verwende nur die im userPrompt unter „AKTUELLE UHRZEIT" aufgeführten erlaubten Tageszeiten und erwähne keine bereits vergangenen Tagesabschnitte.
 - AUSNAHME: Wenn der Eintragstitel "Heute Nachmittag & Abend" oder "Heute Abend & Nacht" lautet, beziehen sich die mitgelieferten Werte (window_label, tmin, tmax, precip_total, wind_max, sunshine_h) AUSSCHLIESSLICH auf dieses Fenster (jetzt bis 05:00 Folgetag). Beschreibe nur diesen Zeitraum chronologisch — der bereits vergangene Tagesabschnitt darf NICHT erwähnt werden.
 
 PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebelartige Wolkenfelder", "Restbewölkung", "Bisenströmung", "veränderlich bewölkt", "ziemlich sonnig", "Schaueraktivität", "mittelhohe und hohe Wolkenfelder", "Bewölkungsverdichtung", "trockene Phasen", "sonnige Lücken", "mit Blick nach Baden-Württemberg", "Alpstein", "Vorarlberg", "umliegende Berg- und Hügelzüge", "südlichere Regionen".
