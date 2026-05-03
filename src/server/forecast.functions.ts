@@ -4,6 +4,38 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
+import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
+
+// Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
+// einen `radar_correction`-Block sowie den aktuellen Nowcast an.
+function applyRadarToDay(out: any, dayIndex: number, radar: RadarSnapshot | null, settings: any) {
+  if (dayIndex !== 0 || !radar) return;
+  const enabled = settings?.radar_enabled !== false;
+  if (!enabled) return;
+  const strength = typeof settings?.radar_correction_strength === "number" ? settings.radar_correction_strength : 70;
+  const correction = buildRadarCorrection(out, radar, strength);
+  if (!correction) return;
+  out.radar_now = {
+    observed_last_3h_mm: radar.observed.last_3h_mm,
+    nowcast_next_2h_mm: radar.forecast_next_2h.next_2h_mm,
+    fetched_at: radar.fetched_at,
+    source: radar.source,
+  };
+  out.radar_correction = correction;
+  if (correction.applied && correction.after_precip_mm != null) {
+    if (!out.precip) out.precip = { avg: correction.after_precip_mm, min: correction.after_precip_mm, max: correction.after_precip_mm, spread: 0, by_model: {} };
+    else {
+      out.precip = { ...out.precip, avg: correction.after_precip_mm };
+    }
+    // precip_prob nur erhöhen, nie senken
+    if (correction.ratio > 1 && out.precip_prob?.avg != null) {
+      const boosted = Math.min(100, Math.round(out.precip_prob.avg * Math.min(1.5, correction.ratio)));
+      if (boosted > out.precip_prob.avg) {
+        out.precip_prob = { ...out.precip_prob, avg: boosted };
+      }
+    }
+  }
+}
 
 // ===== Helpers =====
 async function ensureStaff(supabase: any, userId: string) {
@@ -1016,7 +1048,15 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       return out;
     };
-    const withTopo = buildDay;
+    const radarSnapshot = (settings?.radar_enabled !== false)
+      ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
+      : null;
+    const withTopo = (dayIndex: number) => {
+      const out = buildDay(dayIndex);
+      if (!out) return null;
+      applyRadarToDay(out, dayIndex, radarSnapshot, settings);
+      return out;
+    };
     const today = weather.daily.time[0];
     const { data: forecast, error: fErr } = await supabase
       .from("forecasts")
@@ -1104,6 +1144,10 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         })
       : new Map<string, any>();
 
+    const radarSnapshot = (settings?.radar_enabled !== false)
+      ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
+      : null;
+
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
@@ -1124,6 +1168,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         const st = applyStationBias(base, stationBiases);
         if (st) out.stations = st;
       }
+      applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       return out;
     };
     const today = weather.daily.time[0];
@@ -1345,6 +1390,9 @@ export const updateSettings = createServerFn({ method: "POST" })
         prompt_wind: z.string().max(50000).optional().nullable(),
         mosmix_enabled: z.boolean().optional(),
         mosmix_stations: z.string().max(500).optional(),
+        radar_enabled: z.boolean().optional(),
+        radar_radius_km: z.number().int().min(1).max(100).optional(),
+        radar_correction_strength: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )

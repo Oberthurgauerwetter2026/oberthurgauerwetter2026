@@ -29,6 +29,9 @@ export type Database = {
           prompt_sky: string | null
           prompt_temp: string | null
           prompt_wind: string | null
+          radar_correction_strength: number
+          radar_enabled: boolean
+          radar_radius_km: number
           radius_km: number | null
           topo_elev_max: number | null
           topo_elev_median: number | null
@@ -54,6 +57,9 @@ export type Database = {
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null
+          radar_correction_strength?: number
+          radar_enabled?: boolean
+          radar_radius_km?: number
           radius_km?: number | null
           topo_elev_max?: number | null
           topo_elev_median?: number | null
@@ -79,6 +85,9 @@ export type Database = {
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null
+          radar_correction_strength?: number
+          radar_enabled?: boolean
+          radar_radius_km?: number
           radius_km?: number | null
           topo_elev_max?: number | null
           topo_elev_median?: number | null
