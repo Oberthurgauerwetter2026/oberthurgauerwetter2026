@@ -1048,7 +1048,15 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       return out;
     };
-    const withTopo = buildDay;
+    const radarSnapshot = (settings?.radar_enabled !== false)
+      ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
+      : null;
+    const withTopo = (dayIndex: number) => {
+      const out = buildDay(dayIndex);
+      if (!out) return null;
+      applyRadarToDay(out, dayIndex, radarSnapshot, settings);
+      return out;
+    };
     const today = weather.daily.time[0];
     const { data: forecast, error: fErr } = await supabase
       .from("forecasts")
