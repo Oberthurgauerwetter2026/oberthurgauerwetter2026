@@ -24,6 +24,8 @@ export type Database = {
           models_longterm: string | null
           models_midterm: string | null
           models_shortterm: string | null
+          mosmix_enabled: boolean
+          mosmix_stations: string
           prompt_sky: string | null
           prompt_temp: string | null
           prompt_wind: string | null
@@ -47,6 +49,8 @@ export type Database = {
           models_longterm?: string | null
           models_midterm?: string | null
           models_shortterm?: string | null
+          mosmix_enabled?: boolean
+          mosmix_stations?: string
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null
@@ -70,6 +74,8 @@ export type Database = {
           models_longterm?: string | null
           models_midterm?: string | null
           models_shortterm?: string | null
+          mosmix_enabled?: boolean
+          mosmix_stations?: string
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null

@@ -29,8 +29,12 @@ function nextMidnightZurich(): string {
 export async function getOrSetCache<T>(
   cacheKey: string,
   fetcher: () => Promise<T>,
+  ttlMs?: number,
 ): Promise<T> {
   const nowIso = new Date().toISOString();
+  const expiresAt = ttlMs != null
+    ? new Date(Date.now() + ttlMs).toISOString()
+    : nextMidnightZurich();
   try {
     const { data } = await supabaseAdmin
       .from("weather_cache")
@@ -53,7 +57,7 @@ export async function getOrSetCache<T>(
       cache_key: cacheKey,
       payload: payload as any,
       fetched_at: nowIso,
-      expires_at: nextMidnightZurich(),
+      expires_at: expiresAt,
     });
     // Best-effort cleanup of expired rows.
     await supabaseAdmin.from("weather_cache").delete().lt("expires_at", nowIso);

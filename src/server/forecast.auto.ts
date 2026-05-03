@@ -3,6 +3,7 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { buildSystemPrompt } from "./forecast.functions";
 import { getOrSetCache } from "./weather-cache.server";
+import { fetchMosmixShortTerm } from "./mosmix.server";
 
 const DAILY_VARS = [
   "temperature_2m_max", "temperature_2m_min", "precipitation_sum",
@@ -629,11 +630,49 @@ export async function runAutoForecast(creatorId: string | null) {
   );
   const topo = await ensureTopography(settings);
   const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-  const withTopo = (d: any) => {
-    if (!d) return d;
-    const out: any = { ...d, topography: applyTopography(d, topo) };
-    const st = applyStationBias(d, stationBiases);
-    if (st) out.stations = st;
+
+  const mosmixEnabled = (settings as any)?.mosmix_enabled !== false;
+  const mosmixStations = ((settings as any)?.mosmix_stations ?? "10935,10929")
+    .split(",").map((s: string) => s.trim()).filter(Boolean);
+  const mosmixByDate = mosmixEnabled
+    ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
+        console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
+        return new Map<string, any>();
+      })
+    : new Map<string, any>();
+
+  const enrichMosmix = (day: any): any => {
+    if (!day) return day;
+    const dirAvg = day.wind_dir_avg;
+    const windMax = day.wind_max?.avg ?? null;
+    return {
+      ...day,
+      wind_dir_compass: dirAvg != null ? compassToName(dirAvg) : null,
+      wind_label: buildWindLabel(dirAvg, windMax),
+      sky_label: isClearSkyDay(day) ? "Sonnig und wolkenlos" : null,
+    };
+  };
+
+  const withTopo = (dayIndex: number) => {
+    const omDay = formatDayData(weather, dayIndex);
+    if (!omDay) return null;
+    const mosmix = dayIndex <= 1 ? mosmixByDate.get(omDay.date) : null;
+    let base: any;
+    if (mosmix) {
+      base = enrichMosmix({
+        ...mosmix,
+        weathercode: omDay.weathercode,
+        precip_prob: omDay.precip_prob,
+        om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
+      });
+    } else {
+      base = omDay;
+    }
+    const out: any = { ...base, topography: applyTopography(base, topo) };
+    if (!mosmix) {
+      const st = applyStationBias(base, stationBiases);
+      if (st) out.stations = st;
+    }
     return out;
   };
   const today = weather.daily.time[0];
@@ -646,7 +685,7 @@ export async function runAutoForecast(creatorId: string | null) {
   const entries: Array<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any; forecast_id: string }> = [];
 
   {
-    const todayData = withTopo(formatDayData(weather, 0));
+    const todayData = withTopo(0);
     const date = new Date(today);
     const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
     const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
@@ -658,7 +697,7 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: todayData, forecast_id: forecast.id });
   }
   for (let i = 1; i <= 5; i++) {
-    const day = withTopo(formatDayData(weather, i));
+    const day = withTopo(i);
     if (!day) continue;
     const date = new Date(day.date);
     const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
@@ -668,7 +707,7 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: i + 1, entry_date: day.date, title, body, weather_data: day, forecast_id: forecast.id });
   }
   {
-    const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(formatDayData(weather, i))).filter(Boolean) as any[];
+    const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean) as any[];
     if (trendDays.length) {
       const body = await generateText(promptTemplate, `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für Tage 6-10:\n${JSON.stringify(trendDays, null, 2)}`);
       entries.push({ position: 7, entry_date: trendDays[0].date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: forecast.id });

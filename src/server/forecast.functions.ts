@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { getOrSetCache } from "./weather-cache.server";
+import { fetchMosmixShortTerm } from "./mosmix.server";
 
 // ===== Helpers =====
 async function ensureStaff(supabase: any, userId: string) {
@@ -941,6 +942,19 @@ export function buildSystemPrompt(settings: any): string {
   ].join("\n");
 }
 
+// Veredelt einen MOSMIX-Tag mit den abgeleiteten Wind-Labels (Kompass + Stärke)
+function enrichMosmixDay(day: any): any {
+  if (!day) return day;
+  const dirAvg = day.wind_dir_avg;
+  const windMax = day.wind_max?.avg ?? null;
+  return {
+    ...day,
+    wind_dir_compass: dirAvg != null ? compassToName(dirAvg) : null,
+    wind_label: buildWindLabel(dirAvg, windMax),
+    sky_label: isClearSkyDay(day) ? "Sonnig und wolkenlos" : null,
+  };
+}
+
 // ===== Public server functions =====
 
 export const generateForecast = createServerFn({ method: "POST" })
@@ -962,13 +976,47 @@ export const generateForecast = createServerFn({ method: "POST" })
     );
     const topo = await ensureTopography(supabase, settings);
     const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-    const withTopo = (d: any) => {
-      if (!d) return d;
-      const out: any = { ...d, topography: applyTopography(d, topo) };
-      const st = applyStationBias(d, stationBiases);
-      if (st) out.stations = st;
+
+    // ICON-MOS (DWD MOSMIX) für Tag 0 + 1 holen, sofern aktiviert.
+    // MOSMIX ist bereits statistisch gegen Stationsmessungen kalibriert,
+    // daher entfällt für diese Tage die eigene Stations-Bias-Korrektur.
+    const mosmixEnabled = settings?.mosmix_enabled !== false;
+    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const mosmixByDate = mosmixEnabled
+      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
+          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
+          return new Map<string, any>();
+        })
+      : new Map<string, any>();
+
+    const buildDay = (dayIndex: number) => {
+      const omDay = formatDayData(weather, dayIndex);
+      if (!omDay) return null;
+      // Tag 0/1: MOSMIX bevorzugt — überschreibt Roh-Werte, kein Stations-Bias.
+      const mosmix = dayIndex <= 1 ? mosmixByDate.get(omDay.date) : null;
+      let base: any;
+      if (mosmix) {
+        // MOSMIX ist Primärquelle. Open-Meteo bleibt als Referenz im Feld om_reference.
+        base = enrichMosmixDay({
+          ...mosmix,
+          // weathercode/precip_prob aus Open-Meteo übernehmen (MOSMIX hat das nicht)
+          weathercode: omDay.weathercode,
+          precip_prob: omDay.precip_prob,
+          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
+        });
+      } else {
+        base = omDay;
+      }
+      const out: any = { ...base, topography: applyTopography(base, topo) };
+      // Stations-Bias nur dann anhängen, wenn nicht schon MOSMIX-korrigiert.
+      if (!mosmix) {
+        const st = applyStationBias(base, stationBiases);
+        if (st) out.stations = st;
+      }
       return out;
     };
+    const withTopo = buildDay;
     const today = weather.daily.time[0];
     const { data: forecast, error: fErr } = await supabase
       .from("forecasts")
@@ -980,7 +1028,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
     {
-      const todayData = withTopo(formatDayData(weather, 0));
+      const todayData = withTopo(0);
       const date = new Date(today);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
@@ -992,7 +1040,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= 5; i++) {
-      const day = withTopo(formatDayData(weather, i));
+      const day = withTopo(i);
       if (!day) continue;
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
@@ -1006,7 +1054,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     {
-      const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(formatDayData(weather, i))).filter(Boolean);
+      const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
         tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
@@ -1045,11 +1093,37 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     );
     const topo = await ensureTopography(supabase, settings);
     const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-    const withTopo = (d: any) => {
-      if (!d) return d;
-      const out: any = { ...d, topography: applyTopography(d, topo) };
-      const st = applyStationBias(d, stationBiases);
-      if (st) out.stations = st;
+
+    const mosmixEnabled = settings?.mosmix_enabled !== false;
+    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const mosmixByDate = mosmixEnabled
+      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
+          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
+          return new Map<string, any>();
+        })
+      : new Map<string, any>();
+
+    const withTopo = (dayIndex: number) => {
+      const omDay = formatDayData(weather, dayIndex);
+      if (!omDay) return null;
+      const mosmix = dayIndex <= 1 ? mosmixByDate.get(omDay.date) : null;
+      let base: any;
+      if (mosmix) {
+        base = enrichMosmixDay({
+          ...mosmix,
+          weathercode: omDay.weathercode,
+          precip_prob: omDay.precip_prob,
+          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
+        });
+      } else {
+        base = omDay;
+      }
+      const out: any = { ...base, topography: applyTopography(base, topo) };
+      if (!mosmix) {
+        const st = applyStationBias(base, stationBiases);
+        if (st) out.stations = st;
+      }
       return out;
     };
     const today = weather.daily.time[0];
@@ -1064,7 +1138,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any; forecast_id: string }>> = [];
 
     {
-      const todayData = withTopo(formatDayData(weather, 0));
+      const todayData = withTopo(0);
       const date = new Date(today);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
@@ -1076,7 +1150,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= 5; i++) {
-      const day = withTopo(formatDayData(weather, i));
+      const day = withTopo(i);
       if (!day) continue;
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
@@ -1090,7 +1164,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     {
-      const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(formatDayData(weather, i))).filter(Boolean);
+      const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
         tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
