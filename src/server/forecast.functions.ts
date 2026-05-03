@@ -1390,6 +1390,9 @@ export const updateSettings = createServerFn({ method: "POST" })
         prompt_wind: z.string().max(50000).optional().nullable(),
         mosmix_enabled: z.boolean().optional(),
         mosmix_stations: z.string().max(500).optional(),
+        radar_enabled: z.boolean().optional(),
+        radar_radius_km: z.number().int().min(1).max(100).optional(),
+        radar_correction_strength: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )
