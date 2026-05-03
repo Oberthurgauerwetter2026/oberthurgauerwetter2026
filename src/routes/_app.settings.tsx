@@ -43,6 +43,8 @@ function SettingsPage() {
     prompt_sky: "",
     prompt_temp: "",
     prompt_wind: "",
+    mosmix_enabled: true,
+    mosmix_stations: "10935,10929",
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -69,6 +71,8 @@ function SettingsPage() {
         prompt_sky: (settings as any).prompt_sky ?? "",
         prompt_temp: (settings as any).prompt_temp ?? "",
         prompt_wind: (settings as any).prompt_wind ?? "",
+        mosmix_enabled: (settings as any).mosmix_enabled ?? true,
+        mosmix_stations: (settings as any).mosmix_stations ?? "10935,10929",
       });
     }
     if (session && !defaults) {
@@ -227,6 +231,38 @@ function SettingsPage() {
           <div className="space-y-2">
             <Label>Langfrist-Modelle (Tag 6-10)</Label>
             <Input value={form.models_longterm} onChange={(e) => setForm({ ...form, models_longterm: e.target.value })} placeholder="ecmwf_ifs025,gfs_global" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">ICON-MOS (DWD MOSMIX)</CardTitle>
+          <CardDescription>
+            Statistisch korrigierte Punktvorhersagen vom Deutschen Wetterdienst für Tag 0 & 1.
+            Standard-Stationen: 10935 (Friedrichshafen), 10929 (Konstanz). Bei aktiviertem MOSMIX
+            wird die manuelle Stations-Bias-Korrektur für die ersten beiden Tage übersprungen,
+            da die Daten bereits statistisch kalibriert sind.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
+              <Label>MOSMIX-Korrektur aktivieren</Label>
+              <p className="text-xs text-muted-foreground">Tag 0 & 1 werden aus DWD MOSMIX statt Open-Meteo berechnet.</p>
+            </div>
+            <Switch
+              checked={form.mosmix_enabled}
+              onCheckedChange={(v) => setForm({ ...form, mosmix_enabled: v })}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>MOSMIX-Stationen (DWD-IDs, komma-getrennt)</Label>
+            <Input
+              value={form.mosmix_stations}
+              onChange={(e) => setForm({ ...form, mosmix_stations: e.target.value })}
+              placeholder="10935,10929"
+            />
           </div>
         </CardContent>
       </Card>
