@@ -23,6 +23,7 @@ export type SmnHourly = {
     temp_c: number | null;
     precip_mm: number | null;
     wind_kmh: number | null;
+    cloud_pct: number | null;   // Gesamtbedeckung 0–100 % (aus Achteln nto000d0)
   }>;
 };
 
