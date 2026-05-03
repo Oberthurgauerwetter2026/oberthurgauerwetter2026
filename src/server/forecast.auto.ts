@@ -434,6 +434,30 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   };
 }
 
+function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
+  const hour = currentZurichHour();
+  const useEvening = hour >= 12;
+  const evening = useEvening ? formatEveningNight(weather) : null;
+  let firstData: any;
+  let windowHint = "";
+  if (useEvening && evening) {
+    const base = withTopo(0) ?? {};
+    firstData = { ...evening, date: today, topography: base.topography ?? null };
+    windowHint = `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ${evening.window_label}. Beziehe dich nur auf diese Stunden, NICHT auf den schon vergangenen Tagesabschnitt. Beschreibe den Verlauf chronologisch innerhalb dieses Fensters.`;
+  } else {
+    firstData = withTopo(0);
+  }
+  const firstTitle = useEvening
+    ? restOfDayTitle(hour, today)
+    : (() => {
+        const date = new Date(today);
+        const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
+        const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
+        return `Heute, ${weekday} ${formatted}`;
+      })();
+  return { firstData, firstTitle, windowHint, hour };
+}
+
 async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
