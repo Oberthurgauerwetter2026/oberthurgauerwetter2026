@@ -11,6 +11,7 @@ export type BiasResult = {
   delta_temp: number;       // °C, additiv (model + delta -> realistisch)
   factor_wind: number;      // multiplikativ (clamped)
   factor_precip: number;    // multiplikativ (clamped)
+  delta_cloud: number;      // %, additiv (clamped ±30)
   lookback_days: number;
   samples: number;
   reason?: string;
@@ -23,13 +24,13 @@ async function fetchModelHistory(
   lat: number,
   lon: number,
   pastDays: number,
-): Promise<Array<{ time: string; t: number | null; w: number | null; p: number | null }>> {
-  const cacheKey = `om:hist:${lat.toFixed(3)},${lon.toFixed(3)}:d${pastDays}`;
+): Promise<Array<{ time: string; t: number | null; w: number | null; p: number | null; c: number | null }>> {
+  const cacheKey = `om:hist:v2:${lat.toFixed(3)},${lon.toFixed(3)}:d${pastDays}`;
   return getOrSetCache(cacheKey, async () => {
     const url = new URL("https://api.open-meteo.com/v1/forecast");
     url.searchParams.set("latitude", String(lat));
     url.searchParams.set("longitude", String(lon));
-    url.searchParams.set("hourly", "temperature_2m,precipitation,wind_speed_10m");
+    url.searchParams.set("hourly", "temperature_2m,precipitation,wind_speed_10m,cloudcover");
     url.searchParams.set("past_days", String(Math.min(14, Math.max(2, pastDays))));
     url.searchParams.set("forecast_days", "1");
     url.searchParams.set("models", "meteoswiss_icon_ch1");
@@ -41,7 +42,7 @@ async function fetchModelHistory(
       return [];
     }
     const j = await res.json() as {
-      hourly?: { time?: string[]; temperature_2m?: number[]; precipitation?: number[]; wind_speed_10m?: number[] };
+      hourly?: { time?: string[]; temperature_2m?: number[]; precipitation?: number[]; wind_speed_10m?: number[]; cloudcover?: number[] };
     };
     const h = j.hourly;
     if (!h?.time) return [];
@@ -50,6 +51,7 @@ async function fetchModelHistory(
       t: h.temperature_2m?.[i] ?? null,
       w: h.wind_speed_10m?.[i] ?? null,
       p: h.precipitation?.[i] ?? null,
+      c: h.cloudcover?.[i] ?? null,
     }));
   }, 60 * 60 * 1000);
 }
@@ -60,7 +62,7 @@ function pairHourly(
   model: Awaited<ReturnType<typeof fetchModelHistory>>,
 ) {
   const m = new Map(model.map((r) => [r.time.slice(0, 13), r])); // bis Stunde
-  const pairs: Array<{ obs_t: number | null; mod_t: number | null; obs_w: number | null; mod_w: number | null; obs_p: number | null; mod_p: number | null; ageH: number }> = [];
+  const pairs: Array<{ obs_t: number | null; mod_t: number | null; obs_w: number | null; mod_w: number | null; obs_p: number | null; mod_p: number | null; obs_c: number | null; mod_c: number | null; ageH: number }> = [];
   const now = Date.now();
   for (const o of smn) {
     const key = o.time.slice(0, 13);
@@ -70,6 +72,7 @@ function pairHourly(
       obs_t: o.temp_c, mod_t: mr.t,
       obs_w: o.wind_kmh, mod_w: mr.w,
       obs_p: o.precip_mm, mod_p: mr.p,
+      obs_c: o.cloud_pct, mod_c: mr.c,
       ageH: (now - new Date(o.time).getTime()) / 3600_000,
     });
   }
@@ -113,7 +116,7 @@ export async function computeBiasCorrection(
 ): Promise<BiasResult> {
   const stations = await fetchSmnRecent(stationAbbrs, lookbackDays * 24);
   if (!stations.length) {
-    return { applied: false, stations: [], delta_temp: 0, factor_wind: 1, factor_precip: 1, lookback_days: lookbackDays, samples: 0, reason: "no SMN data" };
+    return { applied: false, stations: [], delta_temp: 0, factor_wind: 1, factor_precip: 1, delta_cloud: 0, lookback_days: lookbackDays, samples: 0, reason: "no SMN data" };
   }
 
   // Pairs über alle Stationen sammeln
@@ -125,18 +128,20 @@ export async function computeBiasCorrection(
   }
 
   if (allPairs.length < 12) {
-    return { applied: false, stations: stations.map((s) => s.station), delta_temp: 0, factor_wind: 1, factor_precip: 1, lookback_days: lookbackDays, samples: allPairs.length, reason: "too few pairs" };
+    return { applied: false, stations: stations.map((s) => s.station), delta_temp: 0, factor_wind: 1, factor_precip: 1, delta_cloud: 0, lookback_days: lookbackDays, samples: allPairs.length, reason: "too few pairs" };
   }
 
   const t = weighted(allPairs, (p) => [p.obs_t, p.mod_t]);
   const w = weightedRatio(allPairs, (p) => [p.obs_w, p.mod_w]);
   const r = weightedRatio(allPairs, (p) => [p.obs_p, p.mod_p]);
+  const c = weighted(allPairs, (p) => [p.obs_c, p.mod_c]);
 
   const s = clamp(strengthPct, 0, 100) / 100;
   // Stärke skaliert die Korrektur (0% = keine, 100% = volle)
   const dT  = clamp(t.delta * s, -5, 5);
   const fW  = clamp(1 + (w.ratio - 1) * s, 0.5, 1.8);
   const fP  = clamp(1 + (r.ratio - 1) * s, 0.4, 2.5);
+  const dC  = clamp(c.delta * s, -30, 30);
 
   return {
     applied: true,
@@ -144,6 +149,7 @@ export async function computeBiasCorrection(
     delta_temp: Math.round(dT * 10) / 10,
     factor_wind: Math.round(fW * 100) / 100,
     factor_precip: Math.round(fP * 100) / 100,
+    delta_cloud: Math.round(dC),
     lookback_days: lookbackDays,
     samples: allPairs.length,
   };
@@ -166,12 +172,18 @@ export function applyBiasToDay(day: any, bias: BiasResult): any {
   out.tmin = adjAgg(out.tmin, (v) => v + bias.delta_temp);
   out.wind_max = adjAgg(out.wind_max, (v) => v * bias.factor_wind);
   out.precip = adjAgg(out.precip, (v) => v * bias.factor_precip);
+  // Bewölkung nur korrigieren, wenn Modellwert vorhanden — nicht überschreiben,
+  // wenn aus Sonnenscheindauer abgeleitet.
+  if (out.cloudcover_source === "model" && bias.delta_cloud !== 0) {
+    out.cloudcover = adjAgg(out.cloudcover, (v) => clamp(v + bias.delta_cloud, 0, 100));
+  }
   out.bias_correction = {
     applied: true,
     stations: bias.stations,
     delta_temp: bias.delta_temp,
     factor_wind: bias.factor_wind,
     factor_precip: bias.factor_precip,
+    delta_cloud: bias.delta_cloud,
     lookback_days: bias.lookback_days,
     samples: bias.samples,
   };
