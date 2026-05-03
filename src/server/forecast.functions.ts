@@ -839,6 +839,37 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   };
 }
 
+// Tageszeit-Begriffe abhängig von der aktuellen Zürcher Stunde.
+function timeOfDayConstraints(hour: number): { allowed: string[]; forbidden: string[] } {
+  const segments: Array<{ name: string; endsAt: number }> = [
+    { name: "frühe Morgenstunden", endsAt: 5 },
+    { name: "Morgen", endsAt: 10 },
+    { name: "Vormittag", endsAt: 12 },
+    { name: "Mittag", endsAt: 14 },
+    { name: "Nachmittag", endsAt: 17 },
+    { name: "Abend", endsAt: 22 },
+  ];
+  const allowed: string[] = [];
+  const forbidden: string[] = [];
+  for (const s of segments) {
+    if (s.endsAt > hour) allowed.push(s.name);
+    else forbidden.push(s.name);
+  }
+  // "Nacht" immer erlauben (Fenster reicht bis 05 Folgetag).
+  allowed.push("Nacht");
+  return { allowed, forbidden };
+}
+
+function buildTimeOfDayHint(hour: number): string {
+  const { allowed, forbidden } = timeOfDayConstraints(hour);
+  const hh = String(hour).padStart(2, "0");
+  let s = `\n\nAKTUELLE UHRZEIT: ${hh}:00 (Europe/Zurich). Erwähne AUSSCHLIESSLICH noch kommende Tageszeiten: ${allowed.join(", ")}.`;
+  if (forbidden.length) {
+    s += ` Folgende Tageszeiten sind bereits vergangen und dürfen NICHT erwähnt werden: ${forbidden.join(", ")}.`;
+  }
+  return s;
+}
+
 // Builds the first ("today") entry data + title + prompt-hint based on Zurich hour.
 // < 12: full day. >= 12: rest-of-day window via formatEveningNight().
 function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
@@ -854,6 +885,7 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
   } else {
     firstData = withTopo(0);
   }
+  windowHint += buildTimeOfDayHint(hour);
   const firstTitle = useEvening
     ? restOfDayTitle(hour, today)
     : (() => {
@@ -910,7 +942,7 @@ ABSOLUT VERBINDLICHE REGELN:
 - KEINE Floskeln wie "insgesamt", "alles in allem", "zusammenfassend".
 - Sachlich, nüchtern, präzise. Kurze, prägnante Sätze. Häufig Halbsätze mit Gedankenstrich " - " (Leerzeichen-Bindestrich-Leerzeichen).
 - Absätze sind durch eine Leerzeile getrennt (\\n\\n). Jeder Absatz ist sehr kurz (1-3 Sätze).
-- Alle Einträge (auch der erste „Heute"-Eintrag) basieren auf TAGES-Werten. Für „Heute" beschreibe den Tagesverlauf chronologisch (Morgen → Mittag → Nachmittag → Abend) mit Tageszeit-Bezug.
+- Alle Einträge (auch der erste „Heute"-Eintrag) basieren auf TAGES-Werten. Für „Heute" beschreibe den VERBLEIBENDEN Tagesverlauf chronologisch — verwende nur die im userPrompt unter „AKTUELLE UHRZEIT" aufgeführten erlaubten Tageszeiten und erwähne keine bereits vergangenen Tagesabschnitte.
 - AUSNAHME: Wenn der Eintragstitel "Heute Nachmittag & Abend" oder "Heute Abend & Nacht" lautet, beziehen sich die mitgelieferten Werte (window_label, tmin, tmax, precip_total, wind_max, sunshine_h) AUSSCHLIESSLICH auf dieses Fenster (jetzt bis 05:00 Folgetag). Beschreibe nur diesen Zeitraum chronologisch — der bereits vergangene Tagesabschnitt darf NICHT erwähnt werden.
 
 PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebelartige Wolkenfelder", "Restbewölkung", "Bisenströmung", "veränderlich bewölkt", "ziemlich sonnig", "Schaueraktivität", "mittelhohe und hohe Wolkenfelder", "Bewölkungsverdichtung", "trockene Phasen", "sonnige Lücken", "mit Blick nach Baden-Württemberg", "Alpstein", "Vorarlberg", "umliegende Berg- und Hügelzüge", "südlichere Regionen".
