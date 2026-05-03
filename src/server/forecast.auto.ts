@@ -434,6 +434,35 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   };
 }
 
+function timeOfDayConstraints(hour: number): { allowed: string[]; forbidden: string[] } {
+  const segments: Array<{ name: string; endsAt: number }> = [
+    { name: "frühe Morgenstunden", endsAt: 5 },
+    { name: "Morgen", endsAt: 10 },
+    { name: "Vormittag", endsAt: 12 },
+    { name: "Mittag", endsAt: 14 },
+    { name: "Nachmittag", endsAt: 17 },
+    { name: "Abend", endsAt: 22 },
+  ];
+  const allowed: string[] = [];
+  const forbidden: string[] = [];
+  for (const s of segments) {
+    if (s.endsAt > hour) allowed.push(s.name);
+    else forbidden.push(s.name);
+  }
+  allowed.push("Nacht");
+  return { allowed, forbidden };
+}
+
+function buildTimeOfDayHint(hour: number): string {
+  const { allowed, forbidden } = timeOfDayConstraints(hour);
+  const hh = String(hour).padStart(2, "0");
+  let s = `\n\nAKTUELLE UHRZEIT: ${hh}:00 (Europe/Zurich). Erwähne AUSSCHLIESSLICH noch kommende Tageszeiten: ${allowed.join(", ")}.`;
+  if (forbidden.length) {
+    s += ` Folgende Tageszeiten sind bereits vergangen und dürfen NICHT erwähnt werden: ${forbidden.join(", ")}.`;
+  }
+  return s;
+}
+
 function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
   const hour = currentZurichHour();
   const useEvening = hour >= 12;
@@ -447,6 +476,7 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
   } else {
     firstData = withTopo(0);
   }
+  windowHint += buildTimeOfDayHint(hour);
   const firstTitle = useEvening
     ? restOfDayTitle(hour, today)
     : (() => {
