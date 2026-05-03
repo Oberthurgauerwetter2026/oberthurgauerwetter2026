@@ -1253,13 +1253,13 @@ export const updateSettings = createServerFn({ method: "POST" })
         radius_km: z.number().int().min(1).max(100),
         wp_target_slug: z.string().min(1).max(200),
         wp_target_page_id: z.number().int().nullable(),
-        ai_prompt_template: z.string().max(5000),
-        models_shortterm: z.string().max(200).optional(),
-        models_midterm: z.string().max(200).optional(),
-        models_longterm: z.string().max(200).optional(),
-        prompt_sky: z.string().max(3000).optional().nullable(),
-        prompt_temp: z.string().max(3000).optional().nullable(),
-        prompt_wind: z.string().max(3000).optional().nullable(),
+        ai_prompt_template: z.string().max(50000),
+        models_shortterm: z.string().max(500).optional(),
+        models_midterm: z.string().max(500).optional(),
+        models_longterm: z.string().max(500).optional(),
+        prompt_sky: z.string().max(50000).optional().nullable(),
+        prompt_temp: z.string().max(50000).optional().nullable(),
+        prompt_wind: z.string().max(50000).optional().nullable(),
       })
       .parse(d)
   )
