@@ -2,6 +2,7 @@
 // avoids the auth middleware so it can be triggered by cron).
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { buildSystemPrompt } from "./forecast.functions";
+import { getOrSetCache } from "./weather-cache.server";
 
 const DAILY_VARS = [
   "temperature_2m_max", "temperature_2m_min", "precipitation_sum",
@@ -115,9 +116,15 @@ async function fetchWeather(
   longModels = normalizeModels(longModels);
   const s = await fetchOpenMeteoOptional(lat, lon, shortModels, true);
   await wait(500);
-  const m = await fetchOpenMeteoOptional(lat, lon, midModels, false);
+  const m = await getOrSetCache(
+    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+  );
   await wait(500);
-  const l = await fetchOpenMeteoOptional(lat, lon, longModels, false);
+  const l = await getOrSetCache(
+    `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, longModels, false),
+  );
   const daily = m?.daily ?? l?.daily ?? s?.daily;
   if (!daily) throw new Error("Open-Meteo liefert aktuell keine Wetterdaten. Bitte später erneut versuchen.");
   return {
@@ -621,7 +628,7 @@ export async function runAutoForecast(creatorId: string | null) {
     (settings as any)?.models_longterm ?? undefined,
   );
   const topo = await ensureTopography(settings);
-  const stationBiases = await buildStationBiases();
+  const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
   const withTopo = (d: any) => {
     if (!d) return d;
     const out: any = { ...d, topography: applyTopography(d, topo) };
