@@ -43,6 +43,8 @@ function SettingsPage() {
     prompt_sky: "",
     prompt_temp: "",
     prompt_wind: "",
+    mosmix_enabled: true,
+    mosmix_stations: "10935,10929",
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
