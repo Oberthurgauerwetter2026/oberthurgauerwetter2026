@@ -304,7 +304,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     .filter(({ t }) => {
       const dt = new Date(t);
       const dateStr = t.slice(0, 10);
-      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 6);
+      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 5);
     });
   if (!slice.length) return null;
 
