@@ -677,6 +677,10 @@ export async function runAutoForecast(creatorId: string | null) {
     };
   };
 
+  const radarSnapshot = ((settings as any)?.radar_enabled !== false)
+    ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
+    : null;
+
   const withTopo = (dayIndex: number) => {
     const omDay = formatDayData(weather, dayIndex);
     if (!omDay) return null;
@@ -697,6 +701,7 @@ export async function runAutoForecast(creatorId: string | null) {
       const st = applyStationBias(base, stationBiases);
       if (st) out.stations = st;
     }
+    applyRadarToDay(out, dayIndex, radarSnapshot, settings);
     return out;
   };
   const today = weather.daily.time[0];
