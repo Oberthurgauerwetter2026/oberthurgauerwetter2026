@@ -1044,7 +1044,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       settings?.models_longterm ?? undefined,
     );
     const topo = await ensureTopography(supabase, settings);
-    const stationBiases = await buildStationBiases();
+    const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
     const withTopo = (d: any) => {
       if (!d) return d;
       const out: any = { ...d, topography: applyTopography(d, topo) };
