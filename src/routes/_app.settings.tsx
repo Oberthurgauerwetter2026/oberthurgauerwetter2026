@@ -76,6 +76,9 @@ function SettingsPage() {
         prompt_wind: (settings as any).prompt_wind ?? "",
         mosmix_enabled: (settings as any).mosmix_enabled ?? true,
         mosmix_stations: (settings as any).mosmix_stations ?? "10935,10929",
+        radar_enabled: (settings as any).radar_enabled ?? true,
+        radar_radius_km: (settings as any).radar_radius_km ?? 15,
+        radar_correction_strength: (settings as any).radar_correction_strength ?? 70,
       });
     }
     if (session && !defaults) {
