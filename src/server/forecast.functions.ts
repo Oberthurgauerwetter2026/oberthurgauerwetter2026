@@ -1040,7 +1040,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= 5; i++) {
-      const day = withTopo(formatDayData(weather, i));
+      const day = withTopo(i);
       if (!day) continue;
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
