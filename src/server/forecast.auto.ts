@@ -116,9 +116,15 @@ async function fetchWeather(
   longModels = normalizeModels(longModels);
   const s = await fetchOpenMeteoOptional(lat, lon, shortModels, true);
   await wait(500);
-  const m = await fetchOpenMeteoOptional(lat, lon, midModels, false);
+  const m = await getOrSetCache(
+    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+  );
   await wait(500);
-  const l = await fetchOpenMeteoOptional(lat, lon, longModels, false);
+  const l = await getOrSetCache(
+    `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, longModels, false),
+  );
   const daily = m?.daily ?? l?.daily ?? s?.daily;
   if (!daily) throw new Error("Open-Meteo liefert aktuell keine Wetterdaten. Bitte später erneut versuchen.");
   return {
