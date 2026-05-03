@@ -813,7 +813,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
 
   // Human-readable window description for the prompt
-  const endHour = 6;
+  const endHour = 5;
   const window_label =
     startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend und Nacht`
     : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Nachmittag, Abend und Nacht`
