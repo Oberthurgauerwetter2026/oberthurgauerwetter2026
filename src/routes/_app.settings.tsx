@@ -237,6 +237,38 @@ function SettingsPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">ICON-MOS (DWD MOSMIX)</CardTitle>
+          <CardDescription>
+            Statistisch korrigierte Punktvorhersagen vom Deutschen Wetterdienst für Tag 0 & 1.
+            Standard-Stationen: 10935 (Friedrichshafen), 10929 (Konstanz). Bei aktiviertem MOSMIX
+            wird die manuelle Stations-Bias-Korrektur für die ersten beiden Tage übersprungen,
+            da die Daten bereits statistisch kalibriert sind.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
+              <Label>MOSMIX-Korrektur aktivieren</Label>
+              <p className="text-xs text-muted-foreground">Tag 0 & 1 werden aus DWD MOSMIX statt Open-Meteo berechnet.</p>
+            </div>
+            <Switch
+              checked={form.mosmix_enabled}
+              onCheckedChange={(v) => setForm({ ...form, mosmix_enabled: v })}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>MOSMIX-Stationen (DWD-IDs, komma-getrennt)</Label>
+            <Input
+              value={form.mosmix_stations}
+              onChange={(e) => setForm({ ...form, mosmix_stations: e.target.value })}
+              placeholder="10935,10929"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Allgemeiner Stil & Tonalität</CardTitle>
           <CardDescription>
             Grundregeln für Sprache, Satzbau und Vokabular. Leer lassen für die Standard-Vorlage.
