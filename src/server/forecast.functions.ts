@@ -690,7 +690,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   if (!h?.time) return null;
   const today = weather.daily.time[0];
   const tomorrow = weather.daily.time[1];
-  // Dynamic start: from "now" (current Zurich hour) until 06:00 next day.
+  // Dynamic start: from "now" (current Zurich hour) until 05:00 next day.
   // Cap minimum at 0 (full day) and maximum at 23 (latest sensible evening start).
   const rawStart = startHourOverride ?? currentZurichHour();
   const startHour = Math.max(0, Math.min(23, rawStart));
@@ -699,7 +699,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     .filter(({ t }) => {
       const dt = new Date(t);
       const dateStr = t.slice(0, 10);
-      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 6);
+      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 5);
     });
   if (!slice.length) return null;
 
