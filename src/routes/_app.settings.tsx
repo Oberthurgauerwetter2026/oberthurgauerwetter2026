@@ -48,6 +48,10 @@ function SettingsPage() {
     radar_enabled: true,
     radar_radius_km: 15,
     radar_correction_strength: 70,
+    bias_enabled: true,
+    bias_stations: "GUT,STG,TAE",
+    bias_lookback_days: 7,
+    bias_strength: 70,
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
