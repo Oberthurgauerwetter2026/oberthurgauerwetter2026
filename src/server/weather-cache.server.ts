@@ -57,7 +57,7 @@ export async function getOrSetCache<T>(
       cache_key: cacheKey,
       payload: payload as any,
       fetched_at: nowIso,
-      expires_at: nextMidnightZurich(),
+      expires_at: expiresAt,
     });
     // Best-effort cleanup of expired rows.
     await supabaseAdmin.from("weather_cache").delete().lt("expires_at", nowIso);
