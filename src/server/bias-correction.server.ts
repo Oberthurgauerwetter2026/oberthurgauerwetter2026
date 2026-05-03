@@ -172,12 +172,18 @@ export function applyBiasToDay(day: any, bias: BiasResult): any {
   out.tmin = adjAgg(out.tmin, (v) => v + bias.delta_temp);
   out.wind_max = adjAgg(out.wind_max, (v) => v * bias.factor_wind);
   out.precip = adjAgg(out.precip, (v) => v * bias.factor_precip);
+  // Bewölkung nur korrigieren, wenn Modellwert vorhanden — nicht überschreiben,
+  // wenn aus Sonnenscheindauer abgeleitet.
+  if (out.cloudcover_source === "model" && bias.delta_cloud !== 0) {
+    out.cloudcover = adjAgg(out.cloudcover, (v) => clamp(v + bias.delta_cloud, 0, 100));
+  }
   out.bias_correction = {
     applied: true,
     stations: bias.stations,
     delta_temp: bias.delta_temp,
     factor_wind: bias.factor_wind,
     factor_precip: bias.factor_precip,
+    delta_cloud: bias.delta_cloud,
     lookback_days: bias.lookback_days,
     samples: bias.samples,
   };
