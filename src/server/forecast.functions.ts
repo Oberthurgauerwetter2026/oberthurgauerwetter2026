@@ -976,13 +976,47 @@ export const generateForecast = createServerFn({ method: "POST" })
     );
     const topo = await ensureTopography(supabase, settings);
     const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-    const withTopo = (d: any) => {
-      if (!d) return d;
-      const out: any = { ...d, topography: applyTopography(d, topo) };
-      const st = applyStationBias(d, stationBiases);
-      if (st) out.stations = st;
+
+    // ICON-MOS (DWD MOSMIX) für Tag 0 + 1 holen, sofern aktiviert.
+    // MOSMIX ist bereits statistisch gegen Stationsmessungen kalibriert,
+    // daher entfällt für diese Tage die eigene Stations-Bias-Korrektur.
+    const mosmixEnabled = settings?.mosmix_enabled !== false;
+    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+    const mosmixByDate = mosmixEnabled
+      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
+          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
+          return new Map<string, any>();
+        })
+      : new Map<string, any>();
+
+    const buildDay = (dayIndex: number) => {
+      const omDay = formatDayData(weather, dayIndex);
+      if (!omDay) return null;
+      // Tag 0/1: MOSMIX bevorzugt — überschreibt Roh-Werte, kein Stations-Bias.
+      const mosmix = dayIndex <= 1 ? mosmixByDate.get(omDay.date) : null;
+      let base: any;
+      if (mosmix) {
+        // MOSMIX ist Primärquelle. Open-Meteo bleibt als Referenz im Feld om_reference.
+        base = enrichMosmixDay({
+          ...mosmix,
+          // weathercode/precip_prob aus Open-Meteo übernehmen (MOSMIX hat das nicht)
+          weathercode: omDay.weathercode,
+          precip_prob: omDay.precip_prob,
+          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
+        });
+      } else {
+        base = omDay;
+      }
+      const out: any = { ...base, topography: applyTopography(base, topo) };
+      // Stations-Bias nur dann anhängen, wenn nicht schon MOSMIX-korrigiert.
+      if (!mosmix) {
+        const st = applyStationBias(base, stationBiases);
+        if (st) out.stations = st;
+      }
       return out;
     };
+    const withTopo = buildDay;
     const today = weather.daily.time[0];
     const { data: forecast, error: fErr } = await supabase
       .from("forecasts")
