@@ -288,7 +288,7 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
   const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
   const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
   if (startHour < 12) return `Heute, ${weekday} ${formatted}`;
-  if (startHour < 17) return `Heute Nachmittag & Nacht`;
+  if (startHour < 17) return `Heute Nachmittag & Abend`;
   return `Heute Abend & Nacht`;
 }
 
