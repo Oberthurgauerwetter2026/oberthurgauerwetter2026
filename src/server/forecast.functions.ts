@@ -1108,14 +1108,10 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
     {
-      const todayData = withTopo(0);
-      const date = new Date(today);
-      const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
-      const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
-      const firstTitle = `Heute, ${weekday} ${formatted}`;
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(todayData, null, 2)}`;
+      const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
       tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
-        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, todayData), weather_data: todayData,
+        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, firstData), weather_data: firstData,
       })));
     }
 
