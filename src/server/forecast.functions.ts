@@ -1375,6 +1375,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     cape_max,
+    wind_gusts_max,
   };
 }
 
