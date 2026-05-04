@@ -1103,7 +1103,9 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "google/gemini-2.5-pro",
+        temperature: 0.2,
+        top_p: 0.9,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
