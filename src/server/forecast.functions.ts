@@ -634,6 +634,46 @@ function buildMosmixOnlyWeather(
   };
 }
 
+// Tries Open-Meteo first; on total failure falls back to MOSMIX-only mode (Tag 0+1).
+// Throws a user-facing error only when both sources are empty. Returns the MOSMIX
+// map alongside `weather` so callers don't fetch it twice.
+async function fetchWeatherWithFallback(
+  lat: number, lon: number,
+  shortModels: string | undefined,
+  midModels: string | undefined,
+  longModels: string | undefined,
+  mosmixEnabled: boolean,
+  mosmixStations: string[],
+): Promise<{ weather: any; mosmixByDate: Map<string, any>; degraded: boolean }> {
+  // Fetch MOSMIX in parallel with Open-Meteo so we have it ready for fallback.
+  const mosmixPromise: Promise<Map<string, any>> = mosmixEnabled && mosmixStations.length
+    ? fetchMosmixShortTerm(mosmixStations).catch((e) => {
+        console.warn("MOSMIX failed:", e);
+        return new Map<string, any>();
+      })
+    : Promise.resolve(new Map<string, any>());
+
+  try {
+    const [weather, mosmixByDate] = await Promise.all([
+      fetchWeather(lat, lon, shortModels, midModels, longModels),
+      mosmixPromise,
+    ]);
+    return { weather, mosmixByDate, degraded: false };
+  } catch (e: any) {
+    if (e?.code !== "WEATHER_UNAVAILABLE") throw e;
+    // Open-Meteo komplett ausgefallen — MOSMIX-only Modus versuchen.
+    const mosmixByDate = await mosmixPromise;
+    const fallback = buildMosmixOnlyWeather(mosmixByDate);
+    if (!fallback) {
+      throw new Error(
+        "Open-Meteo Tageslimit erreicht und DWD-MOSMIX liefert ebenfalls keine Daten. Bitte morgen erneut versuchen.",
+      );
+    }
+    console.warn("[forecast] degraded mode: MOSMIX-only (Open-Meteo unavailable)");
+    return { weather: fallback, mosmixByDate, degraded: true };
+  }
+}
+
 // Collect per-model values for a given variable + dayIndex from one fetch result
 function collectModelValues(fetchResult: any, varName: string, models: string, dayIndex: number) {
   const out: Record<string, number> = {};
@@ -1172,27 +1212,24 @@ export const generateForecast = createServerFn({ method: "POST" })
     const locationName = settings?.location_name ?? "Amriswil";
     const promptTemplate = buildSystemPrompt(settings);
 
-    const weather = await fetchWeather(
-      lat, lon,
-      settings?.models_shortterm ?? undefined,
-      settings?.models_midterm ?? undefined,
-      settings?.models_longterm ?? undefined,
-    );
-    const topo = await ensureTopography(supabase, settings);
-    const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-
     // ICON-MOS (DWD MOSMIX) für Tag 0 + 1 holen, sofern aktiviert.
     // MOSMIX ist bereits statistisch gegen Stationsmessungen kalibriert,
     // daher entfällt für diese Tage die eigene Stations-Bias-Korrektur.
     const mosmixEnabled = settings?.mosmix_enabled !== false;
     const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
       .split(",").map((s: string) => s.trim()).filter(Boolean);
-    const mosmixByDate = mosmixEnabled
-      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
-          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
-          return new Map<string, any>();
-        })
-      : new Map<string, any>();
+
+    const { weather, mosmixByDate, degraded } = await fetchWeatherWithFallback(
+      lat, lon,
+      settings?.models_shortterm ?? undefined,
+      settings?.models_midterm ?? undefined,
+      settings?.models_longterm ?? undefined,
+      mosmixEnabled, mosmixStations,
+    );
+    const topo = await ensureTopography(supabase, settings);
+    const stationBiases = degraded
+      ? []
+      : await getOrSetCache("stations:bias", buildStationBiases);
 
     const buildDay = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
@@ -1252,15 +1289,22 @@ export const generateForecast = createServerFn({ method: "POST" })
 
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
+    const degradedNote = degraded
+      ? "**Eingeschränkter Modus:** Open-Meteo Tageslimit erreicht — nur DWD-MOSMIX (Tag 1 + 2) verfügbar. Mittel- und Langfristprognose sowie Trend Tag 6 – 10 entfallen heute.\n\n"
+      : "";
+    const maxDayLoop = degraded ? 1 : 5;
+
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
       tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
-        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, firstData), weather_data: firstData,
+        position: 1, entry_date: today, title: firstTitle,
+        body: degradedNote + enforceSkyConsistency(body, firstData),
+        weather_data: firstData,
       })));
     }
 
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= maxDayLoop; i++) {
       const day = withTopo(i);
       if (!day) continue;
       const date = new Date(day.date);
@@ -1274,7 +1318,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       })));
     }
 
-    {
+    if (!degraded) {
       const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
@@ -1306,24 +1350,21 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const locationName = settings?.location_name ?? "Amriswil";
     const promptTemplate = buildSystemPrompt(settings);
 
-    const weather = await fetchWeather(
+    const mosmixEnabled = settings?.mosmix_enabled !== false;
+    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+
+    const { weather, mosmixByDate, degraded } = await fetchWeatherWithFallback(
       lat, lon,
       settings?.models_shortterm ?? undefined,
       settings?.models_midterm ?? undefined,
       settings?.models_longterm ?? undefined,
+      mosmixEnabled, mosmixStations,
     );
     const topo = await ensureTopography(supabase, settings);
-    const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-
-    const mosmixEnabled = settings?.mosmix_enabled !== false;
-    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
-      .split(",").map((s: string) => s.trim()).filter(Boolean);
-    const mosmixByDate = mosmixEnabled
-      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
-          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
-          return new Map<string, any>();
-        })
-      : new Map<string, any>();
+    const stationBiases = degraded
+      ? []
+      : await getOrSetCache("stations:bias", buildStationBiases);
 
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
@@ -1375,15 +1416,22 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any; forecast_id: string }>> = [];
 
+    const degradedNote = degraded
+      ? "**Eingeschränkter Modus:** Open-Meteo Tageslimit erreicht — nur DWD-MOSMIX (Tag 1 + 2) verfügbar. Mittel- und Langfristprognose sowie Trend Tag 6 – 10 entfallen heute.\n\n"
+      : "";
+    const maxDayLoop = degraded ? 1 : 5;
+
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
       tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
-        position: 1, entry_date: today, title: firstTitle, body: enforceSkyConsistency(body, firstData), weather_data: firstData, forecast_id: data.forecastId,
+        position: 1, entry_date: today, title: firstTitle,
+        body: degradedNote + enforceSkyConsistency(body, firstData),
+        weather_data: firstData, forecast_id: data.forecastId,
       })));
     }
 
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= maxDayLoop; i++) {
       const day = withTopo(i);
       if (!day) continue;
       const date = new Date(day.date);
@@ -1397,7 +1445,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       })));
     }
 
-    {
+    if (!degraded) {
       const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
