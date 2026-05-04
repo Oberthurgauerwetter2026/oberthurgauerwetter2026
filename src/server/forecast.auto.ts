@@ -292,7 +292,7 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
   return `Heute Abend & Nacht`;
 }
 
-function formatEveningNight(weather: any, startHourOverride?: number) {
+function formatEveningNight(weather: any, startHourOverride?: number, nextDayTminAvg?: number | null) {
   const h = weather.hourly;
   if (!h?.time) return null;
   const today = weather.daily.time[0];
