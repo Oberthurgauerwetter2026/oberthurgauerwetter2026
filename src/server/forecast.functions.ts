@@ -2425,8 +2425,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= maxDayLoop; i++) {
-      const day = withTopo(i);
+      let day = withTopo(i);
       if (!day) continue;
+      let extraTminHint = "";
+      if (i === 1 && currentZurichHour() >= 12) {
+        day = { ...day, tmin: null, tmin_omitted_reason: "Tiefstwert wurde bereits im Block 'Heute Abend & Nacht' genannt" };
+        extraTminHint = `\n\nWICHTIG: Erwähne für diesen Tag KEINEN Tiefstwert — der nächtliche Tiefstwert wurde bereits im vorherigen Abschnitt 'Heute Abend & Nacht' angegeben. Schreibe nur den Höchstwert.`;
+      }
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
@@ -2445,10 +2450,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
       const invHint = formatInversionHint(weather, day);
       const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}${extraTminHint}`;
       const pos = i + 1;
+      const dayForResult = day;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
-        position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
+        position: pos, entry_date: dayForResult.date, title, body: enforceSkyConsistency(body, dayForResult), weather_data: dayForResult, forecast_id: data.forecastId,
       })));
     }
 
