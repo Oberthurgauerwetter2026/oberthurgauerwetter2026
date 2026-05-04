@@ -292,7 +292,7 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
   return `Heute Abend & Nacht`;
 }
 
-function formatEveningNight(weather: any, startHourOverride?: number) {
+function formatEveningNight(weather: any, startHourOverride?: number, nextDayTminAvg?: number | null) {
   const h = weather.hourly;
   if (!h?.time) return null;
   const today = weather.daily.time[0];
@@ -418,7 +418,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
-    tmin: r1(Math.min(...hourlyTemps)),
+    tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null && Number.isFinite(nextDayTminAvg) ? [nextDayTminAvg] : []))),
     tmax: r1(Math.max(...hourlyTemps)),
     precip_total: r1(hourlyPrecs.reduce((a, b) => a + b, 0)),
     wind_max,
@@ -466,7 +466,9 @@ function buildTimeOfDayHint(hour: number): string {
 function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
   const hour = currentZurichHour();
   const useEvening = hour >= 12;
-  const evening = useEvening ? formatEveningNight(weather) : null;
+  const nextDay = useEvening ? formatDayData(weather, 1) : null;
+  const nextDayTmin = nextDay?.tmin?.avg ?? null;
+  const evening = useEvening ? formatEveningNight(weather, undefined, nextDayTmin) : null;
   let firstData: any;
   let windowHint = "";
   if (useEvening && evening) {
