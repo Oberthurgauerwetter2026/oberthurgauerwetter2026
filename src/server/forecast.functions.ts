@@ -1508,6 +1508,7 @@ function formatDayData(weather: any, dayIndex: number) {
     sunshine_h,
     cape_max,
     wind_gusts_max,
+    zones: formatZones(weather, d.time[dayIndex]),
   };
 }
 
