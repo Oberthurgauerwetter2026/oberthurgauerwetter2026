@@ -1290,7 +1290,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
     const degradedNote = degraded
-      ? "**Eingeschränkter Modus:** Open-Meteo Tageslimit erreicht — nur DWD-MOSMIX (Tag 1 + 2) verfügbar. Mittel- und Langfristprognose sowie Trend Tag 6 – 10 entfallen heute.\n\n"
+      ? "**Eingeschränkter Modus:** Open-Meteo Tageslimit erreicht — nur DWD-MOSMIX (Tag 1 + 2) verfügbar. Mittel- und Langfristprognose sowie Trend Tag 7 – 10 entfallen heute.\n\n"
       : "";
     const maxDayLoop = degraded ? 1 : 5;
 
@@ -1319,11 +1319,11 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     if (!degraded) {
-      const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
+      const trendDays = [6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 7-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
         tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
-          position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
+          position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 7 – 10", body, weather_data: trendDays,
         })));
       }
     }
