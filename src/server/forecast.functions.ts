@@ -1347,10 +1347,11 @@ function formatDayData(weather: any, dayIndex: number) {
   const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
   const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
   const cape_max = aggregate(collectModelValuesTiered(weather, "cape_max", dayIndex));
+  const wind_gusts_max = aggregate(collectModelValuesTiered(weather, "wind_gusts_10m_max", dayIndex));
 
   // models actually contributing across all variables (transparency for the UI)
   const contributing = new Set<string>();
-  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h, cape_max]) {
+  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h, cape_max, wind_gusts_max]) {
     if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
   }
 
