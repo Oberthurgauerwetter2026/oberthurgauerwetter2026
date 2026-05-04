@@ -461,6 +461,16 @@ function applyStationBias(day: { date?: string; tmin?: { avg?: number } | null; 
   };
 }
 
+// Typed Open-Meteo error: distinguishes daily quota (429 with quota text) from
+// transient errors. Callers can react differently (skip retries, set negative cache).
+class OpenMeteoError extends Error {
+  code: "RATE_LIMIT" | "OTHER";
+  constructor(message: string, code: "RATE_LIMIT" | "OTHER") {
+    super(message);
+    this.code = code;
+  }
+}
+
 async function fetchOpenMeteo(lat: number, lon: number, models: string, includeHourly: boolean) {
   const normalizedModels = normalizeModels(models);
   const url = new URL("https://api.open-meteo.com/v1/forecast");
@@ -476,19 +486,73 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
     const res = await fetch(url.toString());
     if (res.ok) return await res.json();
     lastError = await res.text().catch(() => "");
+    // 429 with "limit exceeded" message = daily quota → don't retry, mark RATE_LIMIT
+    if (res.status === 429 && /limit exceeded|quota/i.test(lastError)) {
+      throw new OpenMeteoError(
+        `Open-Meteo Tageslimit erreicht (models=${normalizedModels}): ${lastError}`,
+        "RATE_LIMIT",
+      );
+    }
     const retryable = res.status === 429 || res.status >= 500;
-    if (!retryable || attempt === 2) throw new Error(`Open-Meteo Fehler ${res.status} (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`);
+    if (!retryable || attempt === 2) {
+      throw new OpenMeteoError(
+        `Open-Meteo Fehler ${res.status} (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`,
+        "OTHER",
+      );
+    }
     const retryAfter = Number(res.headers.get("retry-after"));
     await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1200 * (attempt + 1));
   }
-  throw new Error(`Open-Meteo Fehler (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`);
+  throw new OpenMeteoError(
+    `Open-Meteo Fehler (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`,
+    "OTHER",
+  );
+}
+
+// Negative-cache marker for rate-limited model sets. Stored in weather_cache with 1h TTL.
+// Avoids hammering Open-Meteo when the daily quota is exhausted.
+function rateLimitCacheKey(models: string) {
+  return `om:ratelimit:${normalizeModels(models)}`;
 }
 
 async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, includeHourly: boolean) {
+  // Check negative cache first — skip the HTTP call entirely if recently rate-limited.
+  const negKey = rateLimitCacheKey(models);
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data } = await supabaseAdmin
+      .from("weather_cache")
+      .select("expires_at")
+      .eq("cache_key", negKey)
+      .maybeSingle();
+    if (data?.expires_at && data.expires_at > new Date().toISOString()) {
+      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at}`);
+      return null;
+    }
+  } catch (e) {
+    // Cache lookup failed — proceed with the call.
+  }
+
   try {
     return await fetchOpenMeteo(lat, lon, models, includeHourly);
   } catch (e) {
     console.warn(e instanceof Error ? e.message : e);
+    // On daily-quota errors, set a 1h negative-cache marker so subsequent calls
+    // (within the same generation, or from the user clicking again) bail out fast.
+    if (e instanceof OpenMeteoError && e.code === "RATE_LIMIT") {
+      try {
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        await supabaseAdmin.from("weather_cache").upsert({
+          cache_key: rateLimitCacheKey(models),
+          payload: { rate_limited: true, models },
+          fetched_at: new Date().toISOString(),
+          expires_at: expiresAt,
+        });
+      } catch (cacheErr) {
+        console.warn("[open-meteo] failed to write rate-limit marker", cacheErr);
+      }
+    }
     return null;
   }
 }
