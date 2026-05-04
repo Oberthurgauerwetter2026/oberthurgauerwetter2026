@@ -582,12 +582,55 @@ async function fetchWeather(
     () => fetchOpenMeteoOptional(lat, lon, longModels, false),
   );
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
-  if (!daily) throw new Error("Open-Meteo liefert aktuell keine Wetterdaten. Bitte später erneut versuchen.");
+  if (!daily) {
+    // All Open-Meteo tiers failed. Throw a typed error so the generation path
+    // can decide whether to fall back to MOSMIX-only mode.
+    const err = new Error(
+      "Open-Meteo liefert aktuell keine Wetterdaten (vermutlich Tageslimit erreicht).",
+    ) as Error & { code?: string };
+    err.code = "WEATHER_UNAVAILABLE";
+    throw err;
+  }
   return {
     daily,
     hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
     byModel: { short: shortData, mid: midData, long: longData },
     modelLists: { short: shortModels, mid: midModels, long: longModels },
+  };
+}
+
+// Builds a minimal weather-shaped object from MOSMIX-only data when Open-Meteo is unavailable.
+// Returns null when MOSMIX has nothing for today/tomorrow either.
+// The returned object is compatible enough with formatDayData/buildFirstEntryContext that
+// the generation path keeps working — but only Tag 0 + Tag 1 are populated.
+function buildMosmixOnlyWeather(
+  mosmixByDate: Map<string, any>,
+): { daily: any; hourly: any; byModel: any; modelLists: any; degraded_mode: "mosmix_only" } | null {
+  const dates = Array.from(mosmixByDate.keys()).sort();
+  if (!dates.length) return null;
+  // Build a daily object with the variables formatDayData looks for.
+  const daily: any = { time: dates };
+  const allVars = [...DAILY_VARS];
+  for (const v of allVars) daily[v] = dates.map(() => null);
+  for (let i = 0; i < dates.length; i++) {
+    const m = mosmixByDate.get(dates[i]);
+    if (!m) continue;
+    daily.temperature_2m_max[i] = m.tmax?.avg ?? null;
+    daily.temperature_2m_min[i] = m.tmin?.avg ?? null;
+    daily.precipitation_sum[i] = m.precip?.avg ?? null;
+    daily.precipitation_probability_max[i] = m.precip_prob?.avg ?? null;
+    daily.windspeed_10m_max[i] = m.wind_max?.avg ?? null;
+    daily.winddirection_10m_dominant[i] = m.wind_dir_avg ?? null;
+    daily.sunshine_duration[i] = m.sunshine_h?.avg != null ? m.sunshine_h.avg * 3600 : null;
+    daily.cloudcover_mean[i] = m.cloudcover?.avg ?? null;
+    daily.weathercode[i] = null;
+  }
+  return {
+    daily,
+    hourly: undefined, // no hourly data in MOSMIX-only mode → "rest of day" entry uses day aggregate
+    byModel: { short: { daily }, mid: null, long: null },
+    modelLists: { short: "mosmix", mid: "", long: "" },
+    degraded_mode: "mosmix_only",
   };
 }
 
