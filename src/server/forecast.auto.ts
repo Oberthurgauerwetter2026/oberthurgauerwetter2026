@@ -836,13 +836,18 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: firstData, forecast_id: forecast.id });
   }
   for (let i = 1; i <= 5; i++) {
-    const day = withTopo(i);
+    let day = withTopo(i);
     if (!day) continue;
+    let extraHint = "";
+    if (i === 1 && autoHour >= 12) {
+      day = { ...day, tmin: null, tmin_omitted_reason: "Tiefstwert wurde bereits im Block 'Heute Abend & Nacht' genannt" };
+      extraHint = `\n\nWICHTIG: Erwähne für diesen Tag KEINEN Tiefstwert — der nächtliche Tiefstwert wurde bereits im vorherigen Abschnitt 'Heute Abend & Nacht' angegeben. Schreibe nur den Höchstwert.`;
+    }
     const date = new Date(day.date);
     const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
     const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
     const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-    const body = enforceSkyConsistency(await generateText(promptTemplate, `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted}:\n${JSON.stringify(day, null, 2)}`), day);
+    const body = enforceSkyConsistency(await generateText(promptTemplate, `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted}:\n${JSON.stringify(day, null, 2)}${extraHint}`), day);
     entries.push({ position: i + 1, entry_date: day.date, title, body, weather_data: day, forecast_id: forecast.id });
   }
   {
