@@ -1581,7 +1581,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
       const aifsCmp = formatAifsComparison(weather, day);
       const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}`;
+      const lakeHint = formatLakeTemperatureHint(weather, day);
+      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
