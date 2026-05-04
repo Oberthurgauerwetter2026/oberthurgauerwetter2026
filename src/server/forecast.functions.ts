@@ -1343,24 +1343,21 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const locationName = settings?.location_name ?? "Amriswil";
     const promptTemplate = buildSystemPrompt(settings);
 
-    const weather = await fetchWeather(
+    const mosmixEnabled = settings?.mosmix_enabled !== false;
+    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
+      .split(",").map((s: string) => s.trim()).filter(Boolean);
+
+    const { weather, mosmixByDate, degraded } = await fetchWeatherWithFallback(
       lat, lon,
       settings?.models_shortterm ?? undefined,
       settings?.models_midterm ?? undefined,
       settings?.models_longterm ?? undefined,
+      mosmixEnabled, mosmixStations,
     );
     const topo = await ensureTopography(supabase, settings);
-    const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-
-    const mosmixEnabled = settings?.mosmix_enabled !== false;
-    const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
-      .split(",").map((s: string) => s.trim()).filter(Boolean);
-    const mosmixByDate = mosmixEnabled
-      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
-          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
-          return new Map<string, any>();
-        })
-      : new Map<string, any>();
+    const stationBiases = degraded
+      ? []
+      : await getOrSetCache("stations:bias", buildStationBiases);
 
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
