@@ -6,6 +6,7 @@ import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
 import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
+import { fetchEnsembleData, formatUncertaintyHint, type EnsembleData } from "./uncertainty.server";
 
 // Formuliert eine Kurzbeschreibung des aktuellen Radar-Nowcasts für den
 // System-Prompt. Liefert null, wenn keine relevante Aussage möglich ist
