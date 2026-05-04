@@ -1595,7 +1595,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       if (trendDays.length) {
         const aifsTrend = formatAifsTrendComparison(weather, trendDays);
         const aifsBlock = aifsTrend ? `\n\nKI-Modell-Vergleich (ECMWF AIFS, Tendenz Tag 6-10): ${aifsTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}`;
+        const lakeTrend = formatLakeTemperatureTrendHint(trendDays);
+        const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
         })));
