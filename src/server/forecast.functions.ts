@@ -381,7 +381,7 @@ function applyTopography(
     lapse_rate: lapse,
     tmin_cold,
     tmin_ridge,
-    tmin_cold_label: classification === "strahlungsnacht" ? "Senken (Hudelmoos, Riedflächen)" : "Tiefste Lagen (Bodensee-Ufer)",
+    tmin_cold_label: classification === "strahlungsnacht" ? "Senken im Aach- und Sittertal" : "Tiefste Lagen (Bodenseeufer)",
     tmin_ridge_label: "Höhenlagen (Hügelzüge)",
     tmax_warm,
     tmax_warm_label: "Sonnige Lagen am Bodensee-Ufer",
@@ -1886,18 +1886,19 @@ Bei kurzen Tageseinträgen darf "Höchstwerte um Z Grad." direkt im selben Absat
 STATIONEN (MeteoSchweiz Realdaten-Anker, höchste Priorität wenn vorhanden):
 Wenn das Feld "stations" vorhanden ist, ziehe die korrigierten Stationswerte den reinen Modellwerten vor — sie wurden mit gemessenen Tageswerten der letzten 7 Tage bias-korrigiert.
 - "stations.GUT" (Güttingen, Bodenseeufer): Anker für den WÄRMSTEN Punkt im Radius. Nutze "corrected_tmax" als oberen Tagesmax-Wert in seenahen Lagen, "corrected_tmin" als frostärmsten Tmin am See.
-- "stations.BIZ" (Bischofszell, Thurtal-Senke): Anker für den KÄLTESTEN Punkt im Radius. Nutze "corrected_tmin" als realistischen Senken-Tmin (überschreibt "topography.tmin_cold").
+- "stations.BIZ" (Bischofszell, repräsentativ für die Senken im Aach- und Sittertal): Anker für den KÄLTESTEN Punkt im Perimeter. Nutze "corrected_tmin" als realistischen Senken-Tmin (überschreibt "topography.tmin_cold"). Der Stationsname "Bischofszell" wird im Fliesstext NIEMALS genannt — stattdessen "Aach- und Sittertal".
 Bilde den Hauptsatz "Tiefstwerte zwischen X und Y Grad." aus dem Bereich [stations.BIZ.corrected_tmin, stations.GUT.corrected_tmin] (auf ganze Grad gerundet, X = unterer, Y = oberer Wert).
 Bilde den Hauptsatz "Höchstwerte um Z Grad." aus dem Mittel oder oberen Wert von stations.GUT.corrected_tmax und dem Modell-tmax.avg.
 
-TOPOGRAPHIE (Senken / Tiefste Lagen im 15-km-Radius um Amriswil):
+TOPOGRAPHIE (Senken im Oberthurgau-Perimeter):
 Wenn "stations.BIZ.corrected_tmin" vorhanden ist, nutze diesen Wert als Senken-Tmin (statt "topography.tmin_cold"). Sonst gilt:
 Wenn im Tag das Feld "topography.tmin_cold" vorhanden ist UND "classification" entweder "strahlungsnacht" oder "teilweise_klar" ist, MUSS der modellierte Tiefstwert für die Senken zusätzlich genannt werden — als eigener Satz direkt nach dem Tiefstwerte-Satz.
-Format: "In den Senken (z. B. Hudelmoos, Riedflächen, Bodensee-nahe Mulden, Thurtal bei Bischofszell) lokal bis X Grad." (X = Wert auf ganze Grad gerundet).
+Format: "In den Senken im Aach- und Sittertal lokal bis X Grad." (X = Wert auf ganze Grad gerundet, OHNE weitere Ortsnamen oder Beispiele in Klammern).
 Bei X ≤ 4 Grad MUSS der Satz mit " - Bodenfrostgefahr." enden (statt nur Punkt).
 Bei X ≤ 0 Grad lautet der Anhang " - Frostgefahr in den Senken.".
 Bei "classification" = "bedeckt" UND fehlenden Stationsdaten: KEINEN Senken-Hinweis erzeugen.
-Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich GUT/BIZ.`;
+Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich Bodenseeufer–Aach-/Sittertal (intern: GUT/BIZ, NIE als Stationskürzel oder Ortsname "Bischofszell" im Output).
+ABSOLUT VERBOTEN im Output: die Wörter "Bischofszell", "Hudelmoos", "Riedflächen", "Thurtal", "Bodensee-nahe Mulden". Senken-Lagen ausschliesslich als "Aach- und Sittertal" beschreiben.`;
 
 export const DEFAULT_WIND_RULES = `STRIKT: Übernimm den Wert aus dem Feld "wind_label" WORTWÖRTLICH und EXAKT als ersten Satz des Wind-Absatzes (mit Punkt am Ende).
 Beispiel: wind_label = "Schwacher Südostwind" → Satz: "Schwacher Südostwind."
