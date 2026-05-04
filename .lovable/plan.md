@@ -1,30 +1,46 @@
-# Föhn-Layer + Präzisierungs-Layer 1-3 (umgesetzt)
+## Ziel
 
-Räumlich strikt auf den Oberthurgau-Perimeter beschränkt: Horn – Münsterlingen – Erlen – Hauptwil-Gottshaus – Roggwil – Horn. Rheintal und Steckborn werden im Prompt explizit ausgeschlossen.
+BIZ (Bischofszell) bleibt als technischer Cold-Anchor erhalten, aber im KI-Output werden die Senken konsequent als **„Aach- und Sittertal"** benannt – nicht mehr als „Hudelmoos / Riedflächen / Thurtal bei Bischofszell".
 
-## Föhn-Layer
+## Änderungen in `src/server/forecast.functions.ts`
 
-Föhn-Erkennung aus Modelldaten: Süd-Wind 130–200° + Wind ≥ 25 km/h oder Böen ≥ 45 km/h + Tmax mind. 4 °C über Klima + Niederschlag < 1.5 mm. Stärke-Stufen schwach/kräftig/Föhnsturm/schwerer Föhnsturm. Tagesgang via `diurnalFoehnPeak` (3 Fenster), Föhnabbruch-Erkennung (Böen-Drop + rH-Anstieg). Trend-Helper für Tage 6–10. Räumliche Differenzierung im Perimeter, explizites Verbot von Rheintal/Vaduz/Steckborn/westl. Bodensee/Frauenfeld/Konstanz/Kreuzlingen.
+### 1. System-Prompt: Senken-Bezeichnung vereinheitlichen (Z. 1889, 1896)
 
-## Layer 1 — Radar-Nowcast im Prompt
+**Z. 1889** – Beschreibung der BIZ-Stationsrolle:
+- alt: `"stations.BIZ" (Bischofszell, Thurtal-Senke): Anker für den KÄLTESTEN Punkt im Radius.`
+- neu: `"stations.BIZ" (Bischofszell, repräsentativ für die Senken im Aach- und Sittertal): Anker für den KÄLTESTEN Punkt im Perimeter. Der Stationsname "Bischofszell" wird im Fliesstext NICHT genannt – stattdessen "Aach- und Sittertal".`
 
-Helper `formatRadarNowHint` formuliert aktuellen Radar-Status für den KI-Prompt:
-- aktuell Niederschlag aktiv (mm/h, mm/3h)
-- Nowcast nächste 2 h
-- Modell-Über-/Unterschätzung
-Wird nur bei firstEntry und Tag 1 in den Prompt eingespeist. System-Prompt-Block `=== AKTUELLER RADAR (Nowcast) ===` erklärt der KI den Vorrang vor Modellprognose für die nächsten 2-3 h. 0 zusätzliche API-Calls (Daten kamen schon aus `radar.server.ts`).
+**Z. 1896** – Senken-Satz-Format:
+- alt: `Format: "In den Senken (z. B. Hudelmoos, Riedflächen, Bodensee-nahe Mulden, Thurtal bei Bischofszell) lokal bis X Grad."`
+- neu: `Format: "In den Senken im Aach- und Sittertal lokal bis X Grad." (X = Wert auf ganze Grad gerundet, ohne weitere Ortsnamen).`
 
-## Layer 2 — Hochnebel / Inversion / Höhenwind
+**Z. 1900** – Schluss-Direktive:
+- alt: `Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich GUT/BIZ.`
+- neu: `Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich Bodenseeufer–Aach-/Sittertal (intern: GUT/BIZ, NIE als Stationskürzel oder Ortsname Bischofszell ausgeben).`
 
-Hourly-Variablen erweitert: `cloudcover_low`, `temperature_850hPa`, `wind_speed_700hPa`, `wind_direction_700hPa`, `geopotential_height_500hPa`. Helper `formatInversionHint` erkennt Hochnebellagen (cloudcover_low ≥ 80% morgens + Inversion T_850 > T_2m − 2°C + windschwach), schätzt Nebelobergrenze ab und beschreibt Auflösungstendenz. Trend-Variante `formatInversionTrendHint` zählt mehrtägige Lagen. System-Prompt-Block `=== HOCHNEBEL / INVERSION ===`. 0 zusätzliche API-Calls.
+### 2. Topo-Label angleichen (Z. 384)
 
-## Layer 3 — Ensemble-Spread (Tag 6–10)
+- alt: `tmin_cold_label: classification === "strahlungsnacht" ? "Senken (Hudelmoos, Riedflächen)" : "Tiefste Lagen (Bodensee-Ufer)"`
+- neu: `tmin_cold_label: classification === "strahlungsnacht" ? "Senken im Aach- und Sittertal" : "Tiefste Lagen (Bodenseeufer)"`
 
-Neues Modul `src/server/uncertainty.server.ts`: holt Open-Meteo Ensemble (icon_seamless + ecmwf_ifs025), berechnet pro Tag P10/Median/P90/Sigma für Tmax und Niederschlagswahrscheinlichkeit (% Member > 1 mm). Erkennt bimodale Verteilungen (gleichzeitig ≥30% trocken und ≥30% nass). Helper `formatUncertaintyHint` leitet qualitative Stufe ab: "verlässlicher Trend" / "moderate Unsicherheit" / "hohe Unsicherheit, mehrere Szenarien möglich". Wird nur im Trend-Prompt (Tag 6-10) eingespielt. System-Prompt-Block `=== UNSICHERHEIT (Ensemble) ===`. +1 cachebarer API-Call (1h TTL).
+### 3. Negativ-Liste: „Bischofszell" verbieten
 
-## Prompt-Injection
+Im bestehenden Perimeter-Verbotsblock (Z. 1964 – Föhn-Direktive) bzw. im allgemeinen Stil-Block ergänzen:
+- `Bischofszell, Hudelmoos, Riedflächen, Thurtal NIEMALS namentlich nennen – Senken-Lagen ausschliesslich als "Aach- und Sittertal" beschreiben.`
 
-Alle Layer an allen 6 Stellen (generate + regenerate, je 3× firstEntry/day/trend) eingebunden, mit korrekter Layer-Zuordnung (Radar nur Tag 0/1, Inversion alle Tage, Ensemble nur Trend).
+## Was unverändert bleibt
 
-Fail-soft an allen Stellen.
+- BIZ bleibt in `STATIONS` (Z. 400-403) und Default-`bias_stations` (`GUT,STG,TAE` → BIZ kommt über STATIONS-Konstante separat dazu, Bias-Logik unverändert)
+- BIZ-Messdaten fliessen weiter in `corrected_tmin` ein
+- Backend-Logik / Datenfluss / Settings-UI: keine Änderung
+- 6 Generierungsstellen (generate + regenerate × firstEntry/day/trend): kein Eingriff nötig, da sie alle denselben System-Prompt nutzen
 
+## Akzeptanzkriterien
+
+- Generierter Text enthält bei Strahlungsnächten den Satz **„In den Senken im Aach- und Sittertal lokal bis X Grad."**
+- Wörter „Bischofszell", „Hudelmoos", „Riedflächen", „Thurtal" tauchen im Output **nicht** mehr auf
+- Tmin-Bandbreite (Hauptsatz) nutzt weiterhin BIZ-Korrekturwert als unteren Anker
+
+## Aufwand
+
+3 Prompt-Strings + 1 Label-Konstante. ~10 Zeilen. Keine neuen Dateien, keine API-Calls, keine Migration.
