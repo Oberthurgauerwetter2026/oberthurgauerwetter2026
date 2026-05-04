@@ -792,6 +792,160 @@ function formatLakeTemperatureTrendHint(days: any[]): string | null {
   return null;
 }
 
+// ===== Gewitter-Hinweis (CAPE + weathercode-Vote + Tagesgang aus Hourly) =====
+// CAPE-Schwellen:
+//   300-800   schwach   "Gewitterneigung"
+//   800-1500  mittel    "Gewitter wahrscheinlich, lokal kräftig"
+//   1500-2500 stark     "kräftige Gewitter, Hagel-/Sturmböenrisiko"
+//   >2500     schwer    "schwere Gewitterlage"
+// WMO-Codes: 95/96/99 = Gewitter, 80/81/82 = Schauer.
+const TSTORM_CODES = new Set([95, 96, 99]);
+const SHOWER_CODES = new Set([80, 81, 82]);
+
+function describeStormStrength(cape: number): string {
+  if (cape >= 2500) return "schwere Gewitterlage, lokal erhöhtes Risiko für grossen Hagel, Sturmböen und intensiven Starkregen";
+  if (cape >= 1500) return "kräftige Gewitter wahrscheinlich, Risiko für Hagel und Sturmböen";
+  if (cape >= 800) return "Gewitter wahrscheinlich, lokal kräftig mit Starkregen und Sturmböen";
+  if (cape >= 300) return "Gewitterneigung, einzelne lokale Schauer oder Gewitter möglich";
+  return "leichte Gewitterneigung";
+}
+
+// Liest pro Modell den maximalen CAPE-Wert für einen Tag aus den Daily-Daten.
+function maxCapeAcrossModels(day: any): number | null {
+  const cape = day?.cape_max;
+  if (!cape) return null;
+  const vals: number[] = [];
+  if (typeof cape.avg === "number") vals.push(cape.avg);
+  if (cape.by_model && typeof cape.by_model === "object") {
+    for (const v of Object.values(cape.by_model)) {
+      if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
+    }
+  }
+  if (!vals.length) return null;
+  return Math.max(...vals);
+}
+
+// Prüft, ob mindestens ein Modell für diesen Tag einen Gewitter- oder Schauer-Code liefert.
+function hasStormCodeVote(day: any): { thunder: boolean; shower: boolean } {
+  const wc = day?.weathercode;
+  let thunder = false, shower = false;
+  if (wc?.by_model && typeof wc.by_model === "object") {
+    for (const v of Object.values(wc.by_model)) {
+      const n = typeof v === "number" ? Math.round(v) : null;
+      if (n != null) {
+        if (TSTORM_CODES.has(n)) thunder = true;
+        if (SHOWER_CODES.has(n)) shower = true;
+      }
+    }
+  }
+  if (typeof wc?.avg === "number") {
+    const n = Math.round(wc.avg);
+    if (TSTORM_CODES.has(n)) thunder = true;
+    if (SHOWER_CODES.has(n)) shower = true;
+  }
+  return { thunder, shower };
+}
+
+// Tagesgang-Auswertung aus Hourly-Daten (nur Tag 0–1 verfügbar).
+// Liefert Beschreibung des Zeitfensters mit höchstem CAPE/Gewitter-Risiko, oder null.
+function diurnalStormPeak(weather: any, dayDate: string): string | null {
+  const h = weather?.hourly;
+  if (!h?.time) return null;
+  const times: string[] = h.time;
+  const idxs: number[] = [];
+  for (let i = 0; i < times.length; i++) {
+    if (typeof times[i] === "string" && times[i].startsWith(dayDate)) idxs.push(i);
+  }
+  if (idxs.length < 12) return null;
+  const capeKeys = Object.keys(h).filter((k) => k.startsWith("cape_"));
+  const wcKeys = Object.keys(h).filter((k) => k.startsWith("weathercode_"));
+  if (!capeKeys.length && !wcKeys.length) return null;
+
+  type Window = { label: string; from: number; to: number; capeMax: number; thunder: boolean };
+  const windows: Window[] = [
+    { label: "am Vormittag", from: 6, to: 12, capeMax: 0, thunder: false },
+    { label: "am Nachmittag", from: 12, to: 18, capeMax: 0, thunder: false },
+    { label: "am Abend", from: 18, to: 24, capeMax: 0, thunder: false },
+  ];
+  for (const i of idxs) {
+    const t = times[i];
+    const hour = parseInt(t.slice(11, 13), 10);
+    if (!Number.isFinite(hour)) continue;
+    const w = windows.find((w) => hour >= w.from && hour < w.to);
+    if (!w) continue;
+    const capeVals: number[] = [];
+    for (const k of capeKeys) {
+      const v = (h[k] as Array<number | null>)[i];
+      if (typeof v === "number" && Number.isFinite(v)) capeVals.push(v);
+    }
+    if (capeVals.length) {
+      const avgCape = capeVals.reduce((a, b) => a + b, 0) / capeVals.length;
+      if (avgCape > w.capeMax) w.capeMax = avgCape;
+    }
+    for (const k of wcKeys) {
+      const v = (h[k] as Array<number | null>)[i];
+      if (typeof v === "number" && TSTORM_CODES.has(Math.round(v))) w.thunder = true;
+    }
+  }
+  const ranked = [...windows].sort((a, b) => {
+    if (a.thunder !== b.thunder) return a.thunder ? -1 : 1;
+    return b.capeMax - a.capeMax;
+  });
+  const best = ranked[0]!;
+  if (!best.thunder && best.capeMax < 300) return null;
+
+  const maxC = Math.max(...windows.map((w) => w.capeMax));
+  const minC = Math.min(...windows.map((w) => w.capeMax));
+  if (maxC > 0 && minC / maxC > 0.7 && !windows.some((w) => w.thunder !== best.thunder)) return null;
+
+  const strong = windows.filter((w) => (w.capeMax >= best.capeMax * 0.7) || w.thunder);
+  if (strong.length >= 2) {
+    const labels = strong.map((w) => w.label.replace("am ", ""));
+    return `Schwerpunkt am ${labels.join(" und ")}`;
+  }
+  return `Schwerpunkt ${best.label}`;
+}
+
+function formatThunderstormHint(weather: any, day: any): string | null {
+  if (!day?.date) return null;
+  const capeMax = maxCapeAcrossModels(day);
+  const capeAvg = day.cape_max?.avg ?? null;
+  const { thunder, shower } = hasStormCodeVote(day);
+  const precipAvg = day.precip?.avg ?? 0;
+
+  const capeTrigger = capeMax != null && capeMax >= 500;
+  const codeTrigger = thunder || (shower && (precipAvg >= 2 || (capeMax != null && capeMax >= 300)));
+  if (!capeTrigger && !codeTrigger) return null;
+
+  const strengthCape = capeMax ?? capeAvg ?? 400;
+  const strength = describeStormStrength(strengthCape);
+  const diurnal = diurnalStormPeak(weather, day.date);
+  const stabilityLabel =
+    strengthCape >= 1500 ? "Konvektiv stark labile Lage"
+    : strengthCape >= 800 ? "Konvektiv labile Lage"
+    : strengthCape >= 300 ? "Konvektiv leicht labile Lage"
+    : "Schauer-/Gewitterneigung";
+
+  const parts = [`${stabilityLabel} — ${strength}`];
+  if (diurnal) parts.push(diurnal);
+  return parts.join(", ") + ".";
+}
+
+function formatThunderstormTrendHint(days: any[]): string | null {
+  if (!days?.length) return null;
+  let maxCape = 0;
+  let anyThunder = false;
+  for (const day of days) {
+    const c = maxCapeAcrossModels(day);
+    if (c != null && c > maxCape) maxCape = c;
+    const { thunder } = hasStormCodeVote(day);
+    if (thunder) anyThunder = true;
+  }
+  if (maxCape < 800 && !anyThunder) return null;
+  if (maxCape >= 1500) return "im Trend-Zeitraum zeitweise konvektiv stark labile Lage, Risiko für kräftige Gewitter mit Hagel- und Sturmböen";
+  return "im Trend-Zeitraum zeitweise erhöhte Gewitterneigung, lokal kräftige Schauer oder Gewitter möglich";
+}
+
 // Returns a unified weather object with `daily` (timeline) and `byModel` (per-model values)
 async function fetchWeather(
   lat: number,
