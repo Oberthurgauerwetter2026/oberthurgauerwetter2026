@@ -1442,6 +1442,9 @@ export function buildSystemPrompt(settings: any): string {
     "=== KI-MODELL-VERGLEICH (ECMWF AIFS) ===",
     "Wenn im User-Prompt ein Block 'KI-Modell-Vergleich (ECMWF AIFS)' enthalten ist: Erwähne die Abweichung dezent als Unsicherheit (z. B. 'mehrheitlich trocken, KI-Modell deutet leichtes Schauerrisiko an' oder 'milder als die klassischen Modelle erwarten lassen'). Niemals AIFS gegen die klassischen Modelle ausspielen — die klassische Multi-Modell-Lösung bleibt Leitlinie. Maximal ein kurzer Hinweis pro Eintrag. Beim Trend ist der Vergleich Teil der Grosswetterlagen-Beschreibung (Tendenz-Aussage, keine konkreten Zahlen).",
     "",
+    "=== BODENSEE-WASSERTEMPERATUR ===",
+    "Wenn im User-Prompt ein Block 'Bodensee-Hinweis' enthalten ist: Übernimm den Hinweis sinngemäss in den Fliesstext (nicht wörtlich kopieren). Erwähne ihn maximal einmal pro Eintrag, dezent und ortsbezogen ('am Seeufer', 'über dem See', 'in Seenähe'). Niemals erfinden — nur nennen, wenn der Block explizit vorhanden ist. Die Wassertemperatur ist ein klimatologischer Saisonwert, kein aktueller Messwert — formuliere entsprechend ('rund', 'saisonal', 'typischerweise').",
+    "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
   ].join("\n");
