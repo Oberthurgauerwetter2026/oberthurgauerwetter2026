@@ -143,6 +143,49 @@ function enforceSkyConsistency(text: string, weatherData: any): string {
   return paragraphs.join("\n\n");
 }
 
+// Erkennt typische Vollverb-/Verbalstil-Phrasen, die im Nominal-/Telegrammstil
+// vermieden werden sollen. Liefert die Liste der gefundenen Verstöße zurück.
+// Der Text selbst wird NICHT verändert — die Korrektur erfolgt per Retry an das Modell.
+function enforceNominalStyle(text: string): { violations: string[] } {
+  const patterns: Array<{ re: RegExp; label: string }> = [
+    { re: /\bdie\s+sonne\s+(scheint|scheinen)\b/i, label: "die Sonne scheint" },
+    { re: /\bziehen?\s+\w+\s+auf\b/i, label: "ziehen … auf" },
+    { re: /\bes\s+regnet\b/i, label: "es regnet" },
+    { re: /\bes\s+schneit\b/i, label: "es schneit" },
+    { re: /\bes\s+gewittert\b/i, label: "es gewittert" },
+    { re: /\bder\s+wind\s+weht\b/i, label: "der Wind weht" },
+    { re: /\bwir\s+erwarten\b/i, label: "wir erwarten" },
+    { re: /\bes\s+wird\s+\w+/i, label: "es wird …" },
+    { re: /\bzeigt\s+sich\b/i, label: "zeigt sich" },
+    { re: /\bpräsentiert\s+sich\b/i, label: "präsentiert sich" },
+    { re: /\bgestaltet\s+sich\b/i, label: "gestaltet sich" },
+  ];
+  const violations: string[] = [];
+  for (const { re, label } of patterns) {
+    if (re.test(text)) violations.push(label);
+  }
+  return { violations };
+}
+
+// Wrapper: ruft generateText, prüft Nominalstil, retried bei Verstoß genau 1×
+// mit verschärftem User-Prompt. Verwendet überall dort, wo bisher generateText() direkt aufgerufen wurde.
+async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
+  const first = await generateText(systemPrompt, userPrompt);
+  const check = enforceNominalStyle(first);
+  if (check.violations.length === 0) return first;
+  console.log(`[nominal-style] Verstöße erkannt: ${check.violations.join(", ")} — Retry`);
+  const retryPrompt = userPrompt +
+    `\n\nWICHTIG: Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${check.violations.join(", ")}). ` +
+    `Schreibe ZWINGEND im Nominal-/Telegrammstil — keine finiten Vollverben, sondern Substantiv-Phrasen. ` +
+    `Beispiele: statt "die Sonne scheint" → "Sonnenschein"; statt "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"; statt "es regnet" → "zeitweise Regen".`;
+  try {
+    return await generateText(systemPrompt, retryPrompt);
+  } catch (e) {
+    console.warn("[nominal-style] Retry fehlgeschlagen, behalte Erstversuch", e);
+    return first;
+  }
+}
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ===== Topography (elevation grid around Amriswil) =====
