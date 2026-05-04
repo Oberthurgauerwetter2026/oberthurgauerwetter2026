@@ -75,8 +75,9 @@ const DAILY_VARS = [
   "weathercode",
   "cloudcover_mean",
   "cape_max",
+  "wind_gusts_10m_max",
 ];
-const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration", "cape"];
+const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration", "cape", "wind_gusts_10m", "relative_humidity_2m"];
 
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
