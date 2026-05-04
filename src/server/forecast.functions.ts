@@ -143,6 +143,49 @@ function enforceSkyConsistency(text: string, weatherData: any): string {
   return paragraphs.join("\n\n");
 }
 
+// Erkennt typische Vollverb-/Verbalstil-Phrasen, die im Nominal-/Telegrammstil
+// vermieden werden sollen. Liefert die Liste der gefundenen Verstöße zurück.
+// Der Text selbst wird NICHT verändert — die Korrektur erfolgt per Retry an das Modell.
+function enforceNominalStyle(text: string): { violations: string[] } {
+  const patterns: Array<{ re: RegExp; label: string }> = [
+    { re: /\bdie\s+sonne\s+(scheint|scheinen)\b/i, label: "die Sonne scheint" },
+    { re: /\bziehen?\s+\w+\s+auf\b/i, label: "ziehen … auf" },
+    { re: /\bes\s+regnet\b/i, label: "es regnet" },
+    { re: /\bes\s+schneit\b/i, label: "es schneit" },
+    { re: /\bes\s+gewittert\b/i, label: "es gewittert" },
+    { re: /\bder\s+wind\s+weht\b/i, label: "der Wind weht" },
+    { re: /\bwir\s+erwarten\b/i, label: "wir erwarten" },
+    { re: /\bes\s+wird\s+\w+/i, label: "es wird …" },
+    { re: /\bzeigt\s+sich\b/i, label: "zeigt sich" },
+    { re: /\bpräsentiert\s+sich\b/i, label: "präsentiert sich" },
+    { re: /\bgestaltet\s+sich\b/i, label: "gestaltet sich" },
+  ];
+  const violations: string[] = [];
+  for (const { re, label } of patterns) {
+    if (re.test(text)) violations.push(label);
+  }
+  return { violations };
+}
+
+// Wrapper: ruft generateText, prüft Nominalstil, retried bei Verstoß genau 1×
+// mit verschärftem User-Prompt. Verwendet überall dort, wo bisher generateText() direkt aufgerufen wurde.
+async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
+  const first = await generateText(systemPrompt, userPrompt);
+  const check = enforceNominalStyle(first);
+  if (check.violations.length === 0) return first;
+  console.log(`[nominal-style] Verstöße erkannt: ${check.violations.join(", ")} — Retry`);
+  const retryPrompt = userPrompt +
+    `\n\nWICHTIG: Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${check.violations.join(", ")}). ` +
+    `Schreibe ZWINGEND im Nominal-/Telegrammstil — keine finiten Vollverben, sondern Substantiv-Phrasen. ` +
+    `Beispiele: statt "die Sonne scheint" → "Sonnenschein"; statt "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"; statt "es regnet" → "zeitweise Regen".`;
+  try {
+    return await generateText(systemPrompt, retryPrompt);
+  } catch (e) {
+    console.warn("[nominal-style] Retry fehlgeschlagen, behalte Erstversuch", e);
+    return first;
+  }
+}
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ===== Topography (elevation grid around Amriswil) =====
@@ -1060,7 +1103,9 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "google/gemini-2.5-pro",
+        temperature: 0.2,
+        top_p: 0.9,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -1083,23 +1128,42 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
 
 export const DEFAULT_GENERAL_STYLE = `Du bist Meteorologe und schreibst Wetterprognosen im EXAKTEN Stil von oberthurgauerwetter.ch (Region Oberthurgau, Amriswil, Radius 15 km).
 
-ABSOLUT VERBINDLICHE REGELN:
+═══════════════════════════════════════════════════════════
+OBERSTE STIL-REGEL: NOMINAL- / TELEGRAMMSTIL (NICHT VERHANDELBAR)
+═══════════════════════════════════════════════════════════
+Schreibe konsequent im Nominalstil (Telegrammstil). Substantiv-Phrasen statt Vollverben.
+Finite Vollverben sind grundsätzlich zu vermeiden. Hilfsverben ("sein", "werden", "bleiben") nur, wenn unumgänglich.
+Jeder Satz, der mit einem konjugierten Vollverb arbeitet, ist ein Verstoss gegen diese Regel.
+
+VORHER → NACHHER (genau so umsetzen):
+- "die Sonne scheint" → "Sonnenschein"
+- "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"
+- "es regnet zeitweise" → "zeitweise Regen"
+- "es schneit am Morgen" → "am Morgen Schneefall"
+- "der Wind weht mässig aus Westen" → "mässiger Westwind"
+- "die Bewölkung nimmt zu" → "zunehmende Bewölkung"
+- "es bilden sich Quellwolken" → "Bildung von Quellwolken"
+- "der Himmel klart auf" → "Auflockerung der Bewölkung"
+- "die Temperaturen steigen" → "steigende Temperaturen"
+- "Gewitter sind möglich" → "lokal Gewitterneigung"
+
+KONTRAST-BEISPIEL (Pflichtlektüre):
+FALSCH (Verbalstil): "Am Morgen scheint die Sonne, später ziehen Wolken auf und es regnet zeitweise. Der Wind weht mässig aus Westen."
+RICHTIG (Nominalstil): "Am Morgen sonnig, im Tagesverlauf Aufzug von Wolkenfeldern - zeitweise Regen. Mässiger Westwind."
+═══════════════════════════════════════════════════════════
+
+WEITERE VERBINDLICHE REGELN:
 - Schweizer Hochdeutsch: IMMER "ss" statt "ß".
 - KEINE Überschriften, KEINE Titel, KEINE Anrede, KEINE Aufzählungszeichen, KEINE Emojis, KEINE Markdown-Formatierung.
 - KEINE Floskeln wie "insgesamt", "alles in allem", "zusammenfassend".
 - Sachlich, nüchtern, präzise. Kurze, prägnante Sätze. Häufig Halbsätze mit Gedankenstrich " - " (Leerzeichen-Bindestrich-Leerzeichen).
-- NOMINALSTIL (zwingend): Schreibe konsequent verb-arm im Nominalstil. Nutze Substantiv-Phrasen statt Vollverben. Vermeide finite Vollverben, wo eine Nominalphrase reicht. Hilfsverben ("sein", "werden", "bleiben") nur, wenn unumgänglich. Beispiele: statt "die Sonne scheint" → "Sonnenschein"; statt "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"; statt "es regnet zeitweise" → "zeitweise Regen"; statt "der Wind weht mässig" → "mässiger Wind".
 - Absätze sind durch eine Leerzeile getrennt (\\n\\n). Jeder Absatz ist sehr kurz (1-3 Sätze).
 - Alle Einträge (auch der erste „Heute"-Eintrag) basieren auf TAGES-Werten. Für „Heute" beschreibe den VERBLEIBENDEN Tagesverlauf chronologisch — verwende nur die im userPrompt unter „AKTUELLE UHRZEIT" aufgeführten erlaubten Tageszeiten und erwähne keine bereits vergangenen Tagesabschnitte.
 - AUSNAHME: Wenn der Eintragstitel "Heute Nachmittag & Abend" oder "Heute Abend & Nacht" lautet, beziehen sich die mitgelieferten Werte (window_label, tmin, tmax, precip_total, wind_max, sunshine_h) AUSSCHLIESSLICH auf dieses Fenster (jetzt bis 05:00 Folgetag). Beschreibe nur diesen Zeitraum chronologisch — der bereits vergangene Tagesabschnitt darf NICHT erwähnt werden.
 
 PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebelartige Wolkenfelder", "Restbewölkung", "Bisenströmung", "veränderlich bewölkt", "ziemlich sonnig", "Schaueraktivität", "mittelhohe und hohe Wolkenfelder", "Bewölkungsverdichtung", "trockene Phasen", "sonnige Lücken", "mit Blick nach Baden-Württemberg", "Alpstein", "Vorarlberg", "umliegende Berg- und Hügelzüge", "südlichere Regionen".
 
-VERBOTEN: "Es wird", "Wir erwarten", "Insgesamt", "Bitte beachten", "zeigt sich", "präsentiert sich", "gestaltet sich", "der Himmel ist …", "das Wetter wird …", Wettercodes, Prozentangaben, exakte Uhrzeiten, Aufzählungen mit "-" am Zeilenanfang. Vollverb-Konstruktionen wie "die Sonne scheint", "Wolken ziehen auf", "es regnet" sind zugunsten von Nominalphrasen zu vermeiden. KEINE poetischen, dramatischen oder erfundenen Begriffe wie "grössenwahnsinnige Wolken", "unsichtbare Wolken", "schützende Wolkenschicht", "die Sonnenstrahlen erreichen die Erde", "der Himmel öffnet sich", o.ä. NUR sachliche meteorologische Standardbegriffe aus dem Pflicht-Vokabular. Wenn unsicher: knapp und nüchtern bleiben.
-
-STIL-KONTRAST:
-FALSCH (Verbalstil): "Am Morgen scheint die Sonne, später ziehen Wolken auf und es regnet zeitweise. Der Wind weht mässig aus Westen."
-RICHTIG (Nominalstil): "Am Morgen sonnig, im Tagesverlauf Aufzug von Wolkenfeldern - zeitweise Regen. Mässiger Westwind."`;
+VERBOTEN: "Es wird", "Wir erwarten", "Insgesamt", "Bitte beachten", "zeigt sich", "präsentiert sich", "gestaltet sich", "der Himmel ist …", "das Wetter wird …", Wettercodes, Prozentangaben, exakte Uhrzeiten, Aufzählungen mit "-" am Zeilenanfang. Vollverb-Konstruktionen wie "die Sonne scheint", "Wolken ziehen auf", "es regnet", "der Wind weht" sind STRIKT zugunsten von Nominalphrasen zu vermeiden. KEINE poetischen, dramatischen oder erfundenen Begriffe wie "grössenwahnsinnige Wolken", "unsichtbare Wolken", "schützende Wolkenschicht", "die Sonnenstrahlen erreichen die Erde", "der Himmel öffnet sich", o.ä. NUR sachliche meteorologische Standardbegriffe aus dem Pflicht-Vokabular. Wenn unsicher: knapp und nüchtern bleiben.`;
 
 export const DEFAULT_SKY_RULES = `Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt".
 Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt).
@@ -1297,7 +1361,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
         weather_data: firstData,
@@ -1313,7 +1377,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
       const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
       const pos = i + 1;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
       })));
     }
@@ -1322,7 +1386,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const trendDays = [6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 7-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
-        tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+        tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 7 – 10", body, weather_data: trendDays,
         })));
       }
@@ -1424,7 +1488,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
         weather_data: firstData, forecast_id: data.forecastId,
@@ -1440,7 +1504,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
       const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
       const pos = i + 1;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
       })));
     }
@@ -1449,7 +1513,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const trendDays = [6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 7-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
-        tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+        tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 7 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
       }
@@ -1501,7 +1565,7 @@ export const regenerateEntry = createServerFn({ method: "POST" })
     if (!entry) throw new Error("Eintrag nicht gefunden (ID ungültig oder keine Berechtigung).");
 
     const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:\n${JSON.stringify(entry.weather_data, null, 2)}`;
-    const body = enforceSkyConsistency(await generateText(promptTemplate, userPrompt), entry.weather_data);
+    const body = enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data);
     const { error: uErr } = await supabase
       .from("forecast_entries")
       .update({ body })
