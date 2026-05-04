@@ -121,7 +121,15 @@ const DAILY_VARS = [
   "cape_max",
   "wind_gusts_10m_max",
 ];
-const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration", "cape", "wind_gusts_10m", "relative_humidity_2m"];
+const HOURLY_VARS = [
+  "temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m",
+  "weathercode", "sunshine_duration", "cape", "wind_gusts_10m", "relative_humidity_2m",
+  // Layer 2: Höhenwind & Hochnebel
+  "cloudcover_low",
+  "temperature_850hPa",
+  "wind_speed_700hPa", "wind_direction_700hPa",
+  "geopotential_height_500hPa",
+];
 
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
