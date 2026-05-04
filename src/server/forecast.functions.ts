@@ -2051,7 +2051,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
-    const ensembleEnabled = settings?.ensemble_enabled !== false;
+    const ensembleEnabled = (settings as any)?.ensemble_enabled !== false;
     const ensembleData: EnsembleData | null = (!degraded && ensembleEnabled)
       ? await fetchEnsembleData(lat, lon).catch((e) => { console.warn("ensemble fetch failed", e); return null; })
       : null;
@@ -2201,7 +2201,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
-    const ensembleEnabled = settings?.ensemble_enabled !== false;
+    const ensembleEnabled = (settings as any)?.ensemble_enabled !== false;
     const ensembleData: EnsembleData | null = (!degraded && ensembleEnabled)
       ? await fetchEnsembleData(lat, lon).catch((e) => { console.warn("ensemble fetch failed", e); return null; })
       : null;
