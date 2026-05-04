@@ -614,6 +614,135 @@ async function fetchAifsTimeline(lat: number, lon: number) {
   );
 }
 
+// ===== Zonen-Multi-Coord (datengetriebene räumliche Differenzierung) =====
+// Vier repräsentative Punkte im Oberthurgau-Perimeter. Open-Meteo akzeptiert
+// Multi-Coord in einem einzigen Call und liefert ein Array zurück.
+export const ZONES = [
+  { id: "ost",        name: "Horn",                lat: 47.494, lon: 9.434 },
+  { id: "mitte",      name: "Romanshorn",          lat: 47.566, lon: 9.378 },
+  { id: "west",       name: "Münsterlingen",       lat: 47.633, lon: 9.235 },
+  { id: "hinterland", name: "Hauptwil-Gottshaus",  lat: 47.490, lon: 9.275 },
+] as const;
+
+const ZONE_DAILY_VARS = [
+  "temperature_2m_max",
+  "temperature_2m_min",
+  "precipitation_sum",
+  "precipitation_probability_max",
+  "windspeed_10m_max",
+  "wind_gusts_10m_max",
+  "winddirection_10m_dominant",
+  "sunshine_duration",
+  "cloudcover_mean",
+];
+const ZONE_MODEL = "icon_d2"; // günstig, deckt alle vier Punkte ab
+
+async function fetchZonesTimeline(): Promise<Array<Record<string, any>> | null> {
+  const cacheKey = `om:zones:${ZONE_MODEL}:${ZONES.map((z) => `${z.lat},${z.lon}`).join("|")}`;
+  return getOrSetCache(cacheKey, async () => {
+    const url = new URL("https://api.open-meteo.com/v1/forecast");
+    url.searchParams.set("latitude", ZONES.map((z) => z.lat).join(","));
+    url.searchParams.set("longitude", ZONES.map((z) => z.lon).join(","));
+    url.searchParams.set("timezone", "Europe/Zurich");
+    url.searchParams.set("forecast_days", "10");
+    url.searchParams.set("daily", ZONE_DAILY_VARS.join(","));
+    url.searchParams.set("models", ZONE_MODEL);
+    try {
+      const res = await fetch(url.toString());
+      if (!res.ok) {
+        console.warn(`[zones] Open-Meteo Multi-Coord HTTP ${res.status}`);
+        return null;
+      }
+      const json = await res.json();
+      // Multi-Coord liefert IMMER ein Array, auch bei einem Punkt.
+      return Array.isArray(json) ? json : [json];
+    } catch (e) {
+      console.warn(`[zones] fetch failed:`, e instanceof Error ? e.message : e);
+      return null;
+    }
+  });
+}
+
+// Holt einen Tageswert für eine Variable aus den Zonen-Daten, indexiert per Datum.
+function readZoneValue(zonePayload: any, varname: string, dateStr: string): number | null {
+  const times: string[] = zonePayload?.daily?.time ?? [];
+  const arr: any[] = zonePayload?.daily?.[varname] ?? [];
+  const idx = times.indexOf(dateStr);
+  if (idx < 0) return null;
+  const v = arr[idx];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+type ZoneAgg = {
+  ost: number | null;
+  mitte: number | null;
+  west: number | null;
+  hinterland: number | null;
+  range: string | null;
+  spread: number | null;
+};
+
+function buildZoneAgg(zones: Array<Record<string, any>>, varname: string, dateStr: string, transform?: (v: number) => number): ZoneAgg {
+  const vals: Record<string, number | null> = { ost: null, mitte: null, west: null, hinterland: null };
+  for (let i = 0; i < ZONES.length; i++) {
+    const z = ZONES[i]!;
+    const raw = readZoneValue(zones[i], varname, dateStr);
+    vals[z.id] = raw == null ? null : (transform ? transform(raw) : raw);
+  }
+  const numeric = Object.values(vals).filter((v): v is number => v != null);
+  if (!numeric.length) {
+    return { ost: vals.ost, mitte: vals.mitte, west: vals.west, hinterland: vals.hinterland, range: null, spread: null };
+  }
+  const min = Math.min(...numeric);
+  const max = Math.max(...numeric);
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  return {
+    ost: vals.ost,
+    mitte: vals.mitte,
+    west: vals.west,
+    hinterland: vals.hinterland,
+    range: `${r1(min)}–${r1(max)}`,
+    spread: r1(max - min),
+  };
+}
+
+function formatZones(weather: any, dateStr: string): Record<string, any> | null {
+  const zones: Array<Record<string, any>> | undefined = weather?.zonesData;
+  if (!zones?.length) return null;
+
+  const tmax = buildZoneAgg(zones, "temperature_2m_max", dateStr);
+  const tmin = buildZoneAgg(zones, "temperature_2m_min", dateStr);
+  const precip = buildZoneAgg(zones, "precipitation_sum", dateStr);
+  const precip_prob = buildZoneAgg(zones, "precipitation_probability_max", dateStr);
+  const wind_max = buildZoneAgg(zones, "windspeed_10m_max", dateStr);
+  const wind_gusts = buildZoneAgg(zones, "wind_gusts_10m_max", dateStr);
+  const cloudcover = buildZoneAgg(zones, "cloudcover_mean", dateStr);
+  const sunshine = buildZoneAgg(zones, "sunshine_duration", dateStr, (v) => Math.round((v / 3600) * 10) / 10);
+
+  const significant: string[] = [];
+  // Schwellwerte (vgl. Plan)
+  if (tmax.spread != null && tmax.spread > 2) significant.push("tmax");
+  if (tmin.spread != null && tmin.spread > 2) significant.push("tmin");
+  if (precip.spread != null) {
+    const numericPrecip = [precip.ost, precip.mitte, precip.west, precip.hinterland].filter((v): v is number => v != null);
+    const minP = numericPrecip.length ? Math.min(...numericPrecip) : 0;
+    const maxP = numericPrecip.length ? Math.max(...numericPrecip) : 0;
+    const factor = minP > 0.1 ? maxP / minP : (maxP > 0.5 ? 999 : 1);
+    if (precip.spread > 3 || factor > 3) significant.push("precip");
+  }
+  if (wind_max.spread != null && wind_max.spread > 15) significant.push("wind_max");
+  if (wind_gusts.spread != null && wind_gusts.spread > 20) significant.push("wind_gusts");
+  if (cloudcover.spread != null && cloudcover.spread > 30) significant.push("cloudcover");
+  if (sunshine.spread != null && sunshine.spread > 2) significant.push("sunshine");
+
+  return {
+    points: ZONES.map((z) => ({ id: z.id, name: z.name })),
+    tmax, tmin, precip, precip_prob, wind_max, wind_gusts, cloudcover, sunshine,
+    significant_diffs: significant,
+  };
+}
+
+
 // Liest einen AIFS-Wert für eine Variable + Tag. AIFS liefert die Werte in
 // Open-Meteo als unsuffigierte Arrays (nur 1 Modell), oder mit Modell-Suffix.
 function readAifsValue(aifs: any, varName: string, dayIndex: number): number | null {
@@ -1142,6 +1271,8 @@ async function fetchWeather(
   await wait(500);
   // ECMWF AIFS als separater Vergleichs-Layer (KI-Wettermodell). Optional, fail-soft.
   const aifsData = await fetchAifsTimeline(lat, lon);
+  // Zonen-Multi-Coord (4 Punkte im Perimeter, 1 zusätzlicher Call). Optional, fail-soft.
+  const zonesData = await fetchZonesTimeline();
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
   if (!daily) {
     // All Open-Meteo tiers failed. Throw a typed error so the generation path
@@ -1157,6 +1288,7 @@ async function fetchWeather(
     hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
     byModel: { short: shortData, mid: midData, long: longData, aifs: aifsData },
     modelLists: { short: shortModels, mid: midModels, long: longModels, aifs: AIFS_MODEL },
+    zonesData,
   };
 }
 
@@ -1376,6 +1508,7 @@ function formatDayData(weather: any, dayIndex: number) {
     sunshine_h,
     cape_max,
     wind_gusts_max,
+    zones: formatZones(weather, d.time[dayIndex]),
   };
 }
 
@@ -1778,6 +1911,9 @@ export function buildSystemPrompt(settings: any): string {
     "",
     "=== FÖHN-HINWEIS ===",
     "Wenn im User-Prompt ein Block 'Föhn-Hinweis' enthalten ist: Übernimm Stärke, Tagesgang und räumliche Differenzierung sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende Föhn-Vokabular: 'föhnig mild', 'sehr trocken', 'kräftige Südböen', 'Föhnfenster', 'Föhnabbruch', 'Föhnsturm'. Bei Föhnsturm klar benennen. Prognose-Perimeter Oberthurgau: Horn – Münsterlingen – Erlen – Hauptwil-Gottshaus – Roggwil – Horn. Räumliche Differenzierung INNERHALB dieses Perimeters: östliche Seeufer (Horn, Arbon, Roggwil) am stärksten, mittlere Seezone (Egnach, Romanshorn, Uttwil) klar föhnig aber abgeschwächt, westliche Seezone (Altnau, Münsterlingen) nur schwach, Hinterland (Erlen, Hauptwil-Gottshaus, Amriswil-Hinterland) meist abgeschirmt. Orte AUSSERHALB des Perimeters NIEMALS erwähnen — insbesondere kein Rheintal, kein Vaduz/Buchs, kein Steckborn, kein westlicher Bodensee, kein Frauenfeld, kein Konstanz/Kreuzlingen. Wenn KEIN solcher Block vorhanden ist, KEINE Föhn-Aussagen.",
+    "",
+    "=== ZONEN-DIFFERENZIERUNG (gilt für ALLE Wetterlagen) ===",
+    "Die Tagesdaten enthalten ein Feld 'zones' mit Werten für vier repräsentative Punkte im Perimeter: ost (Horn, östliches Seeufer), mitte (Romanshorn, mittleres Seeufer), west (Münsterlingen, westliches Seeufer), hinterland (Hauptwil-Gottshaus, Hinterland ~580 m). REGEL: Für jede Variable, die in 'zones.significant_diffs' aufgeführt ist, MUSS der Text die räumliche Differenzierung mit Ortsbezug erwähnen — Beispiele: 'am östlichen Seeufer um Horn 22°C, im Hinterland um Hauptwil-Gottshaus nur 19°C', 'Niederschlag im Westen um Münsterlingen am stärksten, im Osten kaum Regen', 'Wind über dem See deutlich kräftiger als im windgeschützten Hinterland', 'Frostgefahr nur im Hinterland, am See dank Wassereinfluss frostfrei'. Bei Variablen die NICHT in significant_diffs stehen: einheitliche Aussage, keine künstliche Aufteilung. Erlaubte Ortsnennungen für die räumliche Beschreibung: Horn, Romanshorn, Münsterlingen, Hauptwil-Gottshaus, sowie räumlich naheliegende Orte im Perimeter (Arbon, Roggwil, Egnach, Uttwil, Altnau, Amriswil, Erlen, Sulgen, Bischofszell). NIEMALS erwähnen: Rheintal, Vaduz, Buchs, Steckborn, Frauenfeld, Konstanz, Kreuzlingen. Diese Regel gilt für ALLE Wetterlagen — nicht nur Föhn (auch bei Schauern, Bise, Hochnebel, Frost, Hitze etc.). Wenn 'zones' fehlt oder 'significant_diffs' leer ist, KEINE Zonen-Trennung erfinden.",
     "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
