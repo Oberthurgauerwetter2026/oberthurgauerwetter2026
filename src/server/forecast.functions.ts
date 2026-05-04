@@ -985,6 +985,94 @@ function formatThunderstormHint(weather: any, day: any): string | null {
   return parts.join(", ") + ".";
 }
 
+// ===== Quellwolken-Erkennung (Cumulus, ohne Gewitter-Trigger) =====
+// Klassifiziert tagsüber Cumulus-Bildung aus CAPE + cloudcover_low + Sonnenstunden.
+// Liefert null, wenn Gewitter-Logik greift (CAPE >= 800 oder Gewitter-Code) oder
+// wenn keine Quellwolken-Klasse passt.
+function formatCumulusHint(weather: any, day: any): string | null {
+  if (!day?.date) return null;
+  const capeMaxDay = maxCapeAcrossModels(day);
+  if (capeMaxDay != null && capeMaxDay >= 800) return null;
+  const { thunder } = hasStormCodeVote(day);
+  if (thunder) return null;
+  const sunshineDay = day?.sunshine_h?.avg ?? day?.sunshine_h ?? null;
+  if (typeof sunshineDay !== "number" || sunshineDay < 3) return null;
+
+  const h = weather?.hourly;
+  if (!h?.time) return null;
+  const times: string[] = h.time;
+  const idxs: number[] = [];
+  for (let i = 0; i < times.length; i++) {
+    if (typeof times[i] === "string" && times[i].startsWith(day.date)) idxs.push(i);
+  }
+  if (idxs.length < 12) return null;
+  const capeKeys = Object.keys(h).filter((k) => k.startsWith("cape_") || k === "cape");
+  const lowKeys = Object.keys(h).filter((k) => k.startsWith("cloudcover_low"));
+  if (!capeKeys.length || !lowKeys.length) return null;
+
+  type Win = { label: string; from: number; to: number; cape: number; low: number; n: number };
+  const windows: Win[] = [
+    { label: "am Vormittag", from: 9, to: 12, cape: 0, low: 0, n: 0 },
+    { label: "am Nachmittag", from: 12, to: 17, cape: 0, low: 0, n: 0 },
+    { label: "am Abend", from: 17, to: 20, cape: 0, low: 0, n: 0 },
+  ];
+  for (const i of idxs) {
+    const hour = parseInt(times[i].slice(11, 13), 10);
+    const w = windows.find((w) => hour >= w.from && hour < w.to);
+    if (!w) continue;
+    const capeVals: number[] = [];
+    for (const k of capeKeys) {
+      const v = (h[k] as Array<number | null>)[i];
+      if (typeof v === "number" && Number.isFinite(v)) capeVals.push(v);
+    }
+    const lowVals: number[] = [];
+    for (const k of lowKeys) {
+      const v = (h[k] as Array<number | null>)[i];
+      if (typeof v === "number" && Number.isFinite(v)) lowVals.push(v);
+    }
+    if (capeVals.length && lowVals.length) {
+      w.cape += capeVals.reduce((a, b) => a + b, 0) / capeVals.length;
+      w.low += lowVals.reduce((a, b) => a + b, 0) / lowVals.length;
+      w.n += 1;
+    }
+  }
+
+  type Hit = { label: string; klass: "harmlos" | "mediocris" | "congestus" };
+  const hits: Hit[] = [];
+  for (const w of windows) {
+    if (!w.n) continue;
+    const cape = w.cape / w.n;
+    const low = w.low / w.n;
+    if (low > 80) continue; // bedeckt — keine erkennbaren Einzelquellen
+    let klass: Hit["klass"] | null = null;
+    if (cape >= 300 && cape < 800 && low >= 25 && low <= 75) klass = "congestus";
+    else if (cape >= 100 && cape < 500 && low >= 20 && low <= 65) klass = "mediocris";
+    else if (cape >= 50 && cape < 300 && low >= 10 && low <= 45 && sunshineDay >= 5) klass = "harmlos";
+    if (klass) hits.push({ label: w.label, klass });
+  }
+  if (!hits.length) return null;
+
+  const phrase = (k: Hit["klass"]): string =>
+    k === "congestus" ? "mächtige Quellwolken, einzelne Schauer möglich"
+    : k === "mediocris" ? "kräftigere Quellbewölkung"
+    : "harmlose Quellwolken";
+
+  // Stärkste Klasse priorisieren, Schwerpunkt-Fenster nennen
+  const rank = { harmlos: 1, mediocris: 2, congestus: 3 } as const;
+  hits.sort((a, b) => rank[b.klass] - rank[a.klass]);
+  const top = hits[0]!;
+  const sameClass = hits.filter((h) => h.klass === top.klass);
+  if (sameClass.length >= 2) {
+    const labels = sameClass.map((h) => h.label.replace("am ", ""));
+    return `Schwerpunkt am ${labels.join(" und ")} ${phrase(top.klass)}.`;
+  }
+  return `${capitalize(top.label)} ${phrase(top.klass)}.`;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function formatThunderstormTrendHint(days: any[]): string | null {
   if (!days?.length) return null;
   let maxCape = 0;
@@ -1876,7 +1964,8 @@ Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = be
 Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
 WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.
+QUELLWOLKEN: Wenn im Datenblock ein Abschnitt "Quellwolken: …" mitgeliefert wird, übernimm den Hinweis sinngemäss in den Tagestext (nicht 1:1 kopieren). Verwende die Begriffe "Quellwolken", "Quellbewölkung" oder "Cumulus-Bildung" und nenne den Tagesabschnitt (z. B. "am Nachmittag"). Generische Phrasen wie "Wolken bilden sich" oder "Bewölkung nimmt zu" sind hier nicht zulässig. Fehlt der Abschnitt, KEINE Quellwolken erwähnen.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
@@ -2098,13 +2187,15 @@ export const generateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, firstData);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
+      const cumulusHint = formatCumulusHint(weather, firstData);
+      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
       const foehnHint = formatFoehnHint(weather, firstData);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
       const radarHint = formatRadarNowHint(radarSnapshot);
       const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
       const invHint = formatInversionHint(weather, firstData);
       const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -2125,6 +2216,8 @@ export const generateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, day);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
+      const cumulusHint = formatCumulusHint(weather, day);
+      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
       const foehnHint = formatFoehnHint(weather, day);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
       // Radar nur Tag 1 (i==1) — Tag 2-5 ausserhalb der Nowcast-Reichweite
@@ -2132,7 +2225,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
       const invHint = formatInversionHint(weather, day);
       const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -2266,13 +2359,15 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, firstData);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
+      const cumulusHint = formatCumulusHint(weather, firstData);
+      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
       const foehnHint = formatFoehnHint(weather, firstData);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
       const radarHint = formatRadarNowHint(radarSnapshot);
       const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
       const invHint = formatInversionHint(weather, firstData);
       const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -2293,13 +2388,15 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, day);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
+      const cumulusHint = formatCumulusHint(weather, day);
+      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
       const foehnHint = formatFoehnHint(weather, day);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
       const radarHint = i === 1 ? formatRadarNowHint(radarSnapshot) : null;
       const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
       const invHint = formatInversionHint(weather, day);
       const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
