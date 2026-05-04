@@ -2358,13 +2358,15 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, firstData);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
+      const cumulusHint = formatCumulusHint(weather, firstData);
+      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
       const foehnHint = formatFoehnHint(weather, firstData);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
       const radarHint = formatRadarNowHint(radarSnapshot);
       const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
       const invHint = formatInversionHint(weather, firstData);
       const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
