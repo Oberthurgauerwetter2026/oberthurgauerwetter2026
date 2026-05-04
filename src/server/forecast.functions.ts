@@ -1701,7 +1701,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const aifsCmp = formatAifsComparison(weather, firstData);
       const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}`;
+      const lakeHint = formatLakeTemperatureHint(weather, firstData);
+      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
