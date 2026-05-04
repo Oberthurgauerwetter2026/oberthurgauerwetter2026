@@ -1797,17 +1797,17 @@ function formatEveningNight(weather: any, startHourOverride?: number, nextDayTmi
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
 
   // Human-readable window description for the prompt
-  const endHour = 5;
+  const endHour = 9;
   const window_label =
-    startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend und Nacht`
-    : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Nachmittag, Abend und Nacht`
-    : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Abend und Nacht`;
+    startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend, Nacht und frühen Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`
+    : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - Nachmittag, Abend, Nacht und früher Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`
+    : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - Abend, Nacht und früher Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`;
 
   return {
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
-    tmin: r1(Math.min(...hourlyTemps)),
+    tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null && Number.isFinite(nextDayTminAvg) ? [nextDayTminAvg] : []))),
     tmax: r1(Math.max(...hourlyTemps)),
     precip_total: r1(hourlyPrecs.reduce((a, b) => a + b, 0)),
     wind_max,
