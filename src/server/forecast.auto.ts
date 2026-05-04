@@ -466,7 +466,9 @@ function buildTimeOfDayHint(hour: number): string {
 function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
   const hour = currentZurichHour();
   const useEvening = hour >= 12;
-  const evening = useEvening ? formatEveningNight(weather) : null;
+  const nextDay = useEvening ? formatDayData(weather, 1) : null;
+  const nextDayTmin = nextDay?.tmin?.avg ?? null;
+  const evening = useEvening ? formatEveningNight(weather, undefined, nextDayTmin) : null;
   let firstData: any;
   let windowHint = "";
   if (useEvening && evening) {
