@@ -634,6 +634,46 @@ function buildMosmixOnlyWeather(
   };
 }
 
+// Tries Open-Meteo first; on total failure falls back to MOSMIX-only mode (Tag 0+1).
+// Throws a user-facing error only when both sources are empty. Returns the MOSMIX
+// map alongside `weather` so callers don't fetch it twice.
+async function fetchWeatherWithFallback(
+  lat: number, lon: number,
+  shortModels: string | undefined,
+  midModels: string | undefined,
+  longModels: string | undefined,
+  mosmixEnabled: boolean,
+  mosmixStations: string[],
+): Promise<{ weather: any; mosmixByDate: Map<string, any>; degraded: boolean }> {
+  // Fetch MOSMIX in parallel with Open-Meteo so we have it ready for fallback.
+  const mosmixPromise: Promise<Map<string, any>> = mosmixEnabled && mosmixStations.length
+    ? fetchMosmixShortTerm(mosmixStations).catch((e) => {
+        console.warn("MOSMIX failed:", e);
+        return new Map<string, any>();
+      })
+    : Promise.resolve(new Map<string, any>());
+
+  try {
+    const [weather, mosmixByDate] = await Promise.all([
+      fetchWeather(lat, lon, shortModels, midModels, longModels),
+      mosmixPromise,
+    ]);
+    return { weather, mosmixByDate, degraded: false };
+  } catch (e: any) {
+    if (e?.code !== "WEATHER_UNAVAILABLE") throw e;
+    // Open-Meteo komplett ausgefallen — MOSMIX-only Modus versuchen.
+    const mosmixByDate = await mosmixPromise;
+    const fallback = buildMosmixOnlyWeather(mosmixByDate);
+    if (!fallback) {
+      throw new Error(
+        "Open-Meteo Tageslimit erreicht und DWD-MOSMIX liefert ebenfalls keine Daten. Bitte morgen erneut versuchen.",
+      );
+    }
+    console.warn("[forecast] degraded mode: MOSMIX-only (Open-Meteo unavailable)");
+    return { weather: fallback, mosmixByDate, degraded: true };
+  }
+}
+
 // Collect per-model values for a given variable + dayIndex from one fetch result
 function collectModelValues(fetchResult: any, varName: string, models: string, dayIndex: number) {
   const out: Record<string, number> = {};
