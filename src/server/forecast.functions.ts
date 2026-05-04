@@ -2092,7 +2092,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
         const stormTrend = formatThunderstormTrendHint(trendDays);
         const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}`;
+        const foehnTrend = formatFoehnTrendHint(trendDays);
+        const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
