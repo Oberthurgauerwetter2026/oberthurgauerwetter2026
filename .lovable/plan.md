@@ -1,53 +1,33 @@
 ## Ziel
-Umstellung der KI-Textgenerierung vom Lovable AI Gateway auf die **Google Gemini API direkt** (Free-Tier nutzbar, ~kostenlos für 1× täglich Forecast).
+`GEMINI_API_KEY` ist gesetzt. Beide `generateText`-Funktionen so erweitern, dass sie bevorzugt direkt Google Gemini API aufrufen und Lovable AI nur als Fallback nutzen.
 
-## Was sich ändert
+## Änderungen
 
-Beide `generateText`-Funktionen rufen aktuell `https://ai.gateway.lovable.dev/v1/chat/completions` mit `LOVABLE_API_KEY` und Modellen `google/gemini-2.5-pro` bzw. `google/gemini-2.5-flash` auf.
+### 1. `src/server/forecast.functions.ts` (Z. 1885–1917)
+`generateText` umstrukturieren:
+- Wenn `process.env.GEMINI_API_KEY` gesetzt → `callGemini("gemini-2.5-pro", ...)`
+- Bei 429/403/401 von Google → freundliche Fehlermeldung
+- Bei Netzwerkfehler → Fallback auf Lovable AI Gateway (bestehender Code)
+- Wenn kein `GEMINI_API_KEY` → direkt Lovable AI Gateway
 
-Neu: Aufruf des nativen Google-Endpunkts `https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent` mit einem neuen Secret `GEMINI_API_KEY`.
+Neue Helper-Funktion `callGemini(model, systemPrompt, userPrompt)`:
+- POST an `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}`
+- Body: `{ systemInstruction: { parts: [{ text: systemPrompt }] }, contents: [{ role: "user", parts: [{ text: userPrompt }] }], generationConfig: { temperature: 0.2, topP: 0.9 } }`
+- 45s Timeout via AbortController (wie bisher)
+- Antwort aus `candidates[0].content.parts[0].text`
+- Fehler-Mapping:
+  - 429 → `"KI-Tageslimit (Gemini Free) erreicht. Bitte später erneut versuchen."`
+  - 401/403 → `"Gemini API-Key ungültig."`
+  - sonst → wirft Error mit Status (löst Fallback aus)
 
-**Fallback-Logik:** Wenn `GEMINI_API_KEY` gesetzt ist → Google direkt. Sonst → Lovable AI Gateway wie bisher. So bleibst du flexibel falls das Free-Tier mal überschritten wird.
+### 2. `src/server/forecast.auto.ts` (Z. 491–505)
+Identische Logik mit Modell `gemini-2.5-flash` (statt pro). Helper-Funktion `callGemini` dort lokal duplizieren (gleiche Signatur).
 
-## Umzusetzende Schritte
-
-1. **API-Key besorgen** (du, einmalig):
-   - https://aistudio.google.com/app/apikey öffnen
-   - "Create API key" → in einem Google-Cloud-Projekt erstellen
-   - Schlüssel kopieren
-
-2. **Secret `GEMINI_API_KEY` hinzufügen** (Lovable fragt dich danach via add_secret-Tool)
-
-3. **Neue Hilfsfunktion `callGemini()`** in beiden Dateien:
-   - `src/server/forecast.functions.ts` (Z. 1885–1917)
-   - `src/server/forecast.auto.ts` (Z. 491–505)
-   
-   Mappt das OpenAI-Format (system/user messages) auf Gemini-REST-Format:
-   - `systemInstruction.parts[0].text` ← systemPrompt
-   - `contents[0].parts[0].text` ← userPrompt
-   - `generationConfig.temperature` 0.2 / `topP` 0.9
-   - Antwort aus `candidates[0].content.parts[0].text` extrahieren
-
-4. **Modell-Mapping**:
-   - `google/gemini-2.5-pro` → `gemini-2.5-pro`
-   - `google/gemini-2.5-flash` → `gemini-2.5-flash`
-
-5. **Fehlerbehandlung**:
-   - 429 (Rate-Limit Free-Tier) → freundliche Meldung „Tageslimit erreicht, bitte später"
-   - 403/401 → „API-Key ungültig"
-   - Bei Netzwerk-/sonstigem Fehler → Fallback auf Lovable AI Gateway versuchen
-
-6. **`generateText`-Wrapper** prüft `process.env.GEMINI_API_KEY` und ruft entsprechend Google direkt oder Lovable AI auf — keine weiteren Code-Änderungen nötig (selbe Signatur).
-
-## Hinweise zu Free-Tier-Limits (Stand Anfang 2026)
-- **Gemini 2.5 Flash**: ~10 RPM, 250 Requests/Tag — locker ausreichend für deinen Use Case
-- **Gemini 2.5 Pro**: ~5 RPM, 100 Requests/Tag — auch ausreichend, aber knapper bei manueller Mehrfachgenerierung
-- Daten werden im Free-Tier von Google zum Modelltraining verwendet — bei Bedarf kostenpflichtigen Tier aktivieren
+## Verhalten
+- Solange Gemini Free-Tier reicht (250 Req/Tag Flash, 100 Req/Tag Pro): kostenlos
+- Bei Limit/Ausfall: automatischer Fallback auf Lovable AI Gateway (sofern `LOVABLE_API_KEY` vorhanden und Guthaben da)
+- Keine Änderungen an Prompts, UI, DB, Forecast-Logik
 
 ## Geänderte Dateien
-- `src/server/forecast.functions.ts` — `generateText` erweitern
-- `src/server/forecast.auto.ts` — `generateText` erweitern
-
-## Nicht geändert
-- Prompts, Forecast-Logik, UI, Datenbank — alles bleibt identisch
-- Lovable AI Gateway bleibt als Fallback erhalten
+- `src/server/forecast.functions.ts`
+- `src/server/forecast.auto.ts`

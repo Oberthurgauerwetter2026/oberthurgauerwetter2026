@@ -488,20 +488,55 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
   return { firstData, firstTitle, windowHint, hour };
 }
 
-async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callGemini(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
+  const geminiKey = process.env.GEMINI_API_KEY!;
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        generationConfig: { temperature: 0.2, topP: 0.9 },
+      }),
+    },
+  );
+  if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht.");
+  if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
+  if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}`);
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
+  return text.trim();
+}
+
+async function callLovableAI(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
+      model,
       messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
     }),
   });
   if (!res.ok) throw new Error(`KI-Fehler ${res.status}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
+async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      return await callGemini("gemini-2.5-flash", systemPrompt, userPrompt);
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      if (/ungültig|Tageslimit/i.test(msg)) throw e;
+      console.warn("[forecast.auto] Gemini fehlgeschlagen, Fallback auf Lovable AI:", msg);
+    }
+  }
+  return await callLovableAI("google/gemini-2.5-flash", systemPrompt, userPrompt);
 }
 
 // ===== Topography =====
