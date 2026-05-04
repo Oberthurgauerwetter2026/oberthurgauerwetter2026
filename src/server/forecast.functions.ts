@@ -1945,14 +1945,7 @@ async function callLovableAI(model: string, systemPrompt: string, userPrompt: st
 
 async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   if (process.env.GEMINI_API_KEY) {
-    try {
-      return await callGemini("gemini-2.5-pro", systemPrompt, userPrompt);
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
-      // Bei Key-/Limit-Problemen nicht still fallback'n – durchreichen
-      if (/ungültig|Tageslimit/i.test(msg)) throw e;
-      console.warn("[generateText] Gemini fehlgeschlagen, Fallback auf Lovable AI:", msg);
-    }
+    return await callGemini("gemini-2.5-flash", systemPrompt, userPrompt);
   }
   return await callLovableAI("google/gemini-2.5-pro", systemPrompt, userPrompt);
 }
