@@ -1361,7 +1361,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
         weather_data: firstData,
@@ -1377,7 +1377,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
       const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
       const pos = i + 1;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
       })));
     }
@@ -1386,7 +1386,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const trendDays = [6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 7-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
-        tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+        tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 7 – 10", body, weather_data: trendDays,
         })));
       }
@@ -1488,7 +1488,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
         weather_data: firstData, forecast_id: data.forecastId,
@@ -1504,7 +1504,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
       const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
       const pos = i + 1;
-      tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
       })));
     }
@@ -1513,7 +1513,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const trendDays = [6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
         const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 7-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`;
-        tasks.push(generateText(promptTemplate, userPrompt).then((body) => ({
+        tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 7 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
       }
@@ -1565,7 +1565,7 @@ export const regenerateEntry = createServerFn({ method: "POST" })
     if (!entry) throw new Error("Eintrag nicht gefunden (ID ungültig oder keine Berechtigung).");
 
     const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:\n${JSON.stringify(entry.weather_data, null, 2)}`;
-    const body = enforceSkyConsistency(await generateText(promptTemplate, userPrompt), entry.weather_data);
+    const body = enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data);
     const { error: uErr } = await supabase
       .from("forecast_entries")
       .update({ body })
