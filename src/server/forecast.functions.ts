@@ -1604,7 +1604,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
+      const aifsCmp = formatAifsComparison(weather, firstData);
+      const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1619,7 +1621,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
+      const aifsCmp = formatAifsComparison(weather, day);
+      const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
@@ -1629,7 +1633,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     if (!degraded) {
       const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}`;
+        const aifsTrend = formatAifsTrendComparison(weather, trendDays);
+        const aifsBlock = aifsTrend ? `\n\nKI-Modell-Vergleich (ECMWF AIFS, Tendenz Tag 6-10): ${aifsTrend}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
