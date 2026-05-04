@@ -490,24 +490,40 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
 
 async function callGemini(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const geminiKey = process.env.GEMINI_API_KEY!;
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        generationConfig: { temperature: 0.2, topP: 0.9 },
-      }),
-    },
-  );
-  if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht.");
-  if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
-  if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}`);
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
-  return text.trim();
+  const delays = [0, 1500, 4000, 8000];
+  let lastErr = "";
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+            generationConfig: { temperature: 0.2, topP: 0.9 },
+          }),
+        },
+      );
+    } catch (e: any) {
+      lastErr = `Netzwerk: ${e?.message ?? e}`;
+      continue;
+    }
+    if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht.");
+    if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
+    if (res.status >= 500 && res.status < 600) {
+      lastErr = `${res.status}: ${await res.text()}`;
+      continue;
+    }
+    if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}`);
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
+    return text.trim();
+  }
+  throw new Error(`Gemini überlastet. Letzter Fehler: ${lastErr}`);
 }
 
 async function callLovableAI(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
