@@ -1271,6 +1271,8 @@ async function fetchWeather(
   await wait(500);
   // ECMWF AIFS als separater Vergleichs-Layer (KI-Wettermodell). Optional, fail-soft.
   const aifsData = await fetchAifsTimeline(lat, lon);
+  // Zonen-Multi-Coord (4 Punkte im Perimeter, 1 zusätzlicher Call). Optional, fail-soft.
+  const zonesData = await fetchZonesTimeline();
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
   if (!daily) {
     // All Open-Meteo tiers failed. Throw a typed error so the generation path
@@ -1286,6 +1288,7 @@ async function fetchWeather(
     hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
     byModel: { short: shortData, mid: midData, long: longData, aifs: aifsData },
     modelLists: { short: shortModels, mid: midModels, long: longModels, aifs: AIFS_MODEL },
+    zonesData,
   };
 }
 
