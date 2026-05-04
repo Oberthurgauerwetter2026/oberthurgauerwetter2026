@@ -1,77 +1,89 @@
 ## Ziel
 
-ECMWF AIFS (KI-Wettermodell) ergänzend einbinden — nicht nur in der Modell-Liste mitgemittelt, sondern als **separater Vergleichs-Layer**, damit die KI-Textgenerierung Abweichungen zwischen klassischen Modellen und AIFS explizit benennen kann.
+Bodensee-Wassertemperatur (Station Romanshorn 2032) als **bedingten** Layer integrieren — nicht in jeden Prompt schreiben, sondern nur dann, wenn sie wettertechnisch wirklich relevant wird:
 
-## Konzept
+1. **Seerauch / Verdunstungsnebel** (vor allem Spätherbst/Winter): kalte Luft über deutlich wärmerem See → Hinweis im Prompt.
+2. **Hitze-Dämpfung am Ufer** (Sommer): See deutlich erwärmt → Nachtabkühlung am Ufer schwächer.
 
-Open-Meteo unterstützt das Modell `ecmwf_aifs025_single`. Ein zusätzlicher, separater Open-Meteo-Call holt **nur** AIFS-Daten für Tag 1–10. Aus diesen Daten wird pro Tag ein kompakter Vergleich gegen den bestehenden Multi-Modell-Mittelwert berechnet (Tmax/Tmin/Niederschlag/Wind) und als Zusatz-Block in den User-Prompt eingespeist. Tagesprognosen Tag 1–5 und Trend Tag 6–10 erhalten den jeweils passenden AIFS-Block.
+Sonst wird die Wassertemperatur nicht erwähnt — kein Lärm, kein Overload.
 
-## Änderungen in `src/server/forecast.functions.ts`
+## Datenquelle
 
-### 1. Neue Hilfsfunktion `fetchAifsTimeline` (ca. 40 Zeilen, neu nach `fetchOpenMeteoOptional`)
+**api.existenz.ch** (freier Proxy auf BAFU-Hydrodaten):
+- Endpoint: `https://api.existenz.ch/apiv1/hydro/latest?locations=2032&parameters=temperature&format=json`
+- Station 2032 = Bodensee Obersee, Romanshorn (Oberflächenwasser)
+- Liefert aktuelle Wassertemperatur in °C
+- Update-Intervall ca. 10–30 min, für unseren Zweck reicht **24 h Cache**
+- Kein API-Key nötig, freie Nutzung für nicht-kommerzielle Zwecke (passt)
 
-Einzelner Open-Meteo-Call mit `models=ecmwf_aifs025_single`, gleiche `DAILY_VARS` wie sonst, `forecast_days=11`. Verwendet `getOrSetCache` mit Key `om:aifs:{lat},{lon}` (Cache bis Mitternacht, wie mid/long). Bei 429/Fehler: `null` zurückgeben (AIFS ist optional, darf den Forecast nie blockieren).
+Fail-soft: bei Ausfall liefert der Helper `null`, der Bodensee-Block entfällt komplett — keine Auswirkung auf die Generierung.
 
-### 2. AIFS-Fetch in `fetchWeather` integrieren
+## Umsetzung in `src/server/forecast.functions.ts`
 
-Nach den drei bestehenden Tier-Calls (short/mid/long) zusätzlich AIFS sequenziell holen (`await wait(500)` davor, gleiche Rate-Limit-Hygiene). Ergebnis als `weather.byModel.aifs` und `weather.modelLists.aifs = "ecmwf_aifs025_single"` ablegen. **Nicht** in `pickBestSource` / `collectModelValuesTiered` einbinden — AIFS bleibt bewusst aus dem Multi-Modell-Mittelwert raus, damit der Vergleich aussagekräftig bleibt.
+### 1. Helper `fetchLakeTemperature`
+Neue Funktion, holt Wassertemperatur von existenz.ch, cacht 24 h via `getOrSetCache` mit Key `bafu:lake:2032`. Returnt `{ value: number, timestamp: string } | null`. Fail-soft, alle Fehler → `null`.
 
-### 3. Neue Hilfsfunktion `formatAifsComparison(weather, dayIndex)` (ca. 40 Zeilen)
+### 2. Integration in `fetchWeather`
+Sequentieller Call **nach** AIFS (analoges Pattern, fail-soft). Ergebnis landet in `weather.lakeTemp`. Nicht in `byModel`, da es kein Wettermodell ist.
 
-Liest die AIFS-Werte für den Tag (`temperature_2m_max`, `temperature_2m_min`, `precipitation_sum`, `windspeed_10m_max`, `cloudcover_mean`) und vergleicht gegen den klassischen Mittelwert aus `formatDayData`. Liefert ein kompaktes Objekt:
+### 3. Helper `formatLakeTemperatureHint(weather, day)`
+Neue Funktion, die pro Tag prüft, ob ein Hinweis ausgegeben werden soll. **Returnt nur bei Bedingungserfüllung einen String, sonst `null`**:
+
+- **Seerauch-Bedingung** (Tmin der Nacht ≤ Wassertemperatur −8 °C UND Wind ≤ 10 km/h UND klare/teilklare Nacht):
+  → `"Bodensee-Wassertemperatur ${T}°C — Tmin ${dT}°C kälter, schwacher Wind, klar bis teilklar: Verdunstungsnebel/Seerauch über dem See möglich, vom Ufer aus sichtbar."`
+
+- **Hitze-Dämpfung** (Wassertemperatur > 22 °C UND Tmax ≥ 28 °C):
+  → `"Bodensee deutlich erwärmt (${T}°C) — Nachtabkühlung am Seeufer gedämpft, dort lokal mildere Tmin-Werte als landeinwärts."`
+
+- **Frühjahrs-Kälte** (Wassertemperatur < 8 °C UND Tmax am Ufer ≥ 18 °C):
+  → `"Bodensee noch kalt (${T}°C) — am Seeufer gedämpfte Erwärmung, leicht kühlere Tmax als wenige km landeinwärts."`
+
+- Sonst: `null` (kein Hinweis).
+
+### 4. Helper `formatLakeTemperatureTrendHint(weather)`
+Für den Trend-Block (Tag 6–10): liefert nur dann einen kurzen Tendenz-Hinweis, wenn die Wassertemperatur in einem **klimatologisch auffälligen Bereich** ist (z. B. November mit > 12 °C → "ungewöhnlich warmer See, Seerauch-Risiko bei Kaltluftvorstössen"). Konservativ — nur wenn klar relevant.
+
+Erste Iteration: **simpel halten** — gibt die aktuelle Wassertemperatur einmalig im Trend-Block aus, wenn sie ≥ 22 °C oder ≤ 5 °C ist (Saison-Extremwerte). Sonst `null`.
+
+### 5. System-Prompt-Erweiterung (~Zeile 1356, nach AIFS-Block)
+
+Neuer Abschnitt:
 ```
-{ tmax_aifs, tmax_classic, delta_tmax,
-  precip_aifs, precip_classic, delta_precip,
-  wind_max_aifs, wind_max_classic,
-  significant: boolean }
+=== BODENSEE-WASSERTEMPERATUR ===
+Wenn im User-Prompt ein Block 'Bodensee-Hinweis' enthalten ist: Übernimm den Hinweis sinngemäss in den Fliesstext (nicht wörtlich kopieren). Erwähne ihn maximal einmal pro Eintrag, dezent und ortsbezogen ("am Seeufer", "über dem See", "in Seenähe"). Niemals erfinden — nur nennen, wenn der Block explizit vorhanden ist. Wenn kein Block vorhanden ist, KEINE Aussagen zur Wassertemperatur machen.
 ```
-`significant = true` wenn |Δtmax| ≥ 1.5 °C ODER |Δprecip| ≥ 2 mm ODER Niederschlagskategorie wechselt (trocken ↔ Niederschlag).
 
-### 4. Trend-Block-Vergleich `formatAifsTrendComparison(weather, dayIndices[])`
+### 6. Prompt-Injection
+In `generateForecast` und `regenerateForecast` parallel zu den AIFS-Blöcken (Zeilen 1474–1476, 1491–1493, 1503–1505 sowie 1607–1609, 1624–1626, 1636–1638):
 
-Aggregiert AIFS-Werte über Tag 6–10 (Mittel) und vergleicht gegen Multi-Modell-Aggregat. Liefert nur Tendenz-Aussage (z. B. "AIFS milder/kühler", "AIFS feuchter/trockener"), keine Tageswerte — passt zum Grosswetterlagen-Charakter des Trend-Blocks.
-
-### 5. AIFS-Block in User-Prompts einspeisen
-
-**Tagesprognosen (Zeile ~1378 in `generateForecast`, ~1505 in `regenerateForecast`, sowie `regenerateEntry`):**
+```ts
+const lakeHint = formatLakeTemperatureHint(weather, day);
+const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
 ```
-Standort: ${locationName}. Schreibe einen Fliesstext für ...
-${aifsBlock ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsBlock}` : ""}
-Daten: ...
-```
-`aifsBlock` wird nur eingefügt, wenn `formatAifsComparison(...).significant === true`. Sonst bleibt der Prompt unverändert (kein Rauschen bei Übereinstimmung).
 
-**Trend-Block (Zeile ~1388 / ~1515):**
-Der `formatAifsTrendComparison`-Output wird **immer** angehängt (auch ohne Signifikanz), als Tendenz-Hinweis für die Grosswetterlage.
+Für den Trend-Block analog `formatLakeTemperatureTrendHint`.
 
-### 6. System-Prompt-Erweiterung (im `promptTemplate`)
+## Was nicht geändert wird
 
-Kurzer neuer Absatz im System-Prompt:
-> "Wenn ein Block 'KI-Modell-Vergleich (ECMWF AIFS)' vorhanden ist: Erwähne die Abweichung dezent als Unsicherheit (z. B. 'mehrheitlich trocken, KI-Modell deutet leichtes Schauerrisiko an'). Niemals AIFS gegen die klassischen Modelle ausspielen — die klassische Multi-Modell-Lösung bleibt Leitlinie."
+- Multi-Modell-Mittelwert, AIFS-Vergleich, Topografie (`applyTopography`), Güttingen-Bias, MOSMIX, Radar, Settings-UI — alles bleibt unverändert.
+- **Keine** Settings-Option (analog AIFS: läuft im Hintergrund, ist bedingt sichtbar). Kann bei Bedarf später nachgerüstet werden.
+- **Keine** DB-Migration, kein Schema-Change, keine RLS-Anpassung.
 
-### 7. Settings-Defaults
+## Quota-/Performance-Impact
 
-`models_midterm` und `models_longterm` in `app_settings`-Defaults bleiben **unverändert** — AIFS ist bewusst ein separater Layer, kein Mittelwert-Bestandteil. Keine DB-Migration nötig.
+- **+1 externer Call pro Generierung**, aber 24 h gecacht → in der Praxis 1 Call pro Tag.
+- existenz.ch hat keine harten Limits, ist aber als "fair use" markiert. Mit 24 h-Cache absolut unkritisch.
+- Bei Ausfall: `null`, kein Effekt auf die Prognose.
 
-## Quota-Auswirkung
+## Risiken
 
-- **+1 Open-Meteo-Call pro Generierung** (gecacht bis Mitternacht, also faktisch +1 Call/Tag bei mehrfacher Generierung).
-- AIFS-Fehler/429 → `null` → kein AIFS-Block, Forecast funktioniert normal weiter.
-- Im `degraded`-Modus (MOSMIX-only) wird AIFS gar nicht erst versucht.
+- **existenz.ch könnte ausfallen**: fail-soft eingebaut, kein Generierungsfehler.
+- **Schwellenwerte könnten zu konservativ/zu liberal sein**: in der Beobachtung nachjustierbar (alle Schwellen sind Konstanten in den Helper-Funktionen, kein Code-Refactor nötig).
+- **Doppelnennung mit Güttingen-Bias möglich**: Güttingen liefert `corrected_tmin/tmax` für den Ufer-Punkt, der Bodensee-Hinweis adressiert separat das *Wasser/Nebel-Verhalten*. Kein Konflikt — anderer inhaltlicher Fokus.
 
-## Nicht geändert
+## Akzeptanzkriterien
 
-- Multi-Modell-Mittelwert, `formatDayData`, MOSMIX, Bias-Korrektur, Radar — alles unberührt.
-- Nominalstil-Validator, Sky-Consistency, `enforceSkyConsistency` — unberührt.
-- DB-Schema, RLS, Auth — unberührt.
-- Kein neues Settings-UI nötig (kann später ergänzt werden, wenn AIFS-Block ein-/ausschaltbar sein soll).
-
-## Dateien
-
-- `src/server/forecast.functions.ts` — neue Helfer + Integration in `fetchWeather`, `generateForecast`, `regenerateForecast`, `regenerateEntry`, System-Prompt.
-
-## Optional (später)
-
-- Settings-Toggle "KI-Modell-Vergleich aktivieren" in `app_settings` + Settings-UI.
-- AIFS auch in `bias-correction.server.ts` aufnehmen (separate Bias-Korrektur).
-- UI-Anzeige: kleines Badge im Forecast-Detail "AIFS weicht ab".
+- An einem normalen Sommertag (Wasser 18 °C, Tmax 24 °C, Tmin 13 °C): **kein** Bodensee-Hinweis im Prompt.
+- An einem typischen November-Strahlungstag (Wasser 11 °C, Tmin 1 °C, Wind 5 km/h, klar): Seerauch-Hinweis erscheint.
+- An einem Hitzetag (Wasser 23 °C, Tmax 32 °C): Hitze-Dämpfung-Hinweis erscheint.
+- Bei Ausfall der existenz.ch-API: Generierung läuft normal weiter, einfach ohne Hinweis.
