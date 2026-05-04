@@ -75,8 +75,9 @@ const DAILY_VARS = [
   "weathercode",
   "cloudcover_mean",
   "cape_max",
+  "wind_gusts_10m_max",
 ];
-const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration", "cape"];
+const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration", "cape", "wind_gusts_10m", "relative_humidity_2m"];
 
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
@@ -946,6 +947,174 @@ function formatThunderstormTrendHint(days: any[]): string | null {
   return "im Trend-Zeitraum zeitweise erhöhte Gewitterneigung, lokal kräftige Schauer oder Gewitter möglich";
 }
 
+// ===== Föhn-Erkennung (Oberthurgau) =====
+// Klima-Mittel Tmax (°C) Romanshorn/Arbon, Jan..Dez (approximierte MeteoSchweiz-Normen).
+const OBERTHURGAU_TMAX_CLIMATOLOGY_C = [3, 5, 9, 13, 18, 22, 24, 23, 19, 14, 8, 4];
+
+function climatologyTmaxFromDate(dateStr?: string | null): number | null {
+  if (!dateStr) return null;
+  const m = Number(dateStr.slice(5, 7));
+  if (!m || m < 1 || m > 12) return null;
+  return OBERTHURGAU_TMAX_CLIMATOLOGY_C[m - 1] ?? null;
+}
+
+function maxAcrossModels(agg: any): number | null {
+  if (!agg) return null;
+  const vals: number[] = [];
+  if (agg.by_model) for (const v of Object.values(agg.by_model)) {
+    if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
+  }
+  if (typeof agg.max === "number") vals.push(agg.max);
+  if (!vals.length) return null;
+  return Math.max(...vals);
+}
+
+function isFoehnDirection(deg: number | null | undefined): boolean {
+  if (deg == null || !Number.isFinite(deg)) return false;
+  return deg >= 130 && deg <= 200;
+}
+
+function describeFoehnStrength(gustsMax: number | null, windAvg: number | null): string {
+  const v = gustsMax ?? (windAvg != null ? windAvg * 1.6 : 0);
+  if (v >= 100) return "schwerer Föhnsturm, lokal Schäden möglich";
+  if (v >= 80) return "Föhnsturm";
+  if (v >= 60) return "kräftiger Föhn";
+  return "schwacher Föhneinfluss";
+}
+
+const FOEHN_SPATIAL_HINT =
+  "Föhnwirkung im Oberthurgau am ausgeprägtesten an den östlichen Seeufern (Horn, Arbon, Roggwil), abgeschwächt im mittleren Seebereich (Egnach, Romanshorn, Uttwil), nur schwach im westlichen Seebereich (Altnau, Münsterlingen) und meist abgeschirmt im Hinterland (Erlen, Hauptwil-Gottshaus, Amriswil-Hinterland)";
+
+// Tagesgang-Analyse aus Hourly für Föhn — nur Tag 0/1 (heute/morgen).
+function diurnalFoehnPeak(weather: any, dateStr: string): string | null {
+  const h = weather?.hourly;
+  if (!h?.time) return null;
+
+  const collectArrs = (base: string): Record<string, number[]> => {
+    const out: Record<string, number[]> = {};
+    if (Array.isArray(h[base])) out["default"] = h[base];
+    for (const k of Object.keys(h)) {
+      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+    }
+    return out;
+  };
+
+  const wArrs = collectArrs("windspeed_10m");
+  const gArrs = collectArrs("wind_gusts_10m");
+  const wdArrs = collectArrs("winddirection_10m");
+  const rhArrs = collectArrs("relative_humidity_2m");
+
+  const indices = (h.time as string[])
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => t.slice(0, 10) === dateStr);
+  if (indices.length < 12) return null;
+
+  const windowSpec = [
+    { label: "am Vormittag", from: 6, to: 12 },
+    { label: "am Nachmittag", from: 12, to: 18 },
+    { label: "am Abend", from: 18, to: 24 },
+  ];
+
+  type Win = { label: string; gustMax: number; windMax: number; rhMin: number; foehnHours: number };
+  const windows: Win[] = [];
+
+  for (const ws of windowSpec) {
+    const inWin = indices.filter(({ t }) => {
+      const hr = new Date(t).getHours();
+      return hr >= ws.from && hr < ws.to;
+    });
+    if (!inWin.length) continue;
+
+    let gustMax = 0, windMax = 0, rhMin = 100, foehnHours = 0;
+    for (const { i } of inWin) {
+      const gustVals: number[] = [];
+      const windVals: number[] = [];
+      const rhVals: number[] = [];
+      const dirVals: number[] = [];
+      for (const k of Object.keys(gArrs)) { const v = gArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) gustVals.push(v); }
+      for (const k of Object.keys(wArrs)) { const v = wArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) windVals.push(v); }
+      for (const k of Object.keys(rhArrs)) { const v = rhArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) rhVals.push(v); }
+      for (const k of Object.keys(wdArrs)) { const v = wdArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) dirVals.push(v); }
+      const gust = gustVals.length ? Math.max(...gustVals) : 0;
+      const wind = windVals.length ? Math.max(...windVals) : 0;
+      const rh = rhVals.length ? Math.min(...rhVals) : 100;
+      const dir = dirVals.length ? circularMeanDeg(dirVals) : null;
+      if (gust > gustMax) gustMax = gust;
+      if (wind > windMax) windMax = wind;
+      if (rh < rhMin) rhMin = rh;
+      if (isFoehnDirection(dir) && (wind >= 20 || gust >= 40)) foehnHours++;
+    }
+    windows.push({ label: ws.label, gustMax, windMax, rhMin, foehnHours });
+  }
+
+  if (!windows.length) return null;
+
+  for (let i = 1; i < windows.length; i++) {
+    const prev = windows[i - 1]!;
+    const cur = windows[i]!;
+    const gustDrop = prev.gustMax > 50 && cur.gustMax < prev.gustMax * 0.55;
+    const rhRise = cur.rhMin > prev.rhMin + 20;
+    if (gustDrop && rhRise) {
+      const tail = cur.label.replace("am Vormittag", "des Vormittags").replace("am Nachmittag", "des Nachmittags").replace("am Abend", "des Abends");
+      return `Föhnabbruch im Verlauf ${tail}`;
+    }
+  }
+
+  const peak = windows.reduce((a, b) => (b.gustMax > a.gustMax ? b : a));
+  if (peak.foehnHours < 2) return null;
+  const minGust = Math.min(...windows.map((w) => w.gustMax));
+  if (peak.gustMax > 0 && (peak.gustMax - minGust) / peak.gustMax < 0.25) return null;
+  return `Föhnfenster vor allem ${peak.label}`;
+}
+
+function formatFoehnHint(weather: any, day: any): string | null {
+  if (!day?.date) return null;
+  const dirAvg = day.wind_dir_avg;
+  const windMax = day.wind_max?.avg ?? null;
+  const gustsMax = maxAcrossModels(day.wind_gusts_max) ?? null;
+  const tmaxAvg = day.tmax?.avg ?? null;
+  const precipAvg = day.precip?.avg ?? 0;
+  const climTmax = climatologyTmaxFromDate(day.date);
+
+  if (!isFoehnDirection(dirAvg)) return null;
+  const windOk = (windMax != null && windMax >= 25) || (gustsMax != null && gustsMax >= 45);
+  if (!windOk) return null;
+  if (climTmax == null || tmaxAvg == null || tmaxAvg < climTmax + 4) return null;
+  if (precipAvg >= 1.5) return null;
+
+  const strength = describeFoehnStrength(gustsMax, windMax);
+  const diurnal = diurnalFoehnPeak(weather, day.date);
+
+  const parts = [`Föhnlage — ${strength}, föhnig mild und trocken`];
+  if (diurnal) parts.push(diurnal);
+  parts.push(FOEHN_SPATIAL_HINT);
+  return parts.join("; ") + ".";
+}
+
+function formatFoehnTrendHint(days: any[]): string | null {
+  if (!days?.length) return null;
+  let anyFoehn = false;
+  let strongFoehn = false;
+  for (const day of days) {
+    const dirAvg = day.wind_dir_avg;
+    const windMax = day.wind_max?.avg ?? null;
+    const gustsMax = maxAcrossModels(day.wind_gusts_max) ?? null;
+    const tmaxAvg = day.tmax?.avg ?? null;
+    const precipAvg = day.precip?.avg ?? 0;
+    const climTmax = climatologyTmaxFromDate(day.date);
+    if (!isFoehnDirection(dirAvg)) continue;
+    const windOk = (windMax != null && windMax >= 25) || (gustsMax != null && gustsMax >= 45);
+    if (!windOk) continue;
+    if (climTmax == null || tmaxAvg == null || tmaxAvg < climTmax + 4) continue;
+    if (precipAvg >= 1.5) continue;
+    anyFoehn = true;
+    if ((gustsMax ?? 0) >= 70) strongFoehn = true;
+  }
+  if (!anyFoehn) return null;
+  if (strongFoehn) return "im Trend-Zeitraum zeitweise kräftige Föhnphasen mit milder, sehr trockener Südströmung möglich (Schwerpunkt östliche Seeufer Horn–Arbon–Roggwil)";
+  return "im Trend-Zeitraum zeitweise föhnige Phasen mit milder, trockener Südströmung möglich";
+}
+
 // Returns a unified weather object with `daily` (timeline) and `byModel` (per-model values)
 async function fetchWeather(
   lat: number,
@@ -1178,10 +1347,11 @@ function formatDayData(weather: any, dayIndex: number) {
   const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
   const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
   const cape_max = aggregate(collectModelValuesTiered(weather, "cape_max", dayIndex));
+  const wind_gusts_max = aggregate(collectModelValuesTiered(weather, "wind_gusts_10m_max", dayIndex));
 
   // models actually contributing across all variables (transparency for the UI)
   const contributing = new Set<string>();
-  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h, cape_max]) {
+  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h, cape_max, wind_gusts_max]) {
     if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
   }
 
@@ -1205,6 +1375,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     cape_max,
+    wind_gusts_max,
   };
 }
 
@@ -1605,6 +1776,9 @@ export function buildSystemPrompt(settings: any): string {
     "=== GEWITTER-HINWEIS ===",
     "Wenn im User-Prompt ein Block 'Gewitter-Hinweis' enthalten ist: Übernimm die Stärke- und Tagesgang-Aussage sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende dabei das Pflicht-Vokabular ('Schaueraktivität', 'in Begleitung von Gewitter', 'kräftige Böen', 'Starkregen'). Bei kräftigen oder schweren Gewitterlagen klar benennen ('kräftige Gewitter wahrscheinlich', 'Hagel- und Sturmböenrisiko', 'lokal heftige Entwicklungen'). Den CAPE-Wert NIEMALS nennen, auch nicht 'konvektiv labile Lage' wörtlich übernehmen — nur die qualitative Aussage in natürliche Wettersprache überführen. Tagesgang-Hinweise ('Schwerpunkt am Nachmittag') in den Tagesablauf einbauen. Wenn KEIN solcher Block vorhanden ist, KEINE Aussagen zu Gewittern machen, die über das hinausgehen, was Niederschlag und Wettercode ohnehin nahelegen.",
     "",
+    "=== FÖHN-HINWEIS ===",
+    "Wenn im User-Prompt ein Block 'Föhn-Hinweis' enthalten ist: Übernimm Stärke, Tagesgang und räumliche Differenzierung sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende Föhn-Vokabular: 'föhnig mild', 'sehr trocken', 'kräftige Südböen', 'Föhnfenster', 'Föhnabbruch', 'Föhnsturm'. Bei Föhnsturm klar benennen. Prognose-Perimeter Oberthurgau: Horn – Münsterlingen – Erlen – Hauptwil-Gottshaus – Roggwil – Horn. Räumliche Differenzierung INNERHALB dieses Perimeters: östliche Seeufer (Horn, Arbon, Roggwil) am stärksten, mittlere Seezone (Egnach, Romanshorn, Uttwil) klar föhnig aber abgeschwächt, westliche Seezone (Altnau, Münsterlingen) nur schwach, Hinterland (Erlen, Hauptwil-Gottshaus, Amriswil-Hinterland) meist abgeschirmt. Orte AUSSERHALB des Perimeters NIEMALS erwähnen — insbesondere kein Rheintal, kein Vaduz/Buchs, kein Steckborn, kein westlicher Bodensee, kein Frauenfeld, kein Konstanz/Kreuzlingen. Wenn KEIN solcher Block vorhanden ist, KEINE Föhn-Aussagen.",
+    "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
   ].join("\n");
@@ -1726,7 +1900,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, firstData);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}`;
+      const foehnHint = formatFoehnHint(weather, firstData);
+      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1747,7 +1923,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, day);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}`;
+      const foehnHint = formatFoehnHint(weather, day);
+      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -1763,7 +1941,9 @@ export const generateForecast = createServerFn({ method: "POST" })
         const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
         const stormTrend = formatThunderstormTrendHint(trendDays);
         const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}`;
+        const foehnTrend = formatFoehnTrendHint(trendDays);
+        const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
         })));
@@ -1871,7 +2051,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, firstData);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}`;
+      const foehnHint = formatFoehnHint(weather, firstData);
+      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1892,7 +2074,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, day);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}`;
+      const foehnHint = formatFoehnHint(weather, day);
+      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
@@ -1908,7 +2092,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
         const stormTrend = formatThunderstormTrendHint(trendDays);
         const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}`;
+        const foehnTrend = formatFoehnTrendHint(trendDays);
+        const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
