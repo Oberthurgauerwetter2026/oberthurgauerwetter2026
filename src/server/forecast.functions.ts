@@ -1669,13 +1669,13 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
   return `Heute Abend & Nacht`;
 }
 
-function formatEveningNight(weather: any, startHourOverride?: number) {
+function formatEveningNight(weather: any, startHourOverride?: number, nextDayTminAvg?: number | null) {
   const h = weather.hourly;
   if (!h?.time) return null;
   const today = weather.daily.time[0];
   const tomorrow = weather.daily.time[1];
-  // Dynamic start: from "now" (current Zurich hour) until 05:00 next day.
-  // Cap minimum at 0 (full day) and maximum at 23 (latest sensible evening start).
+  // Dynamic start: from "now" (current Zurich hour) until 09:00 next day,
+  // damit das nächtliche Tagesminimum (typischerweise gegen Sonnenaufgang) im Fenster liegt.
   const rawStart = startHourOverride ?? currentZurichHour();
   const startHour = Math.max(0, Math.min(23, rawStart));
   const slice: Array<{ t: string; i: number }> = (h.time as string[])
@@ -1683,7 +1683,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     .filter(({ t }) => {
       const dt = new Date(t);
       const dateStr = t.slice(0, 10);
-      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 5);
+      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 9);
     });
   if (!slice.length) return null;
 
