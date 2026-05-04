@@ -461,6 +461,16 @@ function applyStationBias(day: { date?: string; tmin?: { avg?: number } | null; 
   };
 }
 
+// Typed Open-Meteo error: distinguishes daily quota (429 with quota text) from
+// transient errors. Callers can react differently (skip retries, set negative cache).
+class OpenMeteoError extends Error {
+  code: "RATE_LIMIT" | "OTHER";
+  constructor(message: string, code: "RATE_LIMIT" | "OTHER") {
+    super(message);
+    this.code = code;
+  }
+}
+
 async function fetchOpenMeteo(lat: number, lon: number, models: string, includeHourly: boolean) {
   const normalizedModels = normalizeModels(models);
   const url = new URL("https://api.open-meteo.com/v1/forecast");
@@ -476,19 +486,73 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
     const res = await fetch(url.toString());
     if (res.ok) return await res.json();
     lastError = await res.text().catch(() => "");
+    // 429 with "limit exceeded" message = daily quota → don't retry, mark RATE_LIMIT
+    if (res.status === 429 && /limit exceeded|quota/i.test(lastError)) {
+      throw new OpenMeteoError(
+        `Open-Meteo Tageslimit erreicht (models=${normalizedModels}): ${lastError}`,
+        "RATE_LIMIT",
+      );
+    }
     const retryable = res.status === 429 || res.status >= 500;
-    if (!retryable || attempt === 2) throw new Error(`Open-Meteo Fehler ${res.status} (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`);
+    if (!retryable || attempt === 2) {
+      throw new OpenMeteoError(
+        `Open-Meteo Fehler ${res.status} (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`,
+        "OTHER",
+      );
+    }
     const retryAfter = Number(res.headers.get("retry-after"));
     await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1200 * (attempt + 1));
   }
-  throw new Error(`Open-Meteo Fehler (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`);
+  throw new OpenMeteoError(
+    `Open-Meteo Fehler (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`,
+    "OTHER",
+  );
+}
+
+// Negative-cache marker for rate-limited model sets. Stored in weather_cache with 1h TTL.
+// Avoids hammering Open-Meteo when the daily quota is exhausted.
+function rateLimitCacheKey(models: string) {
+  return `om:ratelimit:${normalizeModels(models)}`;
 }
 
 async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, includeHourly: boolean) {
+  // Check negative cache first — skip the HTTP call entirely if recently rate-limited.
+  const negKey = rateLimitCacheKey(models);
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data } = await supabaseAdmin
+      .from("weather_cache")
+      .select("expires_at")
+      .eq("cache_key", negKey)
+      .maybeSingle();
+    if (data?.expires_at && data.expires_at > new Date().toISOString()) {
+      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at}`);
+      return null;
+    }
+  } catch (e) {
+    // Cache lookup failed — proceed with the call.
+  }
+
   try {
     return await fetchOpenMeteo(lat, lon, models, includeHourly);
   } catch (e) {
     console.warn(e instanceof Error ? e.message : e);
+    // On daily-quota errors, set a 1h negative-cache marker so subsequent calls
+    // (within the same generation, or from the user clicking again) bail out fast.
+    if (e instanceof OpenMeteoError && e.code === "RATE_LIMIT") {
+      try {
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        await supabaseAdmin.from("weather_cache").upsert({
+          cache_key: rateLimitCacheKey(models),
+          payload: { rate_limited: true, models },
+          fetched_at: new Date().toISOString(),
+          expires_at: expiresAt,
+        });
+      } catch (cacheErr) {
+        console.warn("[open-meteo] failed to write rate-limit marker", cacheErr);
+      }
+    }
     return null;
   }
 }
@@ -518,12 +582,55 @@ async function fetchWeather(
     () => fetchOpenMeteoOptional(lat, lon, longModels, false),
   );
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
-  if (!daily) throw new Error("Open-Meteo liefert aktuell keine Wetterdaten. Bitte später erneut versuchen.");
+  if (!daily) {
+    // All Open-Meteo tiers failed. Throw a typed error so the generation path
+    // can decide whether to fall back to MOSMIX-only mode.
+    const err = new Error(
+      "Open-Meteo liefert aktuell keine Wetterdaten (vermutlich Tageslimit erreicht).",
+    ) as Error & { code?: string };
+    err.code = "WEATHER_UNAVAILABLE";
+    throw err;
+  }
   return {
     daily,
     hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
     byModel: { short: shortData, mid: midData, long: longData },
     modelLists: { short: shortModels, mid: midModels, long: longModels },
+  };
+}
+
+// Builds a minimal weather-shaped object from MOSMIX-only data when Open-Meteo is unavailable.
+// Returns null when MOSMIX has nothing for today/tomorrow either.
+// The returned object is compatible enough with formatDayData/buildFirstEntryContext that
+// the generation path keeps working — but only Tag 0 + Tag 1 are populated.
+function buildMosmixOnlyWeather(
+  mosmixByDate: Map<string, any>,
+): { daily: any; hourly: any; byModel: any; modelLists: any; degraded_mode: "mosmix_only" } | null {
+  const dates = Array.from(mosmixByDate.keys()).sort();
+  if (!dates.length) return null;
+  // Build a daily object with the variables formatDayData looks for.
+  const daily: any = { time: dates };
+  const allVars = [...DAILY_VARS];
+  for (const v of allVars) daily[v] = dates.map(() => null);
+  for (let i = 0; i < dates.length; i++) {
+    const m = mosmixByDate.get(dates[i]);
+    if (!m) continue;
+    daily.temperature_2m_max[i] = m.tmax?.avg ?? null;
+    daily.temperature_2m_min[i] = m.tmin?.avg ?? null;
+    daily.precipitation_sum[i] = m.precip?.avg ?? null;
+    daily.precipitation_probability_max[i] = m.precip_prob?.avg ?? null;
+    daily.windspeed_10m_max[i] = m.wind_max?.avg ?? null;
+    daily.winddirection_10m_dominant[i] = m.wind_dir_avg ?? null;
+    daily.sunshine_duration[i] = m.sunshine_h?.avg != null ? m.sunshine_h.avg * 3600 : null;
+    daily.cloudcover_mean[i] = m.cloudcover?.avg ?? null;
+    daily.weathercode[i] = null;
+  }
+  return {
+    daily,
+    hourly: undefined, // no hourly data in MOSMIX-only mode → "rest of day" entry uses day aggregate
+    byModel: { short: { daily }, mid: null, long: null },
+    modelLists: { short: "mosmix", mid: "", long: "" },
+    degraded_mode: "mosmix_only",
   };
 }
 
