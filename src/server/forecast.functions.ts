@@ -2055,6 +2055,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     const ensembleData: EnsembleData | null = (!degraded && ensembleEnabled)
       ? await fetchEnsembleData(lat, lon).catch((e) => { console.warn("ensemble fetch failed", e); return null; })
       : null;
+    const biasEnabled = settings?.bias_enabled !== false;
     const biasStations = (settings?.bias_stations ?? "GUT,STG,TAE")
       .split(",").map((s: string) => s.trim()).filter(Boolean);
     const biasLookback = Math.max(2, Math.min(14, settings?.bias_lookback_days ?? 7));
