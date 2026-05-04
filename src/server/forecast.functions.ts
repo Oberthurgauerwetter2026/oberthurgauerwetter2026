@@ -7,6 +7,50 @@ import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
 import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
 
+// Formuliert eine Kurzbeschreibung des aktuellen Radar-Nowcasts für den
+// System-Prompt. Liefert null, wenn keine relevante Aussage möglich ist
+// (Lage trocken, keine signifikante Differenz Beobachtung/Modell, kein Nowcast).
+// Diese Aussage hat im Prompt Vorrang vor der Modellprognose für die nächsten 2-3 h.
+function formatRadarNowHint(radar: RadarSnapshot | null): string | null {
+  if (!radar) return null;
+  const obs1 = radar.observed.last_1h_mm;
+  const obs3 = radar.observed.last_3h_mm;
+  const next2 = radar.forecast_next_2h.next_2h_mm;
+  const modelExp = radar.model_expected_past_3h_mm;
+
+  const activeNow = obs1 >= 0.2;
+  const recentlyWet = obs3 >= 0.5;
+  const incoming = next2 >= 0.3;
+  const modelMiss =
+    modelExp != null && (obs3 >= 0.3 || modelExp >= 0.3) &&
+    Math.abs(obs3 - modelExp) >= 0.5;
+
+  // Lage trocken UND nichts im Anzug UND Modell stimmt → kein Hinweis nötig
+  if (!activeNow && !recentlyWet && !incoming && !modelMiss) return null;
+
+  const parts: string[] = [];
+  if (activeNow) {
+    parts.push(`aktuell Niederschlag aktiv (${obs1.toFixed(1)} mm in der letzten Stunde, ${obs3.toFixed(1)} mm in den letzten 3 h)`);
+  } else if (recentlyWet) {
+    parts.push(`zuletzt Niederschlag (${obs3.toFixed(1)} mm in den letzten 3 h), aktuell abklingend`);
+  }
+  if (incoming) {
+    parts.push(`Radar-Nowcast erwartet ${next2.toFixed(1)} mm in den nächsten 2 h`);
+  } else if (!activeNow && !recentlyWet) {
+    parts.push("Radar zeigt aktuell keinen Niederschlag im Perimeter");
+  } else {
+    parts.push("Radar-Nowcast: nachlassend bis trocken in den nächsten 2 h");
+  }
+  if (modelMiss && modelExp != null) {
+    if (obs3 > modelExp) {
+      parts.push(`Modell hat unterschätzt (Modell-Erwartung 3 h: ${modelExp.toFixed(1)} mm)`);
+    } else {
+      parts.push(`Modell hat überschätzt (Modell-Erwartung 3 h: ${modelExp.toFixed(1)} mm)`);
+    }
+  }
+  return parts.join("; ") + ".";
+}
+
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
 function applyRadarToDay(out: any, dayIndex: number, radar: RadarSnapshot | null, settings: any) {
