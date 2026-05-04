@@ -418,7 +418,7 @@ function formatEveningNight(weather: any, startHourOverride?: number, nextDayTmi
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
-    tmin: r1(Math.min(...hourlyTemps)),
+    tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null && Number.isFinite(nextDayTminAvg) ? [nextDayTminAvg] : []))),
     tmax: r1(Math.max(...hourlyTemps)),
     precip_total: r1(hourlyPrecs.reduce((a, b) => a + b, 0)),
     wind_max,
