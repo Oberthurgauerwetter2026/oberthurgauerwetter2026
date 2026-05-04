@@ -6,6 +6,51 @@ import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
 import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
+import { fetchEnsembleData, formatUncertaintyHint, type EnsembleData } from "./uncertainty.server";
+
+// Formuliert eine Kurzbeschreibung des aktuellen Radar-Nowcasts für den
+// System-Prompt. Liefert null, wenn keine relevante Aussage möglich ist
+// (Lage trocken, keine signifikante Differenz Beobachtung/Modell, kein Nowcast).
+// Diese Aussage hat im Prompt Vorrang vor der Modellprognose für die nächsten 2-3 h.
+function formatRadarNowHint(radar: RadarSnapshot | null): string | null {
+  if (!radar) return null;
+  const obs1 = radar.observed.last_1h_mm;
+  const obs3 = radar.observed.last_3h_mm;
+  const next2 = radar.forecast_next_2h.next_2h_mm;
+  const modelExp = radar.model_expected_past_3h_mm;
+
+  const activeNow = obs1 >= 0.2;
+  const recentlyWet = obs3 >= 0.5;
+  const incoming = next2 >= 0.3;
+  const modelMiss =
+    modelExp != null && (obs3 >= 0.3 || modelExp >= 0.3) &&
+    Math.abs(obs3 - modelExp) >= 0.5;
+
+  // Lage trocken UND nichts im Anzug UND Modell stimmt → kein Hinweis nötig
+  if (!activeNow && !recentlyWet && !incoming && !modelMiss) return null;
+
+  const parts: string[] = [];
+  if (activeNow) {
+    parts.push(`aktuell Niederschlag aktiv (${obs1.toFixed(1)} mm in der letzten Stunde, ${obs3.toFixed(1)} mm in den letzten 3 h)`);
+  } else if (recentlyWet) {
+    parts.push(`zuletzt Niederschlag (${obs3.toFixed(1)} mm in den letzten 3 h), aktuell abklingend`);
+  }
+  if (incoming) {
+    parts.push(`Radar-Nowcast erwartet ${next2.toFixed(1)} mm in den nächsten 2 h`);
+  } else if (!activeNow && !recentlyWet) {
+    parts.push("Radar zeigt aktuell keinen Niederschlag im Perimeter");
+  } else {
+    parts.push("Radar-Nowcast: nachlassend bis trocken in den nächsten 2 h");
+  }
+  if (modelMiss && modelExp != null) {
+    if (obs3 > modelExp) {
+      parts.push(`Modell hat unterschätzt (Modell-Erwartung 3 h: ${modelExp.toFixed(1)} mm)`);
+    } else {
+      parts.push(`Modell hat überschätzt (Modell-Erwartung 3 h: ${modelExp.toFixed(1)} mm)`);
+    }
+  }
+  return parts.join("; ") + ".";
+}
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
@@ -77,7 +122,15 @@ const DAILY_VARS = [
   "cape_max",
   "wind_gusts_10m_max",
 ];
-const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration", "cape", "wind_gusts_10m", "relative_humidity_2m"];
+const HOURLY_VARS = [
+  "temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m",
+  "weathercode", "sunshine_duration", "cape", "wind_gusts_10m", "relative_humidity_2m",
+  // Layer 2: Höhenwind & Hochnebel
+  "cloudcover_low",
+  "temperature_850hPa",
+  "wind_speed_700hPa", "wind_direction_700hPa",
+  "geopotential_height_500hPa",
+];
 
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
@@ -1067,6 +1120,137 @@ function diurnalFoehnPeak(weather: any, dateStr: string): string | null {
   return `Föhnfenster vor allem ${peak.label}`;
 }
 
+// ===== Layer 2: Hochnebel / Inversion =====
+//
+// Trigger:
+//  - cloudcover_low ≥ 80 % über mehrere Stunden
+//  - Inversion: T_850hPa > T_2m + 1.5 °C (Hindeutung auf abgesetzte Schicht)
+//  - Bodenwind schwach (windspeed_10m < 12 km/h im Mittel)
+//
+// Nebelobergrenze grob aus T_850hPa: in ICON-CH (Standorthöhe ~440 m)
+// entspricht 850 hPa rund 1500 m üM. Wir interpolieren linear zwischen
+// Boden (T_2m) und 850 hPa (T_850hPa) und finden die Höhe, bei der die
+// Temperatur den Bodenwert erreicht — dort ist meist die Nebelobergrenze.
+function _avgArr(arrs: Record<string, number[]>, idxs: number[]): number | null {
+  let sum = 0;
+  let n = 0;
+  for (const k of Object.keys(arrs)) {
+    const a = arrs[k];
+    for (const i of idxs) {
+      const v = a?.[i];
+      if (Number.isFinite(v)) {
+        sum += v as number;
+        n++;
+      }
+    }
+  }
+  return n > 0 ? sum / n : null;
+}
+
+function _collectHourly(weather: any, base: string): Record<string, number[]> {
+  const h = weather?.hourly;
+  const out: Record<string, number[]> = {};
+  if (!h) return out;
+  if (Array.isArray(h[base])) out["default"] = h[base];
+  for (const k of Object.keys(h)) {
+    if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+  }
+  return out;
+}
+
+function formatInversionHint(weather: any, day: any): string | null {
+  if (!day?.date) return null;
+  const h = weather?.hourly;
+  if (!h?.time) return null;
+
+  const cloudLow = _collectHourly(weather, "cloudcover_low");
+  const t850 = _collectHourly(weather, "temperature_850hPa");
+  const t2m = _collectHourly(weather, "temperature_2m");
+  const wind = _collectHourly(weather, "windspeed_10m");
+
+  if (Object.keys(cloudLow).length === 0 || Object.keys(t850).length === 0) return null;
+
+  const idxAll = (h.time as string[])
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => t.slice(0, 10) === day.date)
+    .map((x) => x.i);
+  if (idxAll.length < 12) return null;
+
+  // Tagphase 09–17 Uhr — Auflösungsfenster
+  const idxDay = idxAll.filter((i) => {
+    const hr = new Date((h.time as string[])[i]).getHours();
+    return hr >= 9 && hr <= 17;
+  });
+  // Morgenphase 06–10 Uhr — Persistenzfenster
+  const idxMorn = idxAll.filter((i) => {
+    const hr = new Date((h.time as string[])[i]).getHours();
+    return hr >= 6 && hr <= 10;
+  });
+
+  const cloudLowMorn = _avgArr(cloudLow, idxMorn);
+  const cloudLowDay = _avgArr(cloudLow, idxDay);
+  const t850Morn = _avgArr(t850, idxMorn);
+  const t2mMorn = _avgArr(t2m, idxMorn);
+  const windMorn = _avgArr(wind, idxMorn);
+
+  if (cloudLowMorn == null || cloudLowMorn < 80) return null;
+  if (t850Morn == null || t2mMorn == null) return null;
+  // Inversion: in 850 hPa wärmer als am Boden (oder zumindest nicht kühler als Standard-Lapse −7°C)
+  // Standardatmosphäre würde T_850 ≈ T_2m − 7°C erwarten. Inversion: T_850 > T_2m − 2°C.
+  const inversionStrength = t850Morn - t2mMorn;
+  if (inversionStrength < -2) return null;
+  if (windMorn != null && windMorn > 14) return null; // zu windig für Hochnebel-Persistenz
+
+  // Auflösungstendenz
+  let dissolution: string;
+  if (cloudLowDay != null && cloudLowDay < 50) {
+    dissolution = "Auflösung am Nachmittag wahrscheinlich";
+  } else if (cloudLowDay != null && cloudLowDay < 75) {
+    dissolution = "teilweise Auflösung am Nachmittag möglich";
+  } else {
+    dissolution = "ganztägig zähe Hochnebeldecke wahrscheinlich";
+  }
+
+  // Nebelobergrenze grob abschätzen.
+  // 850 hPa entspricht in der Standardatmosphäre ca. 1500 m üM.
+  // Wir interpolieren linear: bei welcher Höhe entspricht T(h) ≈ T_2m?
+  // Bei Inversion (T_850 > T_2m): die Inversion liegt zwischen Boden und 850 hPa.
+  // Annahme: Bodenstation ~440 m üM (Amriswil-Region).
+  const groundElev = 440;
+  const top850 = 1500;
+  let nebelgrenzeM: number | null = null;
+  if (inversionStrength > 0) {
+    // Lineare Interpolation: h, bei der T(h) = T_2m
+    // T(h) = T_2m + (T_850 − T_2m) * (h − groundElev) / (top850 − groundElev)
+    // Da T_850 > T_2m, wird die Temperatur nach oben hin grösser. Nebelobergrenze
+    // ist typisch dort, wo die Temperatur ihr Maximum erreicht — pragmatisch
+    // setzen wir sie auf ca. 60-80% des Weges Richtung 850 hPa.
+    nebelgrenzeM = Math.round((groundElev + (top850 - groundElev) * 0.7) / 50) * 50;
+  } else {
+    // Schwache Inversion: Nebelgrenze niedriger
+    nebelgrenzeM = Math.round((groundElev + (top850 - groundElev) * 0.4) / 50) * 50;
+  }
+
+  const parts = [
+    `Hochnebellage (Inversion ${inversionStrength >= 0 ? "+" : ""}${inversionStrength.toFixed(1)} °C zwischen Boden und 850 hPa)`,
+    `Nebelobergrenze um etwa ${nebelgrenzeM} m üM`,
+    dissolution,
+    "oberhalb der Nebelgrenze sonnig und mild, unterhalb trüb und kühl",
+  ];
+  return parts.join("; ") + ".";
+}
+
+function formatInversionTrendHint(weather: any, days: any[]): string | null {
+  if (!days?.length) return null;
+  let inversionDays = 0;
+  for (const d of days) {
+    if (formatInversionHint(weather, d)) inversionDays++;
+  }
+  if (inversionDays === 0) return null;
+  if (inversionDays >= 3) return "im Trend-Zeitraum mehrtägig zähe Hochnebellagen mit Inversion möglich (im Mittelland trüb, in den Höhen sonnig)";
+  return "im Trend-Zeitraum zeitweise Hochnebel mit Inversion möglich";
+}
+
 function formatFoehnHint(weather: any, day: any): string | null {
   if (!day?.date) return null;
   const dirAvg = day.wind_dir_avg;
@@ -1779,6 +1963,15 @@ export function buildSystemPrompt(settings: any): string {
     "=== FÖHN-HINWEIS ===",
     "Wenn im User-Prompt ein Block 'Föhn-Hinweis' enthalten ist: Übernimm Stärke, Tagesgang und räumliche Differenzierung sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende Föhn-Vokabular: 'föhnig mild', 'sehr trocken', 'kräftige Südböen', 'Föhnfenster', 'Föhnabbruch', 'Föhnsturm'. Bei Föhnsturm klar benennen. Prognose-Perimeter Oberthurgau: Horn – Münsterlingen – Erlen – Hauptwil-Gottshaus – Roggwil – Horn. Räumliche Differenzierung INNERHALB dieses Perimeters: östliche Seeufer (Horn, Arbon, Roggwil) am stärksten, mittlere Seezone (Egnach, Romanshorn, Uttwil) klar föhnig aber abgeschwächt, westliche Seezone (Altnau, Münsterlingen) nur schwach, Hinterland (Erlen, Hauptwil-Gottshaus, Amriswil-Hinterland) meist abgeschirmt. Orte AUSSERHALB des Perimeters NIEMALS erwähnen — insbesondere kein Rheintal, kein Vaduz/Buchs, kein Steckborn, kein westlicher Bodensee, kein Frauenfeld, kein Konstanz/Kreuzlingen. Wenn KEIN solcher Block vorhanden ist, KEINE Föhn-Aussagen.",
     "",
+    "=== AKTUELLER RADAR (Nowcast) ===",
+    "Wenn im User-Prompt ein Block 'Aktueller Radar (Nowcast)' enthalten ist (nur bei Heute-Eintrag und ggf. Morgen): Diese Beobachtung hat VORRANG vor der Modellprognose für die nächsten 2-3 Stunden. Übernimm die Aussage sinngemäss zu Beginn des Tagesablaufs ('Aktuell zieht...', 'Bereits seit dem Morgen...', 'In den nächsten Stunden...'). Verwende natürliche Wettersprache, niemals 'Radar', 'Nowcast' oder 'Modell-Erwartung' wörtlich. Wenn der Block sagt 'Radar zeigt aktuell keinen Niederschlag', dann KEINE Erwähnung — die Aussage gilt nur, wenn etwas Konkretes passiert (Schauer aktiv, Niederschlag im Anzug, Modell-Korrektur nötig). Bei Modell-Unter-/Überschätzung: vorsichtig formulieren ('mehr Niederschlag als erwartet', 'die Wolken zerfallen rascher als die Modelle vorhersagen'). Wenn KEIN solcher Block vorhanden ist (Tage 2-10 oder Trend), keine kurzfristigen Radar-Aussagen.",
+    "",
+    "=== UNSICHERHEIT (Ensemble) ===",
+    "Wenn im User-Prompt (typischerweise im Trend Tag 6-10) ein Block 'Unsicherheit (Ensemble)' enthalten ist: Übernimm die Unsicherheits-Stufe sinngemäss in den Trend-Text. Bei 'verlässlicher Trend' kann selbstbewusster formuliert werden ('zeichnet sich ab', 'dürfte'). Bei 'moderater Unsicherheit' Konjunktiv und vorsichtige Formulierungen ('könnte', 'tendenziell', 'mit Schwankungen'). Bei 'hoher Unsicherheit' explizit auf mehrere mögliche Szenarien hinweisen ('das Bild ist unsicher', 'mehrere Szenarien sind möglich, von ... bis ...'). Bei bimodaler Niederschlagsverteilung beide Szenarien benennen. Niemals 'Ensemble', 'Sigma', 'P10/P90' wörtlich verwenden — nur die qualitative Unsicherheit in Wettersprache.",
+    "",
+    "=== HOCHNEBEL / INVERSION ===",
+    "Wenn im User-Prompt ein Block 'Hochnebel-Hinweis' enthalten ist: Übernimm die Aussage zu Hochnebeldecke, Nebelobergrenze und Auflösungstendenz sinngemäss. Vokabular: 'zähe Hochnebeldecke', 'Hochnebel mit Auflösungstendenz', 'Nebelobergrenze um etwa XXX m', 'oberhalb der Nebelgrenze sonnig', 'unterhalb trüb und kühl'. Bei Inversionslagen die typische Eigenschaft erwähnen: am Boden grau und kühl, in der Höhe (z.B. ab 800-1000 m) sonnig und mild. Wenn KEIN solcher Block vorhanden ist, KEINE Hochnebel-/Inversions-Aussagen erfinden.",
+    "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
   ].join("\n");
@@ -1858,6 +2051,10 @@ export const generateForecast = createServerFn({ method: "POST" })
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
+    const ensembleEnabled = (settings as any)?.ensemble_enabled !== false;
+    const ensembleData: EnsembleData | null = (!degraded && ensembleEnabled)
+      ? await fetchEnsembleData(lat, lon).catch((e) => { console.warn("ensemble fetch failed", e); return null; })
+      : null;
     const biasEnabled = settings?.bias_enabled !== false;
     const biasStations = (settings?.bias_stations ?? "GUT,STG,TAE")
       .split(",").map((s: string) => s.trim()).filter(Boolean);
@@ -1902,7 +2099,11 @@ export const generateForecast = createServerFn({ method: "POST" })
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
       const foehnHint = formatFoehnHint(weather, firstData);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+      const radarHint = formatRadarNowHint(radarSnapshot);
+      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
+      const invHint = formatInversionHint(weather, firstData);
+      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1925,7 +2126,12 @@ export const generateForecast = createServerFn({ method: "POST" })
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
       const foehnHint = formatFoehnHint(weather, day);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+      // Radar nur Tag 1 (i==1) — Tag 2-5 ausserhalb der Nowcast-Reichweite
+      const radarHint = i === 1 ? formatRadarNowHint(radarSnapshot) : null;
+      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
+      const invHint = formatInversionHint(weather, day);
+      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -1943,7 +2149,11 @@ export const generateForecast = createServerFn({ method: "POST" })
         const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
         const foehnTrend = formatFoehnTrendHint(trendDays);
         const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+        const invTrend = formatInversionTrendHint(weather, trendDays);
+        const invBlock = invTrend ? `\n\nHochnebel-Hinweis: ${invTrend}` : "";
+        const uncHint = formatUncertaintyHint(ensembleData, trendDays);
+        const uncBlock = uncHint ? `\n\nUnsicherheit (Ensemble): ${uncHint}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${invBlock}${uncBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
         })));
@@ -1990,6 +2200,10 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
+      : null;
+    const ensembleEnabled = (settings as any)?.ensemble_enabled !== false;
+    const ensembleData: EnsembleData | null = (!degraded && ensembleEnabled)
+      ? await fetchEnsembleData(lat, lon).catch((e) => { console.warn("ensemble fetch failed", e); return null; })
       : null;
 
     const biasEnabled = settings?.bias_enabled !== false;
@@ -2053,7 +2267,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
       const foehnHint = formatFoehnHint(weather, firstData);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+      const radarHint = formatRadarNowHint(radarSnapshot);
+      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
+      const invHint = formatInversionHint(weather, firstData);
+      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -2076,7 +2294,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
       const foehnHint = formatFoehnHint(weather, day);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+      const radarHint = i === 1 ? formatRadarNowHint(radarSnapshot) : null;
+      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
+      const invHint = formatInversionHint(weather, day);
+      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
@@ -2094,7 +2316,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
         const foehnTrend = formatFoehnTrendHint(trendDays);
         const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+        const invTrend = formatInversionTrendHint(weather, trendDays);
+        const invBlock = invTrend ? `\n\nHochnebel-Hinweis: ${invTrend}` : "";
+        const uncHint = formatUncertaintyHint(ensembleData, trendDays);
+        const uncBlock = uncHint ? `\n\nUnsicherheit (Ensemble): ${uncHint}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${invBlock}${uncBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
