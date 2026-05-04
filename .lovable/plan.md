@@ -1,32 +1,37 @@
-## Ziel
-`GEMINI_API_KEY` ist gesetzt. Beide `generateText`-Funktionen so erweitern, dass sie bevorzugt direkt Google Gemini API aufrufen und Lovable AI nur als Fallback nutzen.
+## Problem
+Die Meldung „KI-Guthaben aufgebraucht. Bitte Workspace aufladen." erscheint weiterhin, obwohl `GEMINI_API_KEY` gesetzt ist und der Code Gemini bevorzugt aufrufen sollte.
 
-## Änderungen
+## Ursache
+Mein letzter Fix hat einen **stillen Fallback** auf Lovable AI eingebaut: Wenn der Gemini-Aufruf aus irgendeinem Grund scheitert (z.B. Modellname `gemini-2.5-pro` wird von der v1beta-API nicht akzeptiert, Netzwerkfehler, unerwartete Antwortstruktur), wird automatisch auf Lovable AI umgeschwenkt — und dort liefert der Provider `402 KI-Guthaben aufgebraucht`. Die Original-Meldung von Gemini geht im `console.warn` unter und du siehst nur den Lovable-AI-Fehler.
 
-### 1. `src/server/forecast.functions.ts` (Z. 1885–1917)
-`generateText` umstrukturieren:
-- Wenn `process.env.GEMINI_API_KEY` gesetzt → `callGemini("gemini-2.5-pro", ...)`
-- Bei 429/403/401 von Google → freundliche Fehlermeldung
-- Bei Netzwerkfehler → Fallback auf Lovable AI Gateway (bestehender Code)
-- Wenn kein `GEMINI_API_KEY` → direkt Lovable AI Gateway
+Zudem: `gemini-2.5-pro` ist in `v1beta` ggf. nicht direkt verfügbar — der korrekte Modell-Identifier ist oft `gemini-2.5-pro` ODER `gemini-2.5-pro-latest` ODER `gemini-2.0-flash-exp`. Der Free-Tier unterstützt **`gemini-2.5-flash`** garantiert, **`gemini-2.5-pro`** dagegen nur eingeschränkt.
 
-Neue Helper-Funktion `callGemini(model, systemPrompt, userPrompt)`:
-- POST an `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}`
-- Body: `{ systemInstruction: { parts: [{ text: systemPrompt }] }, contents: [{ role: "user", parts: [{ text: userPrompt }] }], generationConfig: { temperature: 0.2, topP: 0.9 } }`
-- 45s Timeout via AbortController (wie bisher)
-- Antwort aus `candidates[0].content.parts[0].text`
-- Fehler-Mapping:
-  - 429 → `"KI-Tageslimit (Gemini Free) erreicht. Bitte später erneut versuchen."`
-  - 401/403 → `"Gemini API-Key ungültig."`
-  - sonst → wirft Error mit Status (löst Fallback aus)
+## Fix
 
-### 2. `src/server/forecast.auto.ts` (Z. 491–505)
-Identische Logik mit Modell `gemini-2.5-flash` (statt pro). Helper-Funktion `callGemini` dort lokal duplizieren (gleiche Signatur).
+### 1. `src/server/forecast.functions.ts` — `generateText` (Z. 1946–1958)
+Stillen Fallback entfernen. Wenn `GEMINI_API_KEY` gesetzt ist → ausschliesslich Gemini, Fehler werden direkt an den Aufrufer durchgereicht (echte Fehlermeldung sichtbar):
 
-## Verhalten
-- Solange Gemini Free-Tier reicht (250 Req/Tag Flash, 100 Req/Tag Pro): kostenlos
-- Bei Limit/Ausfall: automatischer Fallback auf Lovable AI Gateway (sofern `LOVABLE_API_KEY` vorhanden und Guthaben da)
-- Keine Änderungen an Prompts, UI, DB, Forecast-Logik
+```ts
+async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
+  if (process.env.GEMINI_API_KEY) {
+    return await callGemini("gemini-2.5-flash", systemPrompt, userPrompt);
+  }
+  return await callLovableAI("google/gemini-2.5-pro", systemPrompt, userPrompt);
+}
+```
+
+### 2. Modell-Wechsel auf `gemini-2.5-flash` (beide Dateien)
+- `forecast.functions.ts` Z. 1949: `gemini-2.5-pro` → `gemini-2.5-flash`
+- `forecast.auto.ts` bleibt bei `gemini-2.5-flash` (schon korrekt), aber auch dort den stillen Fallback entfernen
+
+**Begründung Modellwahl:** `gemini-2.5-flash` ist im Free-Tier mit 250 Req/Tag stabil verfügbar und liefert für Wettertexte mehr als ausreichende Qualität. Falls du später bewusst Pro-Qualität willst, kannst du auf `gemini-2.5-pro` umstellen — dann aber im Wissen, dass das Free-Limit dort nur 100 Req/Tag beträgt und teilweise gar nicht im Free-Tier verfügbar ist.
+
+### 3. `forecast.auto.ts` `generateText` (Z. 529–539)
+Gleicher Fix: kein stiller Fallback mehr.
+
+## Verifikation nach dem Fix
+- Forecast neu generieren
+- Falls weiterhin Fehler: die echte Gemini-Fehlermeldung wird jetzt angezeigt (z.B. „Gemini-Fehler 404: model not found" → dann wechseln wir auf einen anderen Modellnamen)
 
 ## Geänderte Dateien
 - `src/server/forecast.functions.ts`
