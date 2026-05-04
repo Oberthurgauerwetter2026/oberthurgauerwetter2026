@@ -705,6 +705,92 @@ function formatAifsTrendComparison(weather: any, days: any[]): string | null {
   return [tempLabel, precipLabel].filter(Boolean).join(", ");
 }
 
+// ===== Bodensee-Wassertemperatur (klimatologischer Layer) =====
+// Quelle: IGKB-Langzeitmittel Obersee, Oberflächenwasser. Kein Live-Messwert,
+// daher in Hinweisen immer mit "saisonal ca." formulieren. Wird nur als
+// bedingter Trigger genutzt (Seerauch, Hitze-Dämpfung, Frühjahrs-Kälte).
+const BODENSEE_CLIMATOLOGY_C = [5, 4, 5, 8, 12, 17, 20, 21, 18, 14, 10, 7];
+
+// Liefert die saisonale Bodensee-Oberflächentemperatur für ein Datum (ISO),
+// linear interpoliert zwischen den Monatsmitten (15. eines Monats = exakt Mittel).
+function getLakeTempForDate(dateIso: string): number {
+  const d = new Date(dateIso + "T12:00:00Z");
+  if (isNaN(d.getTime())) {
+    // Fallback auf aktuellen Monat
+    const m = new Date().getUTCMonth();
+    return BODENSEE_CLIMATOLOGY_C[m]!;
+  }
+  const month = d.getUTCMonth(); // 0-11
+  const day = d.getUTCDate();
+  const daysInMonth = new Date(Date.UTC(d.getUTCFullYear(), month + 1, 0)).getUTCDate();
+  // Position relativ zur Monatsmitte (15.). Negativ = vor Mitte, positiv = nach Mitte.
+  const t = (day - 15) / daysInMonth; // grob in [-0.5, +0.5]
+  const cur = BODENSEE_CLIMATOLOGY_C[month]!;
+  let neighbor: number;
+  if (t < 0) {
+    neighbor = BODENSEE_CLIMATOLOGY_C[(month + 11) % 12]!;
+  } else {
+    neighbor = BODENSEE_CLIMATOLOGY_C[(month + 1) % 12]!;
+  }
+  const w = Math.abs(t); // 0..0.5
+  const value = cur * (1 - w) + neighbor * w;
+  return Math.round(value * 10) / 10;
+}
+
+// Liefert pro Tag einen Bodensee-Hinweis als String, oder null wenn keine
+// der drei Trigger-Bedingungen erfüllt ist. Konservativ — kein Lärm im Normalfall.
+function formatLakeTemperatureHint(_weather: any, day: any): string | null {
+  if (!day?.date) return null;
+  const T = getLakeTempForDate(day.date);
+  const tmin = day.tmin?.avg;
+  const tmax = day.tmax?.avg;
+  const wind = day.wind_max?.avg;
+  const cloud = day.cloudcover?.avg;
+
+  // 1) Seerauch / Verdunstungsnebel: kalte Luft über deutlich wärmerem See,
+  //    schwacher Wind, klare bis teilklare Nacht.
+  if (
+    typeof tmin === "number" &&
+    typeof wind === "number" &&
+    tmin <= T - 8 &&
+    wind <= 10 &&
+    (cloud == null || cloud <= 70)
+  ) {
+    const dT = Math.round((T - tmin) * 10) / 10;
+    return `Bodensee saisonal ca. ${T}°C, Tmin ${dT}°C tiefer bei schwachem Wind und überwiegend klarem Himmel: Verdunstungsnebel/Seerauch über dem See möglich, vom Ufer aus sichtbar.`;
+  }
+
+  // 2) Hitze-Dämpfung am Ufer: warmer See dämpft Nachtabkühlung.
+  //    Schwelle bei See > 20°C UND Tmax >= 28°C, damit klassische Sommer-Hitzetage
+  //    zuverlässig getriggert werden (Klima-Werte Juli 20°C, August 21°C).
+  if (typeof tmax === "number" && T > 20 && tmax >= 28) {
+    return `Bodensee saisonal ca. ${T}°C — am Seeufer gedämpfte Nachtabkühlung, dort lokal mildere Tmin-Werte als wenige Kilometer landeinwärts.`;
+  }
+
+  // 3) Frühjahrs-Kälte: kalter See dämpft Erwärmung am Ufer.
+  if (typeof tmax === "number" && T < 8 && tmax >= 18) {
+    return `Bodensee noch kalt (saisonal ca. ${T}°C) — am Seeufer gedämpfte Erwärmung, leicht kühlere Tmax als wenige Kilometer landeinwärts.`;
+  }
+
+  return null;
+}
+
+// Trend-Block (Tag 6-10): liefert nur dann einen Hinweis, wenn der Saisonwert
+// in einem klimatologisch auffälligen Bereich liegt (Sommerhoch oder Winter-Tief).
+function formatLakeTemperatureTrendHint(days: any[]): string | null {
+  if (!days?.length) return null;
+  const middle = days[Math.floor(days.length / 2)];
+  if (!middle?.date) return null;
+  const T = getLakeTempForDate(middle.date);
+  if (T >= 20) {
+    return `Bodensee saisonal ca. ${T}°C — Seebrise und gedämpfte Nachtabkühlung am Ufer in dieser Phase typisch.`;
+  }
+  if (T <= 5) {
+    return `Bodensee saisonal ca. ${T}°C (winterlich kalt) — bei Kaltluftvorstössen mit klarer Nacht und schwachem Wind erhöhtes Seerauch-Risiko über dem See.`;
+  }
+  return null;
+}
+
 // Returns a unified weather object with `daily` (timeline) and `byModel` (per-model values)
 async function fetchWeather(
   lat: number,
@@ -1356,6 +1442,9 @@ export function buildSystemPrompt(settings: any): string {
     "=== KI-MODELL-VERGLEICH (ECMWF AIFS) ===",
     "Wenn im User-Prompt ein Block 'KI-Modell-Vergleich (ECMWF AIFS)' enthalten ist: Erwähne die Abweichung dezent als Unsicherheit (z. B. 'mehrheitlich trocken, KI-Modell deutet leichtes Schauerrisiko an' oder 'milder als die klassischen Modelle erwarten lassen'). Niemals AIFS gegen die klassischen Modelle ausspielen — die klassische Multi-Modell-Lösung bleibt Leitlinie. Maximal ein kurzer Hinweis pro Eintrag. Beim Trend ist der Vergleich Teil der Grosswetterlagen-Beschreibung (Tendenz-Aussage, keine konkreten Zahlen).",
     "",
+    "=== BODENSEE-WASSERTEMPERATUR ===",
+    "Wenn im User-Prompt ein Block 'Bodensee-Hinweis' enthalten ist: Übernimm den Hinweis sinngemäss in den Fliesstext (nicht wörtlich kopieren). Erwähne ihn maximal einmal pro Eintrag, dezent und ortsbezogen ('am Seeufer', 'über dem See', 'in Seenähe'). Niemals erfinden — nur nennen, wenn der Block explizit vorhanden ist. Die Wassertemperatur ist ein klimatologischer Saisonwert, kein aktueller Messwert — formuliere entsprechend ('rund', 'saisonal', 'typischerweise').",
+    "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
   ].join("\n");
@@ -1473,7 +1562,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const aifsCmp = formatAifsComparison(weather, firstData);
       const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}`;
+      const lakeHint = formatLakeTemperatureHint(weather, firstData);
+      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1490,7 +1581,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
       const aifsCmp = formatAifsComparison(weather, day);
       const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}`;
+      const lakeHint = formatLakeTemperatureHint(weather, day);
+      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -1502,7 +1595,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       if (trendDays.length) {
         const aifsTrend = formatAifsTrendComparison(weather, trendDays);
         const aifsBlock = aifsTrend ? `\n\nKI-Modell-Vergleich (ECMWF AIFS, Tendenz Tag 6-10): ${aifsTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}`;
+        const lakeTrend = formatLakeTemperatureTrendHint(trendDays);
+        const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
         })));
@@ -1606,7 +1701,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
       const aifsCmp = formatAifsComparison(weather, firstData);
       const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}`;
+      const lakeHint = formatLakeTemperatureHint(weather, firstData);
+      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1623,7 +1720,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
       const aifsCmp = formatAifsComparison(weather, day);
       const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}`;
+      const lakeHint = formatLakeTemperatureHint(weather, day);
+      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
@@ -1635,7 +1734,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       if (trendDays.length) {
         const aifsTrend = formatAifsTrendComparison(weather, trendDays);
         const aifsBlock = aifsTrend ? `\n\nKI-Modell-Vergleich (ECMWF AIFS, Tendenz Tag 6-10): ${aifsTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}`;
+        const lakeTrend = formatLakeTemperatureTrendHint(trendDays);
+        const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
