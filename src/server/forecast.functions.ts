@@ -2074,7 +2074,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
       const stormHint = formatThunderstormHint(weather, day);
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}`;
+      const foehnHint = formatFoehnHint(weather, day);
+      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
