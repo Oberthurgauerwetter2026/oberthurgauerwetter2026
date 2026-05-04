@@ -1,46 +1,58 @@
-## Ziel
+# Quellwolken-Erkennung (Cumulus) im Tagestext
 
-BIZ (Bischofszell) bleibt als technischer Cold-Anchor erhalten, aber im KI-Output werden die Senken konsequent als **„Aach- und Sittertal"** benannt – nicht mehr als „Hudelmoos / Riedflächen / Thurtal bei Bischofszell".
+Ergänzt eine eigene Klassifikation für Quellbewölkung, getrennt vom bestehenden Gewitter-Hinweis. Erscheint als eigener Satz im Tagestext (z. B. „nachmittags Bildung harmloser Quellwolken").
 
-## Änderungen in `src/server/forecast.functions.ts`
+## Datengrundlage (alles bereits vorhanden)
 
-### 1. System-Prompt: Senken-Bezeichnung vereinheitlichen (Z. 1889, 1896)
+In `src/server/forecast.functions.ts` werden bereits abgefragt:
+- `cape_max` (daily) und `cape` (hourly) — Z. 122 / 127
+- `cloudcover_low` (hourly) — Z. 129
+- `sunshine_duration` (daily/hourly) — Z. 119 / 127
+- Hourly-Tagesfenster-Logik existiert in `formatThunderstormHint` (Z. 904 ff.)
 
-**Z. 1889** – Beschreibung der BIZ-Stationsrolle:
-- alt: `"stations.BIZ" (Bischofszell, Thurtal-Senke): Anker für den KÄLTESTEN Punkt im Radius.`
-- neu: `"stations.BIZ" (Bischofszell, repräsentativ für die Senken im Aach- und Sittertal): Anker für den KÄLTESTEN Punkt im Perimeter. Der Stationsname "Bischofszell" wird im Fliesstext NICHT genannt – stattdessen "Aach- und Sittertal".`
+Keine Erweiterung der Open-Meteo-Abfrage nötig.
 
-**Z. 1896** – Senken-Satz-Format:
-- alt: `Format: "In den Senken (z. B. Hudelmoos, Riedflächen, Bodensee-nahe Mulden, Thurtal bei Bischofszell) lokal bis X Grad."`
-- neu: `Format: "In den Senken im Aach- und Sittertal lokal bis X Grad." (X = Wert auf ganze Grad gerundet, ohne weitere Ortsnamen).`
+## Klassifikationslogik
 
-**Z. 1900** – Schluss-Direktive:
-- alt: `Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich GUT/BIZ.`
-- neu: `Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich Bodenseeufer–Aach-/Sittertal (intern: GUT/BIZ, NIE als Stationskürzel oder Ortsname Bischofszell ausgeben).`
+Neue Funktion `formatCumulusHint(weather, day): string | null` mit Tagesgang-Auswertung (Vormittag / Nachmittag / Abend, analog `formatThunderstormHint`):
 
-### 2. Topo-Label angleichen (Z. 384)
+Pro Fenster gemittelt über Modelle:
+- `capeAvg` (aus stündlichen `cape_*`-Keys)
+- `cloudLowAvg` (aus stündlichen `cloudcover_low_*`-Keys)
+- `sunshineDay` aus daily `sunshine_h`
 
-- alt: `tmin_cold_label: classification === "strahlungsnacht" ? "Senken (Hudelmoos, Riedflächen)" : "Tiefste Lagen (Bodensee-Ufer)"`
-- neu: `tmin_cold_label: classification === "strahlungsnacht" ? "Senken im Aach- und Sittertal" : "Tiefste Lagen (Bodenseeufer)"`
+Klassen (Bedingungen müssen alle im jeweiligen Fenster erfüllt sein):
 
-### 3. Negativ-Liste: „Bischofszell" verbieten
+| Klasse | CAPE | Cloudcover-Low | Sonne (Tag) | Output-Bezeichnung |
+|---|---|---|---|---|
+| Schönwetter-Cumulus | 50–300 | 10–40 % | ≥ 5 h | „harmlose Quellwolken" |
+| Cumulus mediocris | 100–500 | 25–60 % | ≥ 4 h | „kräftigere Quellbewölkung" |
+| Cumulus congestus | 300–800 | 30–70 % | ≥ 3 h | „mächtige Quellwolken, einzelne Schauer möglich" |
 
-Im bestehenden Perimeter-Verbotsblock (Z. 1964 – Föhn-Direktive) bzw. im allgemeinen Stil-Block ergänzen:
-- `Bischofszell, Hudelmoos, Riedflächen, Thurtal NIEMALS namentlich nennen – Senken-Lagen ausschliesslich als "Aach- und Sittertal" beschreiben.`
+Abbruchbedingungen (Funktion gibt `null` zurück):
+- CAPE ≥ 800 ODER Gewitter-Trigger aktiv → bestehender Gewitter-Hinweis übernimmt
+- Cloudcover-Low > 80 % im Hauptfenster → bedeckt, keine erkennbaren Einzelquellen
+- Kein Fenster erfüllt eine Klasse → kein Satz
 
-## Was unverändert bleibt
+Output-Beispiele:
+- „Am Nachmittag Bildung harmloser Quellwolken."
+- „Tagsüber kräftigere Quellbewölkung, am Nachmittag mächtige Quellwolken mit einzelnen Schauern möglich."
 
-- BIZ bleibt in `STATIONS` (Z. 400-403) und Default-`bias_stations` (`GUT,STG,TAE` → BIZ kommt über STATIONS-Konstante separat dazu, Bias-Logik unverändert)
-- BIZ-Messdaten fliessen weiter in `corrected_tmin` ein
-- Backend-Logik / Datenfluss / Settings-UI: keine Änderung
-- 6 Generierungsstellen (generate + regenerate × firstEntry/day/trend): kein Eingriff nötig, da sie alle denselben System-Prompt nutzen
+## Integration in Tagestext
 
-## Akzeptanzkriterien
+Analog zum bestehenden `stormBlock` an 4 Stellen (Z. 2099, 2126, 2267, 2294):
 
-- Generierter Text enthält bei Strahlungsnächten den Satz **„In den Senken im Aach- und Sittertal lokal bis X Grad."**
-- Wörter „Bischofszell", „Hudelmoos", „Riedflächen", „Thurtal" tauchen im Output **nicht** mehr auf
-- Tmin-Bandbreite (Hauptsatz) nutzt weiterhin BIZ-Korrekturwert als unteren Anker
+```ts
+const cumulusHint = formatCumulusHint(weather, day);
+const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
+```
 
-## Aufwand
+Reihenfolge im Prompt: erst `cumulusBlock`, dann `stormBlock` (Quellwolken sind die Vorstufe — ergibt natürliche Lesefolge). Beide schliessen sich faktisch aus, da Cumulus-Funktion bei CAPE ≥ 800 / Gewitter-Trigger `null` liefert.
 
-3 Prompt-Strings + 1 Label-Konstante. ~10 Zeilen. Keine neuen Dateien, keine API-Calls, keine Migration.
+## System-Prompt-Ergänzung
+
+Im Senken-/Vokabular-Block kurzer Hinweis: Wenn `Quellwolken: …` im Datenblock steht, soll der Tagestext den Hinweis sinngemäss übernehmen (nicht 1:1 kopieren), aber Begriffe wie „Quellwolken / Quellbewölkung / Cumulus" verwenden — keine generischen Phrasen wie „Wolken bilden sich".
+
+## Geänderte Datei
+
+- `src/server/forecast.functions.ts` — neue Funktion `formatCumulusHint` (~60 Zeilen), 4 Integrationspunkte, kleine Prompt-Ergänzung
