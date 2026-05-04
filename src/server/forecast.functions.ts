@@ -1669,13 +1669,13 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
   return `Heute Abend & Nacht`;
 }
 
-function formatEveningNight(weather: any, startHourOverride?: number) {
+function formatEveningNight(weather: any, startHourOverride?: number, nextDayTminAvg?: number | null) {
   const h = weather.hourly;
   if (!h?.time) return null;
   const today = weather.daily.time[0];
   const tomorrow = weather.daily.time[1];
-  // Dynamic start: from "now" (current Zurich hour) until 05:00 next day.
-  // Cap minimum at 0 (full day) and maximum at 23 (latest sensible evening start).
+  // Dynamic start: from "now" (current Zurich hour) until 09:00 next day,
+  // damit das nächtliche Tagesminimum (typischerweise gegen Sonnenaufgang) im Fenster liegt.
   const rawStart = startHourOverride ?? currentZurichHour();
   const startHour = Math.max(0, Math.min(23, rawStart));
   const slice: Array<{ t: string; i: number }> = (h.time as string[])
@@ -1683,7 +1683,7 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     .filter(({ t }) => {
       const dt = new Date(t);
       const dateStr = t.slice(0, 10);
-      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 5);
+      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 9);
     });
   if (!slice.length) return null;
 
@@ -1797,17 +1797,17 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
 
   // Human-readable window description for the prompt
-  const endHour = 5;
+  const endHour = 9;
   const window_label =
-    startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend und Nacht`
-    : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Nachmittag, Abend und Nacht`
-    : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Abend und Nacht`;
+    startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend, Nacht und frühen Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`
+    : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - Nachmittag, Abend, Nacht und früher Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`
+    : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - Abend, Nacht und früher Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`;
 
   return {
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
-    tmin: r1(Math.min(...hourlyTemps)),
+    tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null && Number.isFinite(nextDayTminAvg) ? [nextDayTminAvg] : []))),
     tmax: r1(Math.max(...hourlyTemps)),
     precip_total: r1(hourlyPrecs.reduce((a, b) => a + b, 0)),
     wind_max,
@@ -1859,7 +1859,9 @@ function buildTimeOfDayHint(hour: number): string {
 function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
   const hour = currentZurichHour();
   const useEvening = hour >= 12;
-  const evening = useEvening ? formatEveningNight(weather) : null;
+  const nextDay = useEvening ? formatDayData(weather, 1) : null;
+  const nextDayTmin = nextDay?.tmin?.avg ?? null;
+  const evening = useEvening ? formatEveningNight(weather, undefined, nextDayTmin) : null;
   let firstData: any;
   let windowHint = "";
   if (useEvening && evening) {
@@ -2423,8 +2425,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= maxDayLoop; i++) {
-      const day = withTopo(i);
+      let day = withTopo(i);
       if (!day) continue;
+      let extraTminHint = "";
+      if (i === 1 && currentZurichHour() >= 12) {
+        day = { ...day, tmin: null, tmin_omitted_reason: "Tiefstwert wurde bereits im Block 'Heute Abend & Nacht' genannt" };
+        extraTminHint = `\n\nWICHTIG: Erwähne für diesen Tag KEINEN Tiefstwert — der nächtliche Tiefstwert wurde bereits im vorherigen Abschnitt 'Heute Abend & Nacht' angegeben. Schreibe nur den Höchstwert.`;
+      }
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
@@ -2443,10 +2450,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
       const invHint = formatInversionHint(weather, day);
       const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}${extraTminHint}`;
       const pos = i + 1;
+      const dayForResult = day;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
-        position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
+        position: pos, entry_date: dayForResult.date, title, body: enforceSkyConsistency(body, dayForResult), weather_data: dayForResult, forecast_id: data.forecastId,
       })));
     }
 

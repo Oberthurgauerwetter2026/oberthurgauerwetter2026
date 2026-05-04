@@ -1,36 +1,32 @@
-## Ziel
+## Problem
 
-Der Tiefstwert, der bisher für "Morgen, Dienstag" berechnet wird (Tagesminimum aus den Open-Meteo-Daily-Daten von Tag 1), soll im Block "Heute Abend & Nacht" als Tiefstwert erscheinen — denn dieses Tagesminimum entsteht typischerweise in der Nacht/am frühen Morgen, also genau in dem Zeitfenster, das der Abendblock abdeckt.
+Das manuelle "Neu generieren" zeigt die Korrektur nicht, weil dafür `src/server/forecast.functions.ts` zuständig ist — nicht `forecast.auto.ts` (das nur der Cron nutzt). Beide Dateien enthalten Duplikate von `formatEveningNight`, `buildFirstEntryContext` und der Tag-Schleife.
 
-Im Block "Morgen, Dienstag" bleibt der Tiefstwert weiterhin weggelassen (bereits umgesetzt).
+## Umsetzung in `src/server/forecast.functions.ts`
 
-## Problem aktuell
+Dieselben drei Änderungen wie in `forecast.auto.ts` übertragen:
 
-- "Heute Abend & Nacht" berechnet `tmin` aus den **stündlichen** Temperaturen im Fenster (heute startHour → morgen 09:00). Das ergibt z. B. 14 °C.
-- "Morgen, Dienstag" hatte (aus den Open-Meteo-Daily-Daten) `tmin = 9 °C` — was eigentlich das nächtliche Minimum darstellt.
-- Beide Werte sind inkonsistent. Der korrekte nächtliche Tiefstwert (9 °C) muss in den Abendblock.
-
-## Umsetzung in `src/server/forecast.auto.ts`
-
-1. **`formatEveningNight` erweitern**
-   - Neuen Parameter `nextDayTminAvg: number | null` hinzufügen.
-   - Beim Berechnen von `tmin` (aktuell Zeile 421: `tmin: r1(Math.min(...hourlyTemps))`) das Minimum aus *beiden* Quellen nehmen:
+1. **`formatEveningNight` (Zeile 1672)**
+   - Dritten Parameter `nextDayTminAvg?: number | null` ergänzen.
+   - Endstunde des Fensters von **05:00** auf **09:00** verlängern (Zeile 1686), damit das nächtliche Minimum (typisch gegen Sonnenaufgang) im Fenster liegt.
+   - Auch `endHour = 5` (Zeile 1800) auf `9` setzen und die Window-Labels entsprechend anpassen (Hinweis "Tiefstwert liegt typischerweise gegen Sonnenaufgang").
+   - Im Return (Zeile 1810) `tmin` als Minimum aus `hourlyTemps` UND `nextDayTminAvg` berechnen:
      ```
-     tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null ? [nextDayTminAvg] : [])))
+     tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null && Number.isFinite(nextDayTminAvg) ? [nextDayTminAvg] : []))),
      ```
-   - Damit fließt das Daily-Tagesminimum von Tag 1 mit in den Tiefstwert ein.
 
-2. **`buildFirstEntryContext` anpassen**
-   - Vor dem Aufruf von `formatEveningNight(weather)` das Tag-1-Objekt holen (`formatDayData(weather, 1)`) und dessen `tmin?.avg` als zweiten Parameter übergeben.
-   - Damit nutzt der Abendblock dasselbe nächtliche Minimum, das vorher im "Morgen"-Block erschien.
+2. **`buildFirstEntryContext` (Zeile 1859)**
+   - Vor `formatEveningNight(weather)` das Daily-Tagesminimum für Tag 1 holen:
+     `const nextDay = useEvening ? formatDayData(weather, 1) : null;`
+     `const nextDayTmin = nextDay?.tmin?.avg ?? null;`
+   - Beim Aufruf mitgeben: `formatEveningNight(weather, undefined, nextDayTmin)`.
 
-3. **Keine Änderung** an:
-   - `runAutoForecast` (Tag-1-`tmin = null` bleibt wie umgesetzt).
-   - `forecast.functions.ts` (System-Prompt unverändert).
-   - Tagen 2–5 und Trendblock.
+3. **Tag-1-Schleife im "Neu generieren"-Handler (Zeile 2425 ff.)**
+   - Wenn `i === 1` und Abendmodus aktiv (`currentZurichHour() >= 12`):
+     - `day.tmin = null` setzen und `tmin_omitted_reason` ergänzen.
+     - User-Prompt um Hinweis erweitern: "Erwähne KEINEN Tiefstwert — bereits im Block 'Heute Abend & Nacht' genannt. Schreibe nur den Höchstwert."
 
-## Erwartetes Ergebnis
+## Nicht geändert
 
-- "Heute Abend & Nacht": Tiefstwert ≈ 9 °C (statt 14 °C).
-- "Morgen, Dienstag 05. Mai": kein Tiefstwert genannt, nur Höchstwert.
-- Konsistenter, einmalig genannter Nacht-Tiefstwert.
+- Tage 2–5, Trendblock, System-Prompt.
+- `forecast.auto.ts` (bereits umgesetzt).
