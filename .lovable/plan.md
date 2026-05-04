@@ -1,35 +1,66 @@
 ## Ziel
 
-Der Trend-Ausblick am Ende der Prognose soll nur noch **Tag 7 – 10** abdecken (statt aktuell Tag 6 – 10), weil Tag 6 bereits in der regulären Tagesschleife enthalten ist.
+Den **Nominal- / Telegrammstil** in den generierten Prognosetexten verlässlicher durchsetzen, sodass auch beim wiederholten Generieren („Regenerate") konsequent Substantiv-Phrasen statt Vollverb-Sätze entstehen.
 
-## Was sich ändert
+## Warum es heute schwankt
 
-Datei: `src/server/forecast.functions.ts`
+In `src/server/forecast.functions.ts`:
 
-An zwei Stellen (in `generateForecast` und `regenerateForecast`):
+1. **Modell**: `google/gemini-2.5-flash` — schnell, aber stilschwächer; lange Promptlisten werden nicht zuverlässig befolgt.
+2. **Keine `temperature`** im Request → Gateway-Default ist relativ hoch, dadurch hohe Streuung zwischen Generierungen.
+3. **Nominalstil-Regel** steht mitten in einer langen Liste gleichrangiger „verbindlicher Regeln" — keine Hervorhebung, keine Kontrolle.
+4. **Kein Post-Validator**: `enforceSkyConsistency` prüft nur Himmel/Wind/Temperatur, nicht den Stil. Verbalsätze werden also einfach durchgelassen.
 
-1. **Trend-Tage anpassen**
-   - Vorher: `[5, 6, 7, 8, 9].map((i) => withTopo(i))` → Tag 6 – 10
-   - Nachher: `[6, 7, 8, 9].map((i) => withTopo(i))` → Tag 7 – 10
+## Umsetzung (4 kleine, gezielte Änderungen)
 
-2. **Prompt-Text anpassen**
-   - Vorher: „kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10"
-   - Nachher: „kurzen Trend-Ausblick (3-4 Sätze) für die Tage 7-10"
+Alles in **einer** Datei: `src/server/forecast.functions.ts`.
 
-3. **Eintrag-Titel anpassen**
-   - Vorher: `title: "Trend Tag 6 – 10"`
-   - Nachher: `title: "Trend Tag 7 – 10"`
+### 1. Determinismus erhöhen — `temperature` setzen
+In `generateText` (ca. Zeile 1062-1068) dem Request-Body `temperature: 0.2` und `top_p: 0.9` hinzufügen.
 
-4. **Hinweistext im Degraded-Modus anpassen**
-   - Vorher: „… sowie Trend Tag 6 – 10 entfallen heute."
-   - Nachher: „… sowie Trend Tag 7 – 10 entfallen heute."
+### 2. Modell-Upgrade
+In `generateText` (Zeile 1063) `model: "google/gemini-2.5-flash"` → `model: "google/gemini-2.5-pro"`.
+- Wirkung: deutlich stabilere Stil-Adhärenz, gleicher Anbieter, gleiches API.
+- Kosten/Latenz: leicht höher, aber Generierung läuft ohnehin im Hintergrund.
+
+### 3. Nominalstil-Block prominenter platzieren
+In `DEFAULT_GENERAL_STYLE` (Zeile 1084-1102) den Nominalstil-Punkt aus der Liste herauslösen und als **eigenen, hervorgehobenen Block direkt unter der Überschrift** platzieren — mit klarem Label „OBERSTE STIL-REGEL (NOMINAL- / TELEGRAMMSTIL)" und 4-5 zusätzlichen Vorher/Nachher-Beispielen (Few-Shot direkt im Prompt). Die übrigen Regeln bleiben unverändert.
+
+### 4. Leichter Post-Validator + 1× Retry
+Neue Funktion `enforceNominalStyle(text: string): { text: string; violations: string[] }` direkt unter `enforceSkyConsistency` (ca. Zeile 138).
+Erkennt typische Verbal-Phrasen per Regex, z. B.:
+- `\b(scheint|scheinen)\b` (Sonne scheint)
+- `\bziehen?\s+\w+\s+auf\b` (Wolken ziehen auf)
+- `\bes\s+regnet\b`, `\bes\s+schneit\b`, `\bes\s+gewittert\b`
+- `\bder\s+Wind\s+weht\b`
+- `\bwir\s+erwarten\b`, `\bes\s+wird\s+\w+\b` (bereits verboten, jetzt aktiv geprüft)
+- `\bzeigt\s+sich\b`, `\bpräsentiert\s+sich\b`, `\bgestaltet\s+sich\b`
+
+Verwendung an den 3 Aufruf-Stellen von `generateText` (in `generateForecast`, `regenerateForecast`, `regenerateEntry`):
+```
+let body = await generateText(systemPrompt, userPrompt);
+const check = enforceNominalStyle(body);
+if (check.violations.length > 0) {
+  // 1× Retry mit verschärftem User-Prompt-Hinweis
+  body = await generateText(
+    systemPrompt,
+    userPrompt + `\n\nWICHTIG: Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${check.violations.join(", ")}). Schreibe ZWINGEND im Nominalstil — keine finiten Vollverben.`
+  );
+}
+body = enforceSkyConsistency(body, weatherData);
+```
+Nur **ein** Retry, um Latenz und Kosten zu begrenzen. Kein harter Abbruch — falls auch der Retry noch Verstösse enthält, wird der Text trotzdem gespeichert (besser ein leicht verbalisierter Text als gar keine Prognose).
 
 ## Was sich NICHT ändert
 
-- Keine DB-Migration, keine Schema-Änderungen.
-- Bestehende, bereits gespeicherte Prognosen bleiben unberührt (alter Titel „Trend Tag 6 – 10" bleibt dort erhalten — neue Prognosen tragen den neuen Titel).
-- Keine Änderung an der Tagesschleife (Tag 1 – 5 als Einzeltage), an der Anzahl Einträge (`position 1 – 7`) oder an der MOSMIX-Fallback-Logik.
+- Kein Schema-/DB-Change.
+- Keine Änderung an Tagesschleife, Trend-Tagen (Tag 7-10), MOSMIX-Fallback.
+- `enforceSkyConsistency` bleibt unverändert.
+- Bestehende gespeicherte Prognosen bleiben unangetastet.
+- `app_settings`-Override für Prompts funktioniert weiterhin (der hervorgehobene Nominal-Block landet nur im Default; eigene Templates bleiben gültig).
 
 ## Erwartetes Ergebnis
 
-Neue Prognosen enthalten am Ende einen Block „Trend Tag 7 – 10" mit 4 Tagen MOSMIX-/Open-Meteo-Daten. Die bisherige Doppelung zwischen Tag 6 (regulärer Eintrag) und Tag 6 (Beginn des Trends) entfällt.
+- Beim Erst- und beim wiederholten Generieren konsequent Telegramm-/Nominalstil.
+- Verbalsätze nahezu eliminiert (Regex-Validator + Retry fängt die häufigsten Fälle).
+- Generierungszeit pro Eintrag im Schnitt +1-3 s (Pro-Modell), bei Verstoss zusätzlich +1 Aufruf — akzeptabel im Hintergrund-Job.
