@@ -1119,6 +1119,137 @@ function diurnalFoehnPeak(weather: any, dateStr: string): string | null {
   return `Föhnfenster vor allem ${peak.label}`;
 }
 
+// ===== Layer 2: Hochnebel / Inversion =====
+//
+// Trigger:
+//  - cloudcover_low ≥ 80 % über mehrere Stunden
+//  - Inversion: T_850hPa > T_2m + 1.5 °C (Hindeutung auf abgesetzte Schicht)
+//  - Bodenwind schwach (windspeed_10m < 12 km/h im Mittel)
+//
+// Nebelobergrenze grob aus T_850hPa: in ICON-CH (Standorthöhe ~440 m)
+// entspricht 850 hPa rund 1500 m üM. Wir interpolieren linear zwischen
+// Boden (T_2m) und 850 hPa (T_850hPa) und finden die Höhe, bei der die
+// Temperatur den Bodenwert erreicht — dort ist meist die Nebelobergrenze.
+function _avgArr(arrs: Record<string, number[]>, idxs: number[]): number | null {
+  let sum = 0;
+  let n = 0;
+  for (const k of Object.keys(arrs)) {
+    const a = arrs[k];
+    for (const i of idxs) {
+      const v = a?.[i];
+      if (Number.isFinite(v)) {
+        sum += v as number;
+        n++;
+      }
+    }
+  }
+  return n > 0 ? sum / n : null;
+}
+
+function _collectHourly(weather: any, base: string): Record<string, number[]> {
+  const h = weather?.hourly;
+  const out: Record<string, number[]> = {};
+  if (!h) return out;
+  if (Array.isArray(h[base])) out["default"] = h[base];
+  for (const k of Object.keys(h)) {
+    if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+  }
+  return out;
+}
+
+function formatInversionHint(weather: any, day: any): string | null {
+  if (!day?.date) return null;
+  const h = weather?.hourly;
+  if (!h?.time) return null;
+
+  const cloudLow = _collectHourly(weather, "cloudcover_low");
+  const t850 = _collectHourly(weather, "temperature_850hPa");
+  const t2m = _collectHourly(weather, "temperature_2m");
+  const wind = _collectHourly(weather, "windspeed_10m");
+
+  if (Object.keys(cloudLow).length === 0 || Object.keys(t850).length === 0) return null;
+
+  const idxAll = (h.time as string[])
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => t.slice(0, 10) === day.date)
+    .map((x) => x.i);
+  if (idxAll.length < 12) return null;
+
+  // Tagphase 09–17 Uhr — Auflösungsfenster
+  const idxDay = idxAll.filter((i) => {
+    const hr = new Date((h.time as string[])[i]).getHours();
+    return hr >= 9 && hr <= 17;
+  });
+  // Morgenphase 06–10 Uhr — Persistenzfenster
+  const idxMorn = idxAll.filter((i) => {
+    const hr = new Date((h.time as string[])[i]).getHours();
+    return hr >= 6 && hr <= 10;
+  });
+
+  const cloudLowMorn = _avgArr(cloudLow, idxMorn);
+  const cloudLowDay = _avgArr(cloudLow, idxDay);
+  const t850Morn = _avgArr(t850, idxMorn);
+  const t2mMorn = _avgArr(t2m, idxMorn);
+  const windMorn = _avgArr(wind, idxMorn);
+
+  if (cloudLowMorn == null || cloudLowMorn < 80) return null;
+  if (t850Morn == null || t2mMorn == null) return null;
+  // Inversion: in 850 hPa wärmer als am Boden (oder zumindest nicht kühler als Standard-Lapse −7°C)
+  // Standardatmosphäre würde T_850 ≈ T_2m − 7°C erwarten. Inversion: T_850 > T_2m − 2°C.
+  const inversionStrength = t850Morn - t2mMorn;
+  if (inversionStrength < -2) return null;
+  if (windMorn != null && windMorn > 14) return null; // zu windig für Hochnebel-Persistenz
+
+  // Auflösungstendenz
+  let dissolution: string;
+  if (cloudLowDay != null && cloudLowDay < 50) {
+    dissolution = "Auflösung am Nachmittag wahrscheinlich";
+  } else if (cloudLowDay != null && cloudLowDay < 75) {
+    dissolution = "teilweise Auflösung am Nachmittag möglich";
+  } else {
+    dissolution = "ganztägig zähe Hochnebeldecke wahrscheinlich";
+  }
+
+  // Nebelobergrenze grob abschätzen.
+  // 850 hPa entspricht in der Standardatmosphäre ca. 1500 m üM.
+  // Wir interpolieren linear: bei welcher Höhe entspricht T(h) ≈ T_2m?
+  // Bei Inversion (T_850 > T_2m): die Inversion liegt zwischen Boden und 850 hPa.
+  // Annahme: Bodenstation ~440 m üM (Amriswil-Region).
+  const groundElev = 440;
+  const top850 = 1500;
+  let nebelgrenzeM: number | null = null;
+  if (inversionStrength > 0) {
+    // Lineare Interpolation: h, bei der T(h) = T_2m
+    // T(h) = T_2m + (T_850 − T_2m) * (h − groundElev) / (top850 − groundElev)
+    // Da T_850 > T_2m, wird die Temperatur nach oben hin grösser. Nebelobergrenze
+    // ist typisch dort, wo die Temperatur ihr Maximum erreicht — pragmatisch
+    // setzen wir sie auf ca. 60-80% des Weges Richtung 850 hPa.
+    nebelgrenzeM = Math.round((groundElev + (top850 - groundElev) * 0.7) / 50) * 50;
+  } else {
+    // Schwache Inversion: Nebelgrenze niedriger
+    nebelgrenzeM = Math.round((groundElev + (top850 - groundElev) * 0.4) / 50) * 50;
+  }
+
+  const parts = [
+    `Hochnebellage (Inversion ${inversionStrength >= 0 ? "+" : ""}${inversionStrength.toFixed(1)} °C zwischen Boden und 850 hPa)`,
+    `Nebelobergrenze um etwa ${nebelgrenzeM} m üM`,
+    dissolution,
+    "oberhalb der Nebelgrenze sonnig und mild, unterhalb trüb und kühl",
+  ];
+  return parts.join("; ") + ".";
+}
+
+function formatInversionTrendHint(weather: any, days: any[]): string | null {
+  if (!days?.length) return null;
+  let inversionDays = 0;
+  for (const d of days) {
+    if (formatInversionHint(weather, d)) inversionDays++;
+  }
+  if (inversionDays === 0) return null;
+  if (inversionDays >= 3) return "im Trend-Zeitraum mehrtägig zähe Hochnebellagen mit Inversion möglich (im Mittelland trüb, in den Höhen sonnig)";
+  return "im Trend-Zeitraum zeitweise Hochnebel mit Inversion möglich";
+}
+
 function formatFoehnHint(weather: any, day: any): string | null {
   if (!day?.date) return null;
   const dirAvg = day.wind_dir_avg;
