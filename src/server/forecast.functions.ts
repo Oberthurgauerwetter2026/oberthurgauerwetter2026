@@ -985,6 +985,94 @@ function formatThunderstormHint(weather: any, day: any): string | null {
   return parts.join(", ") + ".";
 }
 
+// ===== Quellwolken-Erkennung (Cumulus, ohne Gewitter-Trigger) =====
+// Klassifiziert tagsüber Cumulus-Bildung aus CAPE + cloudcover_low + Sonnenstunden.
+// Liefert null, wenn Gewitter-Logik greift (CAPE >= 800 oder Gewitter-Code) oder
+// wenn keine Quellwolken-Klasse passt.
+function formatCumulusHint(weather: any, day: any): string | null {
+  if (!day?.date) return null;
+  const capeMaxDay = maxCapeAcrossModels(day);
+  if (capeMaxDay != null && capeMaxDay >= 800) return null;
+  const { thunder } = hasStormCodeVote(day);
+  if (thunder) return null;
+  const sunshineDay = day?.sunshine_h?.avg ?? day?.sunshine_h ?? null;
+  if (typeof sunshineDay !== "number" || sunshineDay < 3) return null;
+
+  const h = weather?.hourly;
+  if (!h?.time) return null;
+  const times: string[] = h.time;
+  const idxs: number[] = [];
+  for (let i = 0; i < times.length; i++) {
+    if (typeof times[i] === "string" && times[i].startsWith(day.date)) idxs.push(i);
+  }
+  if (idxs.length < 12) return null;
+  const capeKeys = Object.keys(h).filter((k) => k.startsWith("cape_") || k === "cape");
+  const lowKeys = Object.keys(h).filter((k) => k.startsWith("cloudcover_low"));
+  if (!capeKeys.length || !lowKeys.length) return null;
+
+  type Win = { label: string; from: number; to: number; cape: number; low: number; n: number };
+  const windows: Win[] = [
+    { label: "am Vormittag", from: 9, to: 12, cape: 0, low: 0, n: 0 },
+    { label: "am Nachmittag", from: 12, to: 17, cape: 0, low: 0, n: 0 },
+    { label: "am Abend", from: 17, to: 20, cape: 0, low: 0, n: 0 },
+  ];
+  for (const i of idxs) {
+    const hour = parseInt(times[i].slice(11, 13), 10);
+    const w = windows.find((w) => hour >= w.from && hour < w.to);
+    if (!w) continue;
+    const capeVals: number[] = [];
+    for (const k of capeKeys) {
+      const v = (h[k] as Array<number | null>)[i];
+      if (typeof v === "number" && Number.isFinite(v)) capeVals.push(v);
+    }
+    const lowVals: number[] = [];
+    for (const k of lowKeys) {
+      const v = (h[k] as Array<number | null>)[i];
+      if (typeof v === "number" && Number.isFinite(v)) lowVals.push(v);
+    }
+    if (capeVals.length && lowVals.length) {
+      w.cape += capeVals.reduce((a, b) => a + b, 0) / capeVals.length;
+      w.low += lowVals.reduce((a, b) => a + b, 0) / lowVals.length;
+      w.n += 1;
+    }
+  }
+
+  type Hit = { label: string; klass: "harmlos" | "mediocris" | "congestus" };
+  const hits: Hit[] = [];
+  for (const w of windows) {
+    if (!w.n) continue;
+    const cape = w.cape / w.n;
+    const low = w.low / w.n;
+    if (low > 80) continue; // bedeckt — keine erkennbaren Einzelquellen
+    let klass: Hit["klass"] | null = null;
+    if (cape >= 300 && cape < 800 && low >= 25 && low <= 75) klass = "congestus";
+    else if (cape >= 100 && cape < 500 && low >= 20 && low <= 65) klass = "mediocris";
+    else if (cape >= 50 && cape < 300 && low >= 10 && low <= 45 && sunshineDay >= 5) klass = "harmlos";
+    if (klass) hits.push({ label: w.label, klass });
+  }
+  if (!hits.length) return null;
+
+  const phrase = (k: Hit["klass"]): string =>
+    k === "congestus" ? "mächtige Quellwolken, einzelne Schauer möglich"
+    : k === "mediocris" ? "kräftigere Quellbewölkung"
+    : "harmlose Quellwolken";
+
+  // Stärkste Klasse priorisieren, Schwerpunkt-Fenster nennen
+  const rank = { harmlos: 1, mediocris: 2, congestus: 3 } as const;
+  hits.sort((a, b) => rank[b.klass] - rank[a.klass]);
+  const top = hits[0]!;
+  const sameClass = hits.filter((h) => h.klass === top.klass);
+  if (sameClass.length >= 2) {
+    const labels = sameClass.map((h) => h.label.replace("am ", ""));
+    return `Schwerpunkt am ${labels.join(" und ")} ${phrase(top.klass)}.`;
+  }
+  return `${capitalize(top.label)} ${phrase(top.klass)}.`;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function formatThunderstormTrendHint(days: any[]): string | null {
   if (!days?.length) return null;
   let maxCape = 0;
