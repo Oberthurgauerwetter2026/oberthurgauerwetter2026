@@ -1,72 +1,87 @@
 ## Ziel
 
-Bodensee-Wassertemperatur als **bedingten** Hinweis-Layer integrieren, basierend auf einer **hartcodierten klimatologischen Tabelle** (Monatsmittel) — keine externe API nötig.
+Gewitter-Erkennung und -Stärke realistisch in den Prompt bringen — über CAPE als Convective-Indicator und Tagesgang aus den Hourly-Daten. Bedingter Layer wie AIFS und Bodensee: erscheint nur wenn relevant.
 
-Hinweise erscheinen nur bei:
-1. **Seerauch-Risiko** (Spätherbst/Winter): kalte Luft über deutlich wärmerem See.
-2. **Hitze-Dämpfung am Ufer** (Sommer): See > 22 °C → gedämpfte Nachtabkühlung.
-3. **Frühjahrs-Kälte am Ufer**: See < 8 °C → gedämpfte Erwärmung.
-
-Sonst: keine Erwähnung.
+Verifiziert per Test-Call: Open-Meteo liefert sowohl `cape` (hourly) als auch `cape_max` (daily) für **alle** verwendeten Modelle (auch die Schweizer) zurück. Keine zusätzlichen Requests, kein Quota-Impact.
 
 ## Umsetzung in `src/server/forecast.functions.ts`
 
-### 1. Klima-Lookup
-Neue Konstante `BODENSEE_CLIMATOLOGY_C` mit Monatsmitteln (Quelle: IGKB Langzeitmittel Obersee, Oberflächenwasser):
+### 1. Variablen erweitern
+- `DAILY_VARS`: zusätzlich `cape_max` (J/kg, Tagesmaximum)
+- `HOURLY_VARS`: zusätzlich `cape`
 
-| Monat | Jan | Feb | Mär | Apr | Mai | Jun | Jul | Aug | Sep | Okt | Nov | Dez |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| °C | 5 | 4 | 5 | 8 | 12 | 17 | 20 | 21 | 18 | 14 | 10 | 7 |
+### 2. Aggregation
+In `formatDayData` (~Zeile 1024):
+```ts
+const cape_max = aggregate(collectModelValuesTiered(weather, "cape_max", dayIndex));
+```
+in das Tagesobjekt aufnehmen (`cape_max`). Aggregation als Mittelwert ist hier sinnvoll, da CAPE eine kontinuierliche Grösse ist.
 
-Helper `getLakeTempForDate(dateIso: string): number` — lineare Interpolation zwischen Monatsmitten (z. B. 15. eines Monats = exakt Mittelwert, dazwischen interpoliert). Ergebnis auf 1 Dezimalstelle gerundet.
+### 3. Helper `formatThunderstormHint(weather, day, dayIndex)`
+Neu, nach den AIFS/Bodensee-Helpern. Returnt String oder `null`. Logik:
 
-### 2. Helper `formatLakeTemperatureHint(weather, day)`
-Returnt String oder `null`. Bedingungen:
+**Trigger:** Hinweis nur wenn mindestens eines erfüllt:
+- `day.cape_max?.avg` ≥ 500 J/kg
+- weathercode eines Modells in `[95, 96, 99]` (Gewitter) oder `[80, 81, 82]` (Schauer) bei gleichzeitig `cape_max ≥ 300` oder `precip ≥ 2 mm`
 
-- **Seerauch** (Tmin ≤ Wassertemp − 8 °C, Wind ≤ 10 km/h, klare/teilklare Nacht via cloud cover oder weather code):
-  → `"Bodensee saisonal ca. ${T}°C, Tmin ${dT}°C tiefer bei schwachem Wind und klarem Himmel: Verdunstungsnebel/Seerauch über dem See möglich, vom Ufer aus sichtbar."`
+**Stärke-Stufen (basierend auf max CAPE über Modelle):**
+| CAPE max | Label |
+|---|---|
+| 300–800 | "Gewitterneigung, einzelne lokale Schauer/Gewitter möglich" |
+| 800–1500 | "Gewitter wahrscheinlich, lokal kräftig mit Starkregen und Sturmböen" |
+| 1500–2500 | "kräftige Gewitter wahrscheinlich, Risiko für Hagel und Sturmböen" |
+| > 2500 | "schwere Gewitterlage, lokal erhöhtes Risiko für grossen Hagel, Sturmböen, intensiven Starkregen" |
 
-- **Hitze-Dämpfung** (Wassertemp > 22 °C UND Tmax ≥ 28 °C):
-  → `"Bodensee saisonal ca. ${T}°C — am Seeufer gedämpfte Nachtabkühlung, dort lokal mildere Tmin-Werte als landeinwärts."`
+**Tagesgang (nur Tag 0–1, wenn Hourly-Daten vorhanden):**
+- Aus `weather.hourly.cape_*` und `weather.hourly.weathercode_*` für den Tag drei Zeitfenster bilden: 06–12 (Vormittag), 12–18 (Nachmittag), 18–24 (Abend).
+- Pro Fenster: max CAPE (Mittel über Modelle), max weathercode-Gewitter-Vote.
+- Hinweis-Format: `"Gewitterrisiko vor allem ${zeitfenster}"` — wo zeitfenster = "am Nachmittag", "am Abend", "von Mittag bis in den Abend", etc.
+- Wenn alle Fenster ähnliches CAPE haben (Diff < 30 %): kein Tagesgang-Zusatz.
 
-- **Frühjahrs-Kälte** (Wassertemp < 8 °C UND Tmax ≥ 18 °C):
-  → `"Bodensee noch kalt (saisonal ca. ${T}°C) — am Seeufer gedämpfte Erwärmung, leicht kühlere Tmax als wenige km landeinwärts."`
-
-- Sonst: `null`.
-
-Wichtig: Formulierung **"saisonal ca."** macht klar, dass es ein Klima-Mittel ist, kein Live-Messwert.
-
-### 3. Helper `formatLakeTemperatureTrendHint(weather)`
-Für Trend-Block (Tag 6–10): nutzt das Datum **Mitte des Trend-Zeitraums** für die Klima-Lookup. Liefert nur dann String, wenn der Saisonwert ≥ 22 °C oder ≤ 5 °C ist (klare Saison-Extremwerte). Sonst `null`.
+**Beispiel-Outputs:**
+- Tag 1, CAPE 1200, Maximum nachmittags: `"Konvektiv labile Lage (CAPE ca. 1200 J/kg) — kräftige Gewitter wahrscheinlich, lokal mit Starkregen und Sturmböen, Schwerpunkt am Nachmittag und frühen Abend."`
+- Tag 4, CAPE 600: `"Konvektiv leicht labile Lage — Gewitterneigung, einzelne lokale Schauer und Gewitter möglich."`
+- Tag 6, CAPE 200, Sommer: `null` (kein Hinweis).
 
 ### 4. System-Prompt-Erweiterung
-Neuer Abschnitt nach AIFS-Block (~Zeile 1356):
+Neuer Abschnitt nach BODENSEE-Block (~Zeile 1448):
 ```
-=== BODENSEE-WASSERTEMPERATUR ===
-Wenn im User-Prompt ein Block 'Bodensee-Hinweis' enthalten ist: Übernimm den Hinweis sinngemäss in den Fliesstext (nicht wörtlich kopieren). Erwähne ihn maximal einmal pro Eintrag, dezent und ortsbezogen ("am Seeufer", "über dem See", "in Seenähe"). Niemals erfinden — nur nennen, wenn der Block explizit vorhanden ist. Die Wassertemperatur ist ein klimatologischer Saisonwert, nicht ein aktueller Messwert — formuliere entsprechend ("rund", "saisonal", "typischerweise").
+=== GEWITTER-HINWEIS ===
+Wenn im User-Prompt ein Block 'Gewitter-Hinweis' enthalten ist: Übernimm die Stärke- und Tagesgang-Aussage sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende die Pflicht-Vokabular-Begriffe ("Schaueraktivität", "in Begleitung von Gewitter", "kräftige Böen", "Starkregen"). Bei kräftigen/schweren Gewitterlagen klar benennen ("kräftige Gewitter wahrscheinlich", "Hagel- und Sturmböenrisiko"). CAPE-Werte selbst NICHT nennen — nur die qualitative Aussage. Wenn kein Block vorhanden ist, KEINE Gewitter-Aussagen über das hinaus, was Niederschlag und weathercode bereits hergeben.
 ```
 
 ### 5. Prompt-Injection
-In `generateForecast` und `regenerateForecast` parallel zu den AIFS-Blöcken:
+An allen 6 bestehenden Stellen (parallel zu `aifsBlock` und `lakeBlock`):
 ```ts
-const lakeHint = formatLakeTemperatureHint(weather, day);
-const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
+const stormHint = formatThunderstormHint(weather, day, dayIndex);
+const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
 ```
-Analog für Trend-Block.
+Dann in den `userPrompt`-Template-String anhängen.
+
+Für den Trend-Block (Tag 6–10): einfacher — schaut über die Trend-Tage, ob mindestens ein Tag CAPE ≥ 800 hat, dann kompakter Hinweis "im Trend-Zeitraum zeitweise erhöhte Gewitterneigung". Sonst `null`.
 
 ## Was nicht geändert wird
 
-- Keine externe API, kein Cache, keine DB-Migration, kein Settings-UI.
-- Multi-Modell-Mittelwert, AIFS, Topografie, Güttingen-Bias, MOSMIX, Radar bleiben unverändert.
+- weathercode-Aggregation (Mittelwert) bleibt — der neue Helper kompensiert die Glättung über CAPE und Per-Modell-Code-Vote, ohne den bestehenden Datenfluss zu brechen.
+- Multi-Modell-Mittelwert, AIFS, Bodensee, Topografie, Güttingen-Bias, MOSMIX, Radar, Settings-UI: unverändert.
+- Keine DB-Migration, kein Schema-Change, kein Settings-Toggle.
+
+## Quota-/Performance-Impact
+
+- **0 zusätzliche externe Requests**. CAPE-Variablen werden in den bestehenden Multi-Modell-Calls mitgeliefert.
+- Antwort wird minimal grösser (~10 % mehr JSON pro Call, vernachlässigbar).
+- Bei Modellen die CAPE nicht liefern: `null` in `by_model`, wird im `aggregate()` einfach ignoriert — fail-soft.
 
 ## Akzeptanzkriterien
 
-- Sommer-Normaltag (Juli, Tmax 24 °C, Tmin 13 °C): kein Hinweis (Hitze-Schwelle nicht erreicht).
-- November-Strahlungstag (Tmin 1 °C, Wind 5 km/h, klar): Klima-See ~10 °C → 9 °C Differenz → Seerauch-Hinweis erscheint.
-- Hitzetag (Juli, Tmax 32 °C): Klima-See 20 °C → knapp unter Schwelle, kein Hinweis. August-Hitzetag (Tmax 32 °C): See 21 °C → knapp unter 22 °C, kein Hinweis. **Anpassung**: Schwelle auf > 20 °C senken, damit Sommer-Hitzetage sicher den Hinweis triggern.
-- April-Föhntag (Tmax 22 °C): Klima-See 8 °C → Frühjahrs-Hinweis erscheint.
+- Stabiler Hochdrucktag (CAPE 50, Sonne): kein Gewitter-Hinweis.
+- Sommer-Tag mit isolierten Wärmegewittern (CAPE 1200, weathercode 95 bei einem Modell, Hourly-Maximum nachmittags): Hinweis "kräftige Gewitter wahrscheinlich, Schwerpunkt am Nachmittag".
+- Frontdurchgang mit grossräumigem Niederschlag und Gewitter (CAPE 800, weathercode 95 bei mehreren Modellen): Hinweis "Gewitter wahrscheinlich, lokal kräftig".
+- Schwere Lage (CAPE 2800): Hinweis "schwere Gewitterlage, Hagel- und Sturmböenrisiko".
+- Tag 5+ ohne Hourly: nur tageszeitloser Stärke-Hinweis, kein erfundener Tagesgang.
 
 ## Risiken
 
-- **Klima-Mittel kann in Realität ±3 °C abweichen** (kalter Frühling, warmer Herbst). Da wir nur Schwellenwerte nutzen und die Formulierung "saisonal ca." vorgibt, ist das akzeptabel — der Hinweis bleibt qualitativ korrekt, nur das Risiko falsch-negativer/positiver Trigger steigt leicht.
-- Später nachrüstbar: sobald eine Live-API verfügbar wird, kann `getLakeTempForDate` durch einen API-Call ersetzt werden, ohne dass die Konsumenten-Logik (`formatLakeTemperatureHint` etc.) geändert werden muss.
+- **CAPE allein ist nicht ausreichend** für eine echte Gewittervorhersage (es fehlen Lifted Index, Cap, Wind-Shear). Für eine Allwetter-Konsumenten-Prognose ist CAPE + weathercode-Vote aber ein klarer Sprung gegenüber dem Status quo.
+- **Falsch-positive Hinweise** an stabilen Tagen mit hohem CAPE aber starkem Cap (z. B. Föhnlagen): durch Kombination CAPE ≥ 500 **und** Niederschlagssignal/weathercode reduziert, aber nicht eliminiert. Bei Beobachtung nachjustierbar (Schwellenwerte sind Konstanten im Helper).
+- **Glättung über Modelle** kann starke konvektive Signale eines Modells (z. B. ICON-CH1) durch ruhigere Modelle (IFS) verwässern. Daher der **Per-Modell-weathercode-Vote**: wenn ≥1 Modell explizit Gewitter sieht und CAPE den Energiekontext bestätigt, wird's gemeldet.
