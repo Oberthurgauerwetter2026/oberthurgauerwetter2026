@@ -1884,32 +1884,45 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
 // ===== AI text generation =====
 async function callGemini(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const geminiKey = process.env.GEMINI_API_KEY!;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
-  let res: Response;
-  try {
-    res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-          generationConfig: { temperature: 0.2, topP: 0.9 },
-        }),
-      },
-    );
-  } finally {
+  const delays = [0, 1500, 4000, 8000]; // 4 Versuche
+  let lastErr = "";
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+        {
+          method: "POST",
+          signal: controller.signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+            generationConfig: { temperature: 0.2, topP: 0.9 },
+          }),
+        },
+      );
+    } catch (e: any) {
+      lastErr = `Netzwerk: ${e?.message ?? e}`;
+      clearTimeout(timeout);
+      continue;
+    }
     clearTimeout(timeout);
+    if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht. Bitte später erneut versuchen.");
+    if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
+    if (res.status === 503 || res.status === 500 || res.status === 502 || res.status === 504) {
+      lastErr = `${res.status}: ${await res.text()}`;
+      continue; // retry
+    }
+    if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
+    return text.trim();
   }
-  if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht. Bitte später erneut versuchen.");
-  if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
-  if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
-  return text.trim();
+  throw new Error(`Gemini überlastet (mehrfach 5xx). Letzter Fehler: ${lastErr}`);
 }
 
 async function callLovableAI(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
