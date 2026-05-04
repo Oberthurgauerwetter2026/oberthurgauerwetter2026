@@ -1602,6 +1602,9 @@ export function buildSystemPrompt(settings: any): string {
     "=== BODENSEE-WASSERTEMPERATUR ===",
     "Wenn im User-Prompt ein Block 'Bodensee-Hinweis' enthalten ist: Übernimm den Hinweis sinngemäss in den Fliesstext (nicht wörtlich kopieren). Erwähne ihn maximal einmal pro Eintrag, dezent und ortsbezogen ('am Seeufer', 'über dem See', 'in Seenähe'). Niemals erfinden — nur nennen, wenn der Block explizit vorhanden ist. Die Wassertemperatur ist ein klimatologischer Saisonwert, kein aktueller Messwert — formuliere entsprechend ('rund', 'saisonal', 'typischerweise').",
     "",
+    "=== GEWITTER-HINWEIS ===",
+    "Wenn im User-Prompt ein Block 'Gewitter-Hinweis' enthalten ist: Übernimm die Stärke- und Tagesgang-Aussage sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende dabei das Pflicht-Vokabular ('Schaueraktivität', 'in Begleitung von Gewitter', 'kräftige Böen', 'Starkregen'). Bei kräftigen oder schweren Gewitterlagen klar benennen ('kräftige Gewitter wahrscheinlich', 'Hagel- und Sturmböenrisiko', 'lokal heftige Entwicklungen'). Den CAPE-Wert NIEMALS nennen, auch nicht 'konvektiv labile Lage' wörtlich übernehmen — nur die qualitative Aussage in natürliche Wettersprache überführen. Tagesgang-Hinweise ('Schwerpunkt am Nachmittag') in den Tagesablauf einbauen. Wenn KEIN solcher Block vorhanden ist, KEINE Aussagen zu Gewittern machen, die über das hinausgehen, was Niederschlag und Wettercode ohnehin nahelegen.",
+    "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
   ].join("\n");
