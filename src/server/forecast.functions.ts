@@ -2267,7 +2267,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
       const foehnHint = formatFoehnHint(weather, firstData);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+      const radarHint = formatRadarNowHint(radarSnapshot);
+      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
+      const invHint = formatInversionHint(weather, firstData);
+      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -2290,7 +2294,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
       const foehnHint = formatFoehnHint(weather, day);
       const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+      const radarHint = i === 1 ? formatRadarNowHint(radarSnapshot) : null;
+      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
+      const invHint = formatInversionHint(weather, day);
+      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
@@ -2308,7 +2316,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
         const foehnTrend = formatFoehnTrendHint(trendDays);
         const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}`;
+        const invTrend = formatInversionTrendHint(weather, trendDays);
+        const invBlock = invTrend ? `\n\nHochnebel-Hinweis: ${invTrend}` : "";
+        const uncHint = formatUncertaintyHint(ensembleData, trendDays);
+        const uncBlock = uncHint ? `\n\nUnsicherheit (Ensemble): ${uncHint}` : "";
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${invBlock}${uncBlock}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
