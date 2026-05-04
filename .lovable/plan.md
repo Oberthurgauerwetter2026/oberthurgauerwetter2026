@@ -1,58 +1,53 @@
-# Quellwolken-Erkennung (Cumulus) im Tagestext
+## Ziel
+Umstellung der KI-Textgenerierung vom Lovable AI Gateway auf die **Google Gemini API direkt** (Free-Tier nutzbar, ~kostenlos für 1× täglich Forecast).
 
-Ergänzt eine eigene Klassifikation für Quellbewölkung, getrennt vom bestehenden Gewitter-Hinweis. Erscheint als eigener Satz im Tagestext (z. B. „nachmittags Bildung harmloser Quellwolken").
+## Was sich ändert
 
-## Datengrundlage (alles bereits vorhanden)
+Beide `generateText`-Funktionen rufen aktuell `https://ai.gateway.lovable.dev/v1/chat/completions` mit `LOVABLE_API_KEY` und Modellen `google/gemini-2.5-pro` bzw. `google/gemini-2.5-flash` auf.
 
-In `src/server/forecast.functions.ts` werden bereits abgefragt:
-- `cape_max` (daily) und `cape` (hourly) — Z. 122 / 127
-- `cloudcover_low` (hourly) — Z. 129
-- `sunshine_duration` (daily/hourly) — Z. 119 / 127
-- Hourly-Tagesfenster-Logik existiert in `formatThunderstormHint` (Z. 904 ff.)
+Neu: Aufruf des nativen Google-Endpunkts `https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent` mit einem neuen Secret `GEMINI_API_KEY`.
 
-Keine Erweiterung der Open-Meteo-Abfrage nötig.
+**Fallback-Logik:** Wenn `GEMINI_API_KEY` gesetzt ist → Google direkt. Sonst → Lovable AI Gateway wie bisher. So bleibst du flexibel falls das Free-Tier mal überschritten wird.
 
-## Klassifikationslogik
+## Umzusetzende Schritte
 
-Neue Funktion `formatCumulusHint(weather, day): string | null` mit Tagesgang-Auswertung (Vormittag / Nachmittag / Abend, analog `formatThunderstormHint`):
+1. **API-Key besorgen** (du, einmalig):
+   - https://aistudio.google.com/app/apikey öffnen
+   - "Create API key" → in einem Google-Cloud-Projekt erstellen
+   - Schlüssel kopieren
 
-Pro Fenster gemittelt über Modelle:
-- `capeAvg` (aus stündlichen `cape_*`-Keys)
-- `cloudLowAvg` (aus stündlichen `cloudcover_low_*`-Keys)
-- `sunshineDay` aus daily `sunshine_h`
+2. **Secret `GEMINI_API_KEY` hinzufügen** (Lovable fragt dich danach via add_secret-Tool)
 
-Klassen (Bedingungen müssen alle im jeweiligen Fenster erfüllt sein):
+3. **Neue Hilfsfunktion `callGemini()`** in beiden Dateien:
+   - `src/server/forecast.functions.ts` (Z. 1885–1917)
+   - `src/server/forecast.auto.ts` (Z. 491–505)
+   
+   Mappt das OpenAI-Format (system/user messages) auf Gemini-REST-Format:
+   - `systemInstruction.parts[0].text` ← systemPrompt
+   - `contents[0].parts[0].text` ← userPrompt
+   - `generationConfig.temperature` 0.2 / `topP` 0.9
+   - Antwort aus `candidates[0].content.parts[0].text` extrahieren
 
-| Klasse | CAPE | Cloudcover-Low | Sonne (Tag) | Output-Bezeichnung |
-|---|---|---|---|---|
-| Schönwetter-Cumulus | 50–300 | 10–40 % | ≥ 5 h | „harmlose Quellwolken" |
-| Cumulus mediocris | 100–500 | 25–60 % | ≥ 4 h | „kräftigere Quellbewölkung" |
-| Cumulus congestus | 300–800 | 30–70 % | ≥ 3 h | „mächtige Quellwolken, einzelne Schauer möglich" |
+4. **Modell-Mapping**:
+   - `google/gemini-2.5-pro` → `gemini-2.5-pro`
+   - `google/gemini-2.5-flash` → `gemini-2.5-flash`
 
-Abbruchbedingungen (Funktion gibt `null` zurück):
-- CAPE ≥ 800 ODER Gewitter-Trigger aktiv → bestehender Gewitter-Hinweis übernimmt
-- Cloudcover-Low > 80 % im Hauptfenster → bedeckt, keine erkennbaren Einzelquellen
-- Kein Fenster erfüllt eine Klasse → kein Satz
+5. **Fehlerbehandlung**:
+   - 429 (Rate-Limit Free-Tier) → freundliche Meldung „Tageslimit erreicht, bitte später"
+   - 403/401 → „API-Key ungültig"
+   - Bei Netzwerk-/sonstigem Fehler → Fallback auf Lovable AI Gateway versuchen
 
-Output-Beispiele:
-- „Am Nachmittag Bildung harmloser Quellwolken."
-- „Tagsüber kräftigere Quellbewölkung, am Nachmittag mächtige Quellwolken mit einzelnen Schauern möglich."
+6. **`generateText`-Wrapper** prüft `process.env.GEMINI_API_KEY` und ruft entsprechend Google direkt oder Lovable AI auf — keine weiteren Code-Änderungen nötig (selbe Signatur).
 
-## Integration in Tagestext
+## Hinweise zu Free-Tier-Limits (Stand Anfang 2026)
+- **Gemini 2.5 Flash**: ~10 RPM, 250 Requests/Tag — locker ausreichend für deinen Use Case
+- **Gemini 2.5 Pro**: ~5 RPM, 100 Requests/Tag — auch ausreichend, aber knapper bei manueller Mehrfachgenerierung
+- Daten werden im Free-Tier von Google zum Modelltraining verwendet — bei Bedarf kostenpflichtigen Tier aktivieren
 
-Analog zum bestehenden `stormBlock` an 4 Stellen (Z. 2099, 2126, 2267, 2294):
+## Geänderte Dateien
+- `src/server/forecast.functions.ts` — `generateText` erweitern
+- `src/server/forecast.auto.ts` — `generateText` erweitern
 
-```ts
-const cumulusHint = formatCumulusHint(weather, day);
-const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
-```
-
-Reihenfolge im Prompt: erst `cumulusBlock`, dann `stormBlock` (Quellwolken sind die Vorstufe — ergibt natürliche Lesefolge). Beide schliessen sich faktisch aus, da Cumulus-Funktion bei CAPE ≥ 800 / Gewitter-Trigger `null` liefert.
-
-## System-Prompt-Ergänzung
-
-Im Senken-/Vokabular-Block kurzer Hinweis: Wenn `Quellwolken: …` im Datenblock steht, soll der Tagestext den Hinweis sinngemäss übernehmen (nicht 1:1 kopieren), aber Begriffe wie „Quellwolken / Quellbewölkung / Cumulus" verwenden — keine generischen Phrasen wie „Wolken bilden sich".
-
-## Geänderte Datei
-
-- `src/server/forecast.functions.ts` — neue Funktion `formatCumulusHint` (~60 Zeilen), 4 Integrationspunkte, kleine Prompt-Ergänzung
+## Nicht geändert
+- Prompts, Forecast-Logik, UI, Datenbank — alles bleibt identisch
+- Lovable AI Gateway bleibt als Fallback erhalten
