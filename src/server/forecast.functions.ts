@@ -1212,27 +1212,24 @@ export const generateForecast = createServerFn({ method: "POST" })
     const locationName = settings?.location_name ?? "Amriswil";
     const promptTemplate = buildSystemPrompt(settings);
 
-    const weather = await fetchWeather(
-      lat, lon,
-      settings?.models_shortterm ?? undefined,
-      settings?.models_midterm ?? undefined,
-      settings?.models_longterm ?? undefined,
-    );
-    const topo = await ensureTopography(supabase, settings);
-    const stationBiases = await getOrSetCache("stations:bias", buildStationBiases);
-
     // ICON-MOS (DWD MOSMIX) für Tag 0 + 1 holen, sofern aktiviert.
     // MOSMIX ist bereits statistisch gegen Stationsmessungen kalibriert,
     // daher entfällt für diese Tage die eigene Stations-Bias-Korrektur.
     const mosmixEnabled = settings?.mosmix_enabled !== false;
     const mosmixStations = (settings?.mosmix_stations ?? "10935,10929")
       .split(",").map((s: string) => s.trim()).filter(Boolean);
-    const mosmixByDate = mosmixEnabled
-      ? await fetchMosmixShortTerm(mosmixStations).catch((e) => {
-          console.warn("MOSMIX failed, falling back to Open-Meteo only:", e);
-          return new Map<string, any>();
-        })
-      : new Map<string, any>();
+
+    const { weather, mosmixByDate, degraded } = await fetchWeatherWithFallback(
+      lat, lon,
+      settings?.models_shortterm ?? undefined,
+      settings?.models_midterm ?? undefined,
+      settings?.models_longterm ?? undefined,
+      mosmixEnabled, mosmixStations,
+    );
+    const topo = await ensureTopography(supabase, settings);
+    const stationBiases = degraded
+      ? []
+      : await getOrSetCache("stations:bias", buildStationBiases);
 
     const buildDay = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
