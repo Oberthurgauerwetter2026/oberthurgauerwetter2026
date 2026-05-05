@@ -1,58 +1,26 @@
-# Quellwolken-Erkennung (Cumulus) im Tagestext
+## Ziel
 
-Ergänzt eine eigene Klassifikation für Quellbewölkung, getrennt vom bestehenden Gewitter-Hinweis. Erscheint als eigener Satz im Tagestext (z. B. „nachmittags Bildung harmloser Quellwolken").
+Der Trend-Block soll die **Grosswetterlage** für Tag 6–10 umreissen — bewusst allgemeiner und weniger detailliert als die Tagesprognosen.
 
-## Datengrundlage (alles bereits vorhanden)
+## Änderung
 
-In `src/server/forecast.functions.ts` werden bereits abgefragt:
-- `cape_max` (daily) und `cape` (hourly) — Z. 122 / 127
-- `cloudcover_low` (hourly) — Z. 129
-- `sunshine_duration` (daily/hourly) — Z. 119 / 127
-- Hourly-Tagesfenster-Logik existiert in `formatThunderstormHint` (Z. 904 ff.)
+In `src/server/forecast.functions.ts` an beiden Stellen (Zeile 1388 in `generateForecast`, Zeile 1515 in `regenerateForecast`) den User-Prompt erweitern:
 
-Keine Erweiterung der Open-Meteo-Abfrage nötig.
-
-## Klassifikationslogik
-
-Neue Funktion `formatCumulusHint(weather, day): string | null` mit Tagesgang-Auswertung (Vormittag / Nachmittag / Abend, analog `formatThunderstormHint`):
-
-Pro Fenster gemittelt über Modelle:
-- `capeAvg` (aus stündlichen `cape_*`-Keys)
-- `cloudLowAvg` (aus stündlichen `cloudcover_low_*`-Keys)
-- `sunshineDay` aus daily `sunshine_h`
-
-Klassen (Bedingungen müssen alle im jeweiligen Fenster erfüllt sein):
-
-| Klasse | CAPE | Cloudcover-Low | Sonne (Tag) | Output-Bezeichnung |
-|---|---|---|---|---|
-| Schönwetter-Cumulus | 50–300 | 10–40 % | ≥ 5 h | „harmlose Quellwolken" |
-| Cumulus mediocris | 100–500 | 25–60 % | ≥ 4 h | „kräftigere Quellbewölkung" |
-| Cumulus congestus | 300–800 | 30–70 % | ≥ 3 h | „mächtige Quellwolken, einzelne Schauer möglich" |
-
-Abbruchbedingungen (Funktion gibt `null` zurück):
-- CAPE ≥ 800 ODER Gewitter-Trigger aktiv → bestehender Gewitter-Hinweis übernimmt
-- Cloudcover-Low > 80 % im Hauptfenster → bedeckt, keine erkennbaren Einzelquellen
-- Kein Fenster erfüllt eine Klasse → kein Satz
-
-Output-Beispiele:
-- „Am Nachmittag Bildung harmloser Quellwolken."
-- „Tagsüber kräftigere Quellbewölkung, am Nachmittag mächtige Quellwolken mit einzelnen Schauern möglich."
-
-## Integration in Tagestext
-
-Analog zum bestehenden `stormBlock` an 4 Stellen (Z. 2099, 2126, 2267, 2294):
-
+**Vorher:**
 ```ts
-const cumulusHint = formatCumulusHint(weather, day);
-const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
+`Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`
 ```
 
-Reihenfolge im Prompt: erst `cumulusBlock`, dann `stormBlock` (Quellwolken sind die Vorstufe — ergibt natürliche Lesefolge). Beide schliessen sich faktisch aus, da Cumulus-Funktion bei CAPE ≥ 800 / Gewitter-Trigger `null` liefert.
+**Nachher:**
+```ts
+`Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}`
+```
 
-## System-Prompt-Ergänzung
+## Nicht geändert
 
-Im Senken-/Vokabular-Block kurzer Hinweis: Wenn `Quellwolken: …` im Datenblock steht, soll der Tagestext den Hinweis sinngemäss übernehmen (nicht 1:1 kopieren), aber Begriffe wie „Quellwolken / Quellbewölkung / Cumulus" verwenden — keine generischen Phrasen wie „Wolken bilden sich".
+- Datenbasis (`trendDays = [6,7,8,9,10]`), Titel, Position, Nominalstil-Validator, System-Prompt-Template — alles unberührt.
+- Tagesprognosen 1–5 bleiben so detailliert wie bisher.
 
-## Geänderte Datei
+## Dateien
 
-- `src/server/forecast.functions.ts` — neue Funktion `formatCumulusHint` (~60 Zeilen), 4 Integrationspunkte, kleine Prompt-Ergänzung
+- `src/server/forecast.functions.ts` — 2 identische Prompt-Edits

@@ -6,51 +6,6 @@ import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
 import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
-import { fetchEnsembleData, formatUncertaintyHint, type EnsembleData } from "./uncertainty.server";
-
-// Formuliert eine Kurzbeschreibung des aktuellen Radar-Nowcasts für den
-// System-Prompt. Liefert null, wenn keine relevante Aussage möglich ist
-// (Lage trocken, keine signifikante Differenz Beobachtung/Modell, kein Nowcast).
-// Diese Aussage hat im Prompt Vorrang vor der Modellprognose für die nächsten 2-3 h.
-function formatRadarNowHint(radar: RadarSnapshot | null): string | null {
-  if (!radar) return null;
-  const obs1 = radar.observed.last_1h_mm;
-  const obs3 = radar.observed.last_3h_mm;
-  const next2 = radar.forecast_next_2h.next_2h_mm;
-  const modelExp = radar.model_expected_past_3h_mm;
-
-  const activeNow = obs1 >= 0.2;
-  const recentlyWet = obs3 >= 0.5;
-  const incoming = next2 >= 0.3;
-  const modelMiss =
-    modelExp != null && (obs3 >= 0.3 || modelExp >= 0.3) &&
-    Math.abs(obs3 - modelExp) >= 0.5;
-
-  // Lage trocken UND nichts im Anzug UND Modell stimmt → kein Hinweis nötig
-  if (!activeNow && !recentlyWet && !incoming && !modelMiss) return null;
-
-  const parts: string[] = [];
-  if (activeNow) {
-    parts.push(`aktuell Niederschlag aktiv (${obs1.toFixed(1)} mm in der letzten Stunde, ${obs3.toFixed(1)} mm in den letzten 3 h)`);
-  } else if (recentlyWet) {
-    parts.push(`zuletzt Niederschlag (${obs3.toFixed(1)} mm in den letzten 3 h), aktuell abklingend`);
-  }
-  if (incoming) {
-    parts.push(`Radar-Nowcast erwartet ${next2.toFixed(1)} mm in den nächsten 2 h`);
-  } else if (!activeNow && !recentlyWet) {
-    parts.push("Radar zeigt aktuell keinen Niederschlag im Perimeter");
-  } else {
-    parts.push("Radar-Nowcast: nachlassend bis trocken in den nächsten 2 h");
-  }
-  if (modelMiss && modelExp != null) {
-    if (obs3 > modelExp) {
-      parts.push(`Modell hat unterschätzt (Modell-Erwartung 3 h: ${modelExp.toFixed(1)} mm)`);
-    } else {
-      parts.push(`Modell hat überschätzt (Modell-Erwartung 3 h: ${modelExp.toFixed(1)} mm)`);
-    }
-  }
-  return parts.join("; ") + ".";
-}
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
@@ -119,18 +74,8 @@ const DAILY_VARS = [
   "sunshine_duration",
   "weathercode",
   "cloudcover_mean",
-  "cape_max",
-  "wind_gusts_10m_max",
 ];
-const HOURLY_VARS = [
-  "temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m",
-  "weathercode", "sunshine_duration", "cape", "wind_gusts_10m", "relative_humidity_2m",
-  // Layer 2: Höhenwind & Hochnebel
-  "cloudcover_low",
-  "temperature_850hPa",
-  "wind_speed_700hPa", "wind_direction_700hPa",
-  "geopotential_height_500hPa",
-];
+const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration"];
 
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
@@ -381,7 +326,7 @@ function applyTopography(
     lapse_rate: lapse,
     tmin_cold,
     tmin_ridge,
-    tmin_cold_label: classification === "strahlungsnacht" ? "Senken im Aach- und Sittertal" : "Tiefste Lagen (Bodenseeufer)",
+    tmin_cold_label: classification === "strahlungsnacht" ? "Senken (Hudelmoos, Riedflächen)" : "Tiefste Lagen (Bodensee-Ufer)",
     tmin_ridge_label: "Höhenlagen (Hügelzüge)",
     tmax_warm,
     tmax_warm_label: "Sonnige Lagen am Bodensee-Ufer",
@@ -655,738 +600,6 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
   }
 }
 
-// ===== ECMWF AIFS (KI-Wettermodell) als separater Vergleichs-Layer =====
-// Holt AIFS-Daten in einem eigenen Open-Meteo-Call. AIFS fliesst NICHT in den
-// Multi-Modell-Mittelwert ein, sondern wird in `formatAifsComparison` separat
-// gegen den klassischen Mittelwert verglichen.
-const AIFS_MODEL = "ecmwf_aifs025_single";
-async function fetchAifsTimeline(lat: number, lon: number) {
-  return getOrSetCache(
-    `om:aifs:${lat.toFixed(4)},${lon.toFixed(4)}`,
-    () => fetchOpenMeteoOptional(lat, lon, AIFS_MODEL, false),
-  );
-}
-
-// Liest einen AIFS-Wert für eine Variable + Tag. AIFS liefert die Werte in
-// Open-Meteo als unsuffigierte Arrays (nur 1 Modell), oder mit Modell-Suffix.
-function readAifsValue(aifs: any, varName: string, dayIndex: number): number | null {
-  const d = aifs?.daily;
-  if (!d) return null;
-  const direct = d[varName]?.[dayIndex];
-  if (direct != null && Number.isFinite(direct)) return direct;
-  const suffixed = d[`${varName}_${AIFS_MODEL}`]?.[dayIndex];
-  if (suffixed != null && Number.isFinite(suffixed)) return suffixed;
-  return null;
-}
-
-// Sucht den Tagesindex in AIFS, der zum Datum eines klassischen Tags passt.
-function findAifsDayIndex(aifs: any, dateStr: string): number {
-  const times: string[] = aifs?.daily?.time ?? [];
-  return times.findIndex((t) => t === dateStr);
-}
-
-// Vergleicht AIFS gegen den klassischen Mittelwert für einen einzelnen Tag.
-// Liefert einen kompakten String, oder null wenn keine signifikante Abweichung
-// (Δtmax < 1.5°C UND Δprecip < 2 mm UND keine Niederschlagskategorie-Änderung).
-function formatAifsComparison(weather: any, day: any): string | null {
-  const aifs = weather?.byModel?.aifs;
-  if (!aifs || !day?.date) return null;
-  const idx = findAifsDayIndex(aifs, day.date);
-  if (idx < 0) return null;
-
-  const tmaxA = readAifsValue(aifs, "temperature_2m_max", idx);
-  const tminA = readAifsValue(aifs, "temperature_2m_min", idx);
-  const precipA = readAifsValue(aifs, "precipitation_sum", idx);
-  const windA = readAifsValue(aifs, "windspeed_10m_max", idx);
-  const cloudA = readAifsValue(aifs, "cloudcover_mean", idx);
-
-  const tmaxC = day.tmax?.avg;
-  const tminC = day.tmin?.avg;
-  const precipC = day.precip?.avg;
-  const windC = day.wind_max?.avg;
-
-  const dTmax = tmaxA != null && tmaxC != null ? Math.round((tmaxA - tmaxC) * 10) / 10 : null;
-  const dPrecip = precipA != null && precipC != null ? Math.round((precipA - precipC) * 10) / 10 : null;
-
-  const wetA = precipA != null && precipA >= 0.5;
-  const wetC = precipC != null && precipC >= 0.5;
-  const categoryFlip = wetA !== wetC && (precipA != null && precipC != null);
-
-  const significant =
-    (dTmax != null && Math.abs(dTmax) >= 1.5) ||
-    (dPrecip != null && Math.abs(dPrecip) >= 2) ||
-    categoryFlip;
-  if (!significant) return null;
-
-  const parts: string[] = [];
-  if (tmaxA != null) parts.push(`Tmax ${Math.round(tmaxA * 10) / 10}°C${dTmax != null ? ` (Δ ${dTmax > 0 ? "+" : ""}${dTmax})` : ""}`);
-  if (tminA != null) parts.push(`Tmin ${Math.round(tminA * 10) / 10}°C`);
-  if (precipA != null) parts.push(`Niederschlag ${Math.round(precipA * 10) / 10} mm${dPrecip != null ? ` (Δ ${dPrecip > 0 ? "+" : ""}${dPrecip})` : ""}`);
-  if (windA != null) parts.push(`Wind max ${Math.round(windA)} km/h`);
-  if (cloudA != null) parts.push(`Bewölkung ${Math.round(cloudA)}%`);
-  return parts.join(", ");
-}
-
-// Aggregiert AIFS-Werte über mehrere Tage und vergleicht gegen klassischen
-// Multi-Modell-Mittelwert. Liefert immer einen Tendenz-Hinweis (auch wenn klein),
-// passend zum Grosswetterlagen-Charakter des Trend-Blocks.
-function formatAifsTrendComparison(weather: any, days: any[]): string | null {
-  const aifs = weather?.byModel?.aifs;
-  if (!aifs || !days?.length) return null;
-  const tmaxA: number[] = [];
-  const tmaxC: number[] = [];
-  const precipA: number[] = [];
-  const precipC: number[] = [];
-  for (const day of days) {
-    const idx = findAifsDayIndex(aifs, day.date);
-    if (idx < 0) continue;
-    const tA = readAifsValue(aifs, "temperature_2m_max", idx);
-    const pA = readAifsValue(aifs, "precipitation_sum", idx);
-    if (tA != null && day.tmax?.avg != null) { tmaxA.push(tA); tmaxC.push(day.tmax.avg); }
-    if (pA != null && day.precip?.avg != null) { precipA.push(pA); precipC.push(day.precip.avg); }
-  }
-  if (!tmaxA.length && !precipA.length) return null;
-  const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
-  const dT = tmaxA.length ? Math.round((avg(tmaxA) - avg(tmaxC)) * 10) / 10 : null;
-  const dP = precipA.length ? Math.round((avg(precipA) - avg(precipC)) * 10) / 10 : null;
-  const tempLabel = dT == null ? null
-    : Math.abs(dT) < 0.5 ? "Temperaturtendenz vergleichbar"
-    : dT > 0 ? `tendenziell milder (Δ +${dT}°C)`
-    : `tendenziell kühler (Δ ${dT}°C)`;
-  const precipLabel = dP == null ? null
-    : Math.abs(dP) < 0.5 ? "Niederschlagstendenz vergleichbar"
-    : dP > 0 ? `tendenziell feuchter (Δ +${dP} mm/Tag)`
-    : `tendenziell trockener (Δ ${dP} mm/Tag)`;
-  return [tempLabel, precipLabel].filter(Boolean).join(", ");
-}
-
-// ===== Bodensee-Wassertemperatur (klimatologischer Layer) =====
-// Quelle: IGKB-Langzeitmittel Obersee, Oberflächenwasser. Kein Live-Messwert,
-// daher in Hinweisen immer mit "saisonal ca." formulieren. Wird nur als
-// bedingter Trigger genutzt (Seerauch, Hitze-Dämpfung, Frühjahrs-Kälte).
-const BODENSEE_CLIMATOLOGY_C = [5, 4, 5, 8, 12, 17, 20, 21, 18, 14, 10, 7];
-
-// Liefert die saisonale Bodensee-Oberflächentemperatur für ein Datum (ISO),
-// linear interpoliert zwischen den Monatsmitten (15. eines Monats = exakt Mittel).
-function getLakeTempForDate(dateIso: string): number {
-  const d = new Date(dateIso + "T12:00:00Z");
-  if (isNaN(d.getTime())) {
-    // Fallback auf aktuellen Monat
-    const m = new Date().getUTCMonth();
-    return BODENSEE_CLIMATOLOGY_C[m]!;
-  }
-  const month = d.getUTCMonth(); // 0-11
-  const day = d.getUTCDate();
-  const daysInMonth = new Date(Date.UTC(d.getUTCFullYear(), month + 1, 0)).getUTCDate();
-  // Position relativ zur Monatsmitte (15.). Negativ = vor Mitte, positiv = nach Mitte.
-  const t = (day - 15) / daysInMonth; // grob in [-0.5, +0.5]
-  const cur = BODENSEE_CLIMATOLOGY_C[month]!;
-  let neighbor: number;
-  if (t < 0) {
-    neighbor = BODENSEE_CLIMATOLOGY_C[(month + 11) % 12]!;
-  } else {
-    neighbor = BODENSEE_CLIMATOLOGY_C[(month + 1) % 12]!;
-  }
-  const w = Math.abs(t); // 0..0.5
-  const value = cur * (1 - w) + neighbor * w;
-  return Math.round(value * 10) / 10;
-}
-
-// Liefert pro Tag einen Bodensee-Hinweis als String, oder null wenn keine
-// der drei Trigger-Bedingungen erfüllt ist. Konservativ — kein Lärm im Normalfall.
-function formatLakeTemperatureHint(_weather: any, day: any): string | null {
-  if (!day?.date) return null;
-  const T = getLakeTempForDate(day.date);
-  const tmin = day.tmin?.avg;
-  const tmax = day.tmax?.avg;
-  const wind = day.wind_max?.avg;
-  const cloud = day.cloudcover?.avg;
-
-  // 1) Seerauch / Verdunstungsnebel: kalte Luft über deutlich wärmerem See,
-  //    schwacher Wind, klare bis teilklare Nacht.
-  if (
-    typeof tmin === "number" &&
-    typeof wind === "number" &&
-    tmin <= T - 8 &&
-    wind <= 10 &&
-    (cloud == null || cloud <= 70)
-  ) {
-    const dT = Math.round((T - tmin) * 10) / 10;
-    return `Bodensee saisonal ca. ${T}°C, Tmin ${dT}°C tiefer bei schwachem Wind und überwiegend klarem Himmel: Verdunstungsnebel/Seerauch über dem See möglich, vom Ufer aus sichtbar.`;
-  }
-
-  // 2) Hitze-Dämpfung am Ufer: warmer See dämpft Nachtabkühlung.
-  //    Schwelle bei See > 20°C UND Tmax >= 28°C, damit klassische Sommer-Hitzetage
-  //    zuverlässig getriggert werden (Klima-Werte Juli 20°C, August 21°C).
-  if (typeof tmax === "number" && T > 20 && tmax >= 28) {
-    return `Bodensee saisonal ca. ${T}°C — am Seeufer gedämpfte Nachtabkühlung, dort lokal mildere Tmin-Werte als wenige Kilometer landeinwärts.`;
-  }
-
-  // 3) Frühjahrs-Kälte: kalter See dämpft Erwärmung am Ufer.
-  if (typeof tmax === "number" && T < 8 && tmax >= 18) {
-    return `Bodensee noch kalt (saisonal ca. ${T}°C) — am Seeufer gedämpfte Erwärmung, leicht kühlere Tmax als wenige Kilometer landeinwärts.`;
-  }
-
-  return null;
-}
-
-// Trend-Block (Tag 6-10): liefert nur dann einen Hinweis, wenn der Saisonwert
-// in einem klimatologisch auffälligen Bereich liegt (Sommerhoch oder Winter-Tief).
-function formatLakeTemperatureTrendHint(days: any[]): string | null {
-  if (!days?.length) return null;
-  const middle = days[Math.floor(days.length / 2)];
-  if (!middle?.date) return null;
-  const T = getLakeTempForDate(middle.date);
-  if (T >= 20) {
-    return `Bodensee saisonal ca. ${T}°C — Seebrise und gedämpfte Nachtabkühlung am Ufer in dieser Phase typisch.`;
-  }
-  if (T <= 5) {
-    return `Bodensee saisonal ca. ${T}°C (winterlich kalt) — bei Kaltluftvorstössen mit klarer Nacht und schwachem Wind erhöhtes Seerauch-Risiko über dem See.`;
-  }
-  return null;
-}
-
-// ===== Gewitter-Hinweis (CAPE + weathercode-Vote + Tagesgang aus Hourly) =====
-// CAPE-Schwellen:
-//   300-800   schwach   "Gewitterneigung"
-//   800-1500  mittel    "Gewitter wahrscheinlich, lokal kräftig"
-//   1500-2500 stark     "kräftige Gewitter, Hagel-/Sturmböenrisiko"
-//   >2500     schwer    "schwere Gewitterlage"
-// WMO-Codes: 95/96/99 = Gewitter, 80/81/82 = Schauer.
-const TSTORM_CODES = new Set([95, 96, 99]);
-const SHOWER_CODES = new Set([80, 81, 82]);
-
-function describeStormStrength(cape: number): string {
-  if (cape >= 2500) return "schwere Gewitterlage, lokal erhöhtes Risiko für grossen Hagel, Sturmböen und intensiven Starkregen";
-  if (cape >= 1500) return "kräftige Gewitter wahrscheinlich, Risiko für Hagel und Sturmböen";
-  if (cape >= 800) return "Gewitter wahrscheinlich, lokal kräftig mit Starkregen und Sturmböen";
-  if (cape >= 300) return "Gewitterneigung, einzelne lokale Schauer oder Gewitter möglich";
-  return "leichte Gewitterneigung";
-}
-
-// Liest pro Modell den maximalen CAPE-Wert für einen Tag aus den Daily-Daten.
-function maxCapeAcrossModels(day: any): number | null {
-  const cape = day?.cape_max;
-  if (!cape) return null;
-  const vals: number[] = [];
-  if (typeof cape.avg === "number") vals.push(cape.avg);
-  if (cape.by_model && typeof cape.by_model === "object") {
-    for (const v of Object.values(cape.by_model)) {
-      if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
-    }
-  }
-  if (!vals.length) return null;
-  return Math.max(...vals);
-}
-
-// Prüft, ob mindestens ein Modell für diesen Tag einen Gewitter- oder Schauer-Code liefert.
-function hasStormCodeVote(day: any): { thunder: boolean; shower: boolean } {
-  const wc = day?.weathercode;
-  let thunder = false, shower = false;
-  if (wc?.by_model && typeof wc.by_model === "object") {
-    for (const v of Object.values(wc.by_model)) {
-      const n = typeof v === "number" ? Math.round(v) : null;
-      if (n != null) {
-        if (TSTORM_CODES.has(n)) thunder = true;
-        if (SHOWER_CODES.has(n)) shower = true;
-      }
-    }
-  }
-  if (typeof wc?.avg === "number") {
-    const n = Math.round(wc.avg);
-    if (TSTORM_CODES.has(n)) thunder = true;
-    if (SHOWER_CODES.has(n)) shower = true;
-  }
-  return { thunder, shower };
-}
-
-// Tagesgang-Auswertung aus Hourly-Daten (nur Tag 0–1 verfügbar).
-// Liefert Beschreibung des Zeitfensters mit höchstem CAPE/Gewitter-Risiko, oder null.
-function diurnalStormPeak(weather: any, dayDate: string): string | null {
-  const h = weather?.hourly;
-  if (!h?.time) return null;
-  const times: string[] = h.time;
-  const idxs: number[] = [];
-  for (let i = 0; i < times.length; i++) {
-    if (typeof times[i] === "string" && times[i].startsWith(dayDate)) idxs.push(i);
-  }
-  if (idxs.length < 12) return null;
-  const capeKeys = Object.keys(h).filter((k) => k.startsWith("cape_"));
-  const wcKeys = Object.keys(h).filter((k) => k.startsWith("weathercode_"));
-  if (!capeKeys.length && !wcKeys.length) return null;
-
-  type Window = { label: string; from: number; to: number; capeMax: number; thunder: boolean };
-  const windows: Window[] = [
-    { label: "am Vormittag", from: 6, to: 12, capeMax: 0, thunder: false },
-    { label: "am Nachmittag", from: 12, to: 18, capeMax: 0, thunder: false },
-    { label: "am Abend", from: 18, to: 24, capeMax: 0, thunder: false },
-  ];
-  for (const i of idxs) {
-    const t = times[i];
-    const hour = parseInt(t.slice(11, 13), 10);
-    if (!Number.isFinite(hour)) continue;
-    const w = windows.find((w) => hour >= w.from && hour < w.to);
-    if (!w) continue;
-    const capeVals: number[] = [];
-    for (const k of capeKeys) {
-      const v = (h[k] as Array<number | null>)[i];
-      if (typeof v === "number" && Number.isFinite(v)) capeVals.push(v);
-    }
-    if (capeVals.length) {
-      const avgCape = capeVals.reduce((a, b) => a + b, 0) / capeVals.length;
-      if (avgCape > w.capeMax) w.capeMax = avgCape;
-    }
-    for (const k of wcKeys) {
-      const v = (h[k] as Array<number | null>)[i];
-      if (typeof v === "number" && TSTORM_CODES.has(Math.round(v))) w.thunder = true;
-    }
-  }
-  const ranked = [...windows].sort((a, b) => {
-    if (a.thunder !== b.thunder) return a.thunder ? -1 : 1;
-    return b.capeMax - a.capeMax;
-  });
-  const best = ranked[0]!;
-  if (!best.thunder && best.capeMax < 300) return null;
-
-  const maxC = Math.max(...windows.map((w) => w.capeMax));
-  const minC = Math.min(...windows.map((w) => w.capeMax));
-  if (maxC > 0 && minC / maxC > 0.7 && !windows.some((w) => w.thunder !== best.thunder)) return null;
-
-  const strong = windows.filter((w) => (w.capeMax >= best.capeMax * 0.7) || w.thunder);
-  if (strong.length >= 2) {
-    const labels = strong.map((w) => w.label.replace("am ", ""));
-    return `Schwerpunkt am ${labels.join(" und ")}`;
-  }
-  return `Schwerpunkt ${best.label}`;
-}
-
-function formatThunderstormHint(weather: any, day: any): string | null {
-  if (!day?.date) return null;
-  const capeMax = maxCapeAcrossModels(day);
-  const capeAvg = day.cape_max?.avg ?? null;
-  const { thunder, shower } = hasStormCodeVote(day);
-  const precipAvg = day.precip?.avg ?? 0;
-
-  const capeTrigger = capeMax != null && capeMax >= 500;
-  const codeTrigger = thunder || (shower && (precipAvg >= 2 || (capeMax != null && capeMax >= 300)));
-  if (!capeTrigger && !codeTrigger) return null;
-
-  const strengthCape = capeMax ?? capeAvg ?? 400;
-  const strength = describeStormStrength(strengthCape);
-  const diurnal = diurnalStormPeak(weather, day.date);
-  const stabilityLabel =
-    strengthCape >= 1500 ? "Konvektiv stark labile Lage"
-    : strengthCape >= 800 ? "Konvektiv labile Lage"
-    : strengthCape >= 300 ? "Konvektiv leicht labile Lage"
-    : "Schauer-/Gewitterneigung";
-
-  const parts = [`${stabilityLabel} — ${strength}`];
-  if (diurnal) parts.push(diurnal);
-  return parts.join(", ") + ".";
-}
-
-// ===== Quellwolken-Erkennung (Cumulus, ohne Gewitter-Trigger) =====
-// Klassifiziert tagsüber Cumulus-Bildung aus CAPE + cloudcover_low + Sonnenstunden.
-// Liefert null, wenn Gewitter-Logik greift (CAPE >= 800 oder Gewitter-Code) oder
-// wenn keine Quellwolken-Klasse passt.
-function formatCumulusHint(weather: any, day: any): string | null {
-  if (!day?.date) return null;
-  const capeMaxDay = maxCapeAcrossModels(day);
-  if (capeMaxDay != null && capeMaxDay >= 800) return null;
-  const { thunder } = hasStormCodeVote(day);
-  if (thunder) return null;
-  const sunshineDay = day?.sunshine_h?.avg ?? day?.sunshine_h ?? null;
-  if (typeof sunshineDay !== "number" || sunshineDay < 3) return null;
-
-  const h = weather?.hourly;
-  if (!h?.time) return null;
-  const times: string[] = h.time;
-  const idxs: number[] = [];
-  for (let i = 0; i < times.length; i++) {
-    if (typeof times[i] === "string" && times[i].startsWith(day.date)) idxs.push(i);
-  }
-  if (idxs.length < 12) return null;
-  const capeKeys = Object.keys(h).filter((k) => k.startsWith("cape_") || k === "cape");
-  const lowKeys = Object.keys(h).filter((k) => k.startsWith("cloudcover_low"));
-  if (!capeKeys.length || !lowKeys.length) return null;
-
-  type Win = { label: string; from: number; to: number; cape: number; low: number; n: number };
-  const windows: Win[] = [
-    { label: "am Vormittag", from: 9, to: 12, cape: 0, low: 0, n: 0 },
-    { label: "am Nachmittag", from: 12, to: 17, cape: 0, low: 0, n: 0 },
-    { label: "am Abend", from: 17, to: 20, cape: 0, low: 0, n: 0 },
-  ];
-  for (const i of idxs) {
-    const hour = parseInt(times[i].slice(11, 13), 10);
-    const w = windows.find((w) => hour >= w.from && hour < w.to);
-    if (!w) continue;
-    const capeVals: number[] = [];
-    for (const k of capeKeys) {
-      const v = (h[k] as Array<number | null>)[i];
-      if (typeof v === "number" && Number.isFinite(v)) capeVals.push(v);
-    }
-    const lowVals: number[] = [];
-    for (const k of lowKeys) {
-      const v = (h[k] as Array<number | null>)[i];
-      if (typeof v === "number" && Number.isFinite(v)) lowVals.push(v);
-    }
-    if (capeVals.length && lowVals.length) {
-      w.cape += capeVals.reduce((a, b) => a + b, 0) / capeVals.length;
-      w.low += lowVals.reduce((a, b) => a + b, 0) / lowVals.length;
-      w.n += 1;
-    }
-  }
-
-  type Hit = { label: string; klass: "harmlos" | "mediocris" | "congestus" };
-  const hits: Hit[] = [];
-  for (const w of windows) {
-    if (!w.n) continue;
-    const cape = w.cape / w.n;
-    const low = w.low / w.n;
-    if (low > 80) continue; // bedeckt — keine erkennbaren Einzelquellen
-    let klass: Hit["klass"] | null = null;
-    if (cape >= 300 && cape < 800 && low >= 25 && low <= 75) klass = "congestus";
-    else if (cape >= 100 && cape < 500 && low >= 20 && low <= 65) klass = "mediocris";
-    else if (cape >= 50 && cape < 300 && low >= 10 && low <= 45 && sunshineDay >= 5) klass = "harmlos";
-    if (klass) hits.push({ label: w.label, klass });
-  }
-  if (!hits.length) return null;
-
-  const phrase = (k: Hit["klass"]): string =>
-    k === "congestus" ? "mächtige Quellwolken, einzelne Schauer möglich"
-    : k === "mediocris" ? "kräftigere Quellbewölkung"
-    : "harmlose Quellwolken";
-
-  // Stärkste Klasse priorisieren, Schwerpunkt-Fenster nennen
-  const rank = { harmlos: 1, mediocris: 2, congestus: 3 } as const;
-  hits.sort((a, b) => rank[b.klass] - rank[a.klass]);
-  const top = hits[0]!;
-  const sameClass = hits.filter((h) => h.klass === top.klass);
-  if (sameClass.length >= 2) {
-    const labels = sameClass.map((h) => h.label.replace("am ", ""));
-    return `Schwerpunkt am ${labels.join(" und ")} ${phrase(top.klass)}.`;
-  }
-  return `${capitalize(top.label)} ${phrase(top.klass)}.`;
-}
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function formatThunderstormTrendHint(days: any[]): string | null {
-  if (!days?.length) return null;
-  let maxCape = 0;
-  let anyThunder = false;
-  for (const day of days) {
-    const c = maxCapeAcrossModels(day);
-    if (c != null && c > maxCape) maxCape = c;
-    const { thunder } = hasStormCodeVote(day);
-    if (thunder) anyThunder = true;
-  }
-  if (maxCape < 800 && !anyThunder) return null;
-  if (maxCape >= 1500) return "im Trend-Zeitraum zeitweise konvektiv stark labile Lage, Risiko für kräftige Gewitter mit Hagel- und Sturmböen";
-  return "im Trend-Zeitraum zeitweise erhöhte Gewitterneigung, lokal kräftige Schauer oder Gewitter möglich";
-}
-
-// ===== Föhn-Erkennung (Oberthurgau) =====
-// Klima-Mittel Tmax (°C) Romanshorn/Arbon, Jan..Dez (approximierte MeteoSchweiz-Normen).
-const OBERTHURGAU_TMAX_CLIMATOLOGY_C = [3, 5, 9, 13, 18, 22, 24, 23, 19, 14, 8, 4];
-
-function climatologyTmaxFromDate(dateStr?: string | null): number | null {
-  if (!dateStr) return null;
-  const m = Number(dateStr.slice(5, 7));
-  if (!m || m < 1 || m > 12) return null;
-  return OBERTHURGAU_TMAX_CLIMATOLOGY_C[m - 1] ?? null;
-}
-
-function maxAcrossModels(agg: any): number | null {
-  if (!agg) return null;
-  const vals: number[] = [];
-  if (agg.by_model) for (const v of Object.values(agg.by_model)) {
-    if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
-  }
-  if (typeof agg.max === "number") vals.push(agg.max);
-  if (!vals.length) return null;
-  return Math.max(...vals);
-}
-
-function isFoehnDirection(deg: number | null | undefined): boolean {
-  if (deg == null || !Number.isFinite(deg)) return false;
-  return deg >= 130 && deg <= 200;
-}
-
-function describeFoehnStrength(gustsMax: number | null, windAvg: number | null): string {
-  const v = gustsMax ?? (windAvg != null ? windAvg * 1.6 : 0);
-  if (v >= 100) return "schwerer Föhnsturm, lokal Schäden möglich";
-  if (v >= 80) return "Föhnsturm";
-  if (v >= 60) return "kräftiger Föhn";
-  return "schwacher Föhneinfluss";
-}
-
-const FOEHN_SPATIAL_HINT =
-  "Föhnwirkung im Oberthurgau am ausgeprägtesten an den östlichen Seeufern (Horn, Arbon, Roggwil), abgeschwächt im mittleren Seebereich (Egnach, Romanshorn, Uttwil), nur schwach im westlichen Seebereich (Altnau, Münsterlingen) und meist abgeschirmt im Hinterland (Erlen, Hauptwil-Gottshaus, Amriswil-Hinterland)";
-
-// Tagesgang-Analyse aus Hourly für Föhn — nur Tag 0/1 (heute/morgen).
-function diurnalFoehnPeak(weather: any, dateStr: string): string | null {
-  const h = weather?.hourly;
-  if (!h?.time) return null;
-
-  const collectArrs = (base: string): Record<string, number[]> => {
-    const out: Record<string, number[]> = {};
-    if (Array.isArray(h[base])) out["default"] = h[base];
-    for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
-    }
-    return out;
-  };
-
-  const wArrs = collectArrs("windspeed_10m");
-  const gArrs = collectArrs("wind_gusts_10m");
-  const wdArrs = collectArrs("winddirection_10m");
-  const rhArrs = collectArrs("relative_humidity_2m");
-
-  const indices = (h.time as string[])
-    .map((t, i) => ({ t, i }))
-    .filter(({ t }) => t.slice(0, 10) === dateStr);
-  if (indices.length < 12) return null;
-
-  const windowSpec = [
-    { label: "am Vormittag", from: 6, to: 12 },
-    { label: "am Nachmittag", from: 12, to: 18 },
-    { label: "am Abend", from: 18, to: 24 },
-  ];
-
-  type Win = { label: string; gustMax: number; windMax: number; rhMin: number; foehnHours: number };
-  const windows: Win[] = [];
-
-  for (const ws of windowSpec) {
-    const inWin = indices.filter(({ t }) => {
-      const hr = new Date(t).getHours();
-      return hr >= ws.from && hr < ws.to;
-    });
-    if (!inWin.length) continue;
-
-    let gustMax = 0, windMax = 0, rhMin = 100, foehnHours = 0;
-    for (const { i } of inWin) {
-      const gustVals: number[] = [];
-      const windVals: number[] = [];
-      const rhVals: number[] = [];
-      const dirVals: number[] = [];
-      for (const k of Object.keys(gArrs)) { const v = gArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) gustVals.push(v); }
-      for (const k of Object.keys(wArrs)) { const v = wArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) windVals.push(v); }
-      for (const k of Object.keys(rhArrs)) { const v = rhArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) rhVals.push(v); }
-      for (const k of Object.keys(wdArrs)) { const v = wdArrs[k]?.[i]; if (typeof v === "number" && Number.isFinite(v)) dirVals.push(v); }
-      const gust = gustVals.length ? Math.max(...gustVals) : 0;
-      const wind = windVals.length ? Math.max(...windVals) : 0;
-      const rh = rhVals.length ? Math.min(...rhVals) : 100;
-      const dir = dirVals.length ? circularMeanDeg(dirVals) : null;
-      if (gust > gustMax) gustMax = gust;
-      if (wind > windMax) windMax = wind;
-      if (rh < rhMin) rhMin = rh;
-      if (isFoehnDirection(dir) && (wind >= 20 || gust >= 40)) foehnHours++;
-    }
-    windows.push({ label: ws.label, gustMax, windMax, rhMin, foehnHours });
-  }
-
-  if (!windows.length) return null;
-
-  for (let i = 1; i < windows.length; i++) {
-    const prev = windows[i - 1]!;
-    const cur = windows[i]!;
-    const gustDrop = prev.gustMax > 50 && cur.gustMax < prev.gustMax * 0.55;
-    const rhRise = cur.rhMin > prev.rhMin + 20;
-    if (gustDrop && rhRise) {
-      const tail = cur.label.replace("am Vormittag", "des Vormittags").replace("am Nachmittag", "des Nachmittags").replace("am Abend", "des Abends");
-      return `Föhnabbruch im Verlauf ${tail}`;
-    }
-  }
-
-  const peak = windows.reduce((a, b) => (b.gustMax > a.gustMax ? b : a));
-  if (peak.foehnHours < 2) return null;
-  const minGust = Math.min(...windows.map((w) => w.gustMax));
-  if (peak.gustMax > 0 && (peak.gustMax - minGust) / peak.gustMax < 0.25) return null;
-  return `Föhnfenster vor allem ${peak.label}`;
-}
-
-// ===== Layer 2: Hochnebel / Inversion =====
-//
-// Trigger:
-//  - cloudcover_low ≥ 80 % über mehrere Stunden
-//  - Inversion: T_850hPa > T_2m + 1.5 °C (Hindeutung auf abgesetzte Schicht)
-//  - Bodenwind schwach (windspeed_10m < 12 km/h im Mittel)
-//
-// Nebelobergrenze grob aus T_850hPa: in ICON-CH (Standorthöhe ~440 m)
-// entspricht 850 hPa rund 1500 m üM. Wir interpolieren linear zwischen
-// Boden (T_2m) und 850 hPa (T_850hPa) und finden die Höhe, bei der die
-// Temperatur den Bodenwert erreicht — dort ist meist die Nebelobergrenze.
-function _avgArr(arrs: Record<string, number[]>, idxs: number[]): number | null {
-  let sum = 0;
-  let n = 0;
-  for (const k of Object.keys(arrs)) {
-    const a = arrs[k];
-    for (const i of idxs) {
-      const v = a?.[i];
-      if (Number.isFinite(v)) {
-        sum += v as number;
-        n++;
-      }
-    }
-  }
-  return n > 0 ? sum / n : null;
-}
-
-function _collectHourly(weather: any, base: string): Record<string, number[]> {
-  const h = weather?.hourly;
-  const out: Record<string, number[]> = {};
-  if (!h) return out;
-  if (Array.isArray(h[base])) out["default"] = h[base];
-  for (const k of Object.keys(h)) {
-    if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
-  }
-  return out;
-}
-
-function formatInversionHint(weather: any, day: any): string | null {
-  if (!day?.date) return null;
-  const h = weather?.hourly;
-  if (!h?.time) return null;
-
-  const cloudLow = _collectHourly(weather, "cloudcover_low");
-  const t850 = _collectHourly(weather, "temperature_850hPa");
-  const t2m = _collectHourly(weather, "temperature_2m");
-  const wind = _collectHourly(weather, "windspeed_10m");
-
-  if (Object.keys(cloudLow).length === 0 || Object.keys(t850).length === 0) return null;
-
-  const idxAll = (h.time as string[])
-    .map((t, i) => ({ t, i }))
-    .filter(({ t }) => t.slice(0, 10) === day.date)
-    .map((x) => x.i);
-  if (idxAll.length < 12) return null;
-
-  // Tagphase 09–17 Uhr — Auflösungsfenster
-  const idxDay = idxAll.filter((i) => {
-    const hr = new Date((h.time as string[])[i]).getHours();
-    return hr >= 9 && hr <= 17;
-  });
-  // Morgenphase 06–10 Uhr — Persistenzfenster
-  const idxMorn = idxAll.filter((i) => {
-    const hr = new Date((h.time as string[])[i]).getHours();
-    return hr >= 6 && hr <= 10;
-  });
-
-  const cloudLowMorn = _avgArr(cloudLow, idxMorn);
-  const cloudLowDay = _avgArr(cloudLow, idxDay);
-  const t850Morn = _avgArr(t850, idxMorn);
-  const t2mMorn = _avgArr(t2m, idxMorn);
-  const windMorn = _avgArr(wind, idxMorn);
-
-  if (cloudLowMorn == null || cloudLowMorn < 80) return null;
-  if (t850Morn == null || t2mMorn == null) return null;
-  // Inversion: in 850 hPa wärmer als am Boden (oder zumindest nicht kühler als Standard-Lapse −7°C)
-  // Standardatmosphäre würde T_850 ≈ T_2m − 7°C erwarten. Inversion: T_850 > T_2m − 2°C.
-  const inversionStrength = t850Morn - t2mMorn;
-  if (inversionStrength < -2) return null;
-  if (windMorn != null && windMorn > 14) return null; // zu windig für Hochnebel-Persistenz
-
-  // Auflösungstendenz
-  let dissolution: string;
-  if (cloudLowDay != null && cloudLowDay < 50) {
-    dissolution = "Auflösung am Nachmittag wahrscheinlich";
-  } else if (cloudLowDay != null && cloudLowDay < 75) {
-    dissolution = "teilweise Auflösung am Nachmittag möglich";
-  } else {
-    dissolution = "ganztägig zähe Hochnebeldecke wahrscheinlich";
-  }
-
-  // Nebelobergrenze grob abschätzen.
-  // 850 hPa entspricht in der Standardatmosphäre ca. 1500 m üM.
-  // Wir interpolieren linear: bei welcher Höhe entspricht T(h) ≈ T_2m?
-  // Bei Inversion (T_850 > T_2m): die Inversion liegt zwischen Boden und 850 hPa.
-  // Annahme: Bodenstation ~440 m üM (Amriswil-Region).
-  const groundElev = 440;
-  const top850 = 1500;
-  let nebelgrenzeM: number | null = null;
-  if (inversionStrength > 0) {
-    // Lineare Interpolation: h, bei der T(h) = T_2m
-    // T(h) = T_2m + (T_850 − T_2m) * (h − groundElev) / (top850 − groundElev)
-    // Da T_850 > T_2m, wird die Temperatur nach oben hin grösser. Nebelobergrenze
-    // ist typisch dort, wo die Temperatur ihr Maximum erreicht — pragmatisch
-    // setzen wir sie auf ca. 60-80% des Weges Richtung 850 hPa.
-    nebelgrenzeM = Math.round((groundElev + (top850 - groundElev) * 0.7) / 50) * 50;
-  } else {
-    // Schwache Inversion: Nebelgrenze niedriger
-    nebelgrenzeM = Math.round((groundElev + (top850 - groundElev) * 0.4) / 50) * 50;
-  }
-
-  const parts = [
-    `Hochnebellage (Inversion ${inversionStrength >= 0 ? "+" : ""}${inversionStrength.toFixed(1)} °C zwischen Boden und 850 hPa)`,
-    `Nebelobergrenze um etwa ${nebelgrenzeM} m üM`,
-    dissolution,
-    "oberhalb der Nebelgrenze sonnig und mild, unterhalb trüb und kühl",
-  ];
-  return parts.join("; ") + ".";
-}
-
-function formatInversionTrendHint(weather: any, days: any[]): string | null {
-  if (!days?.length) return null;
-  let inversionDays = 0;
-  for (const d of days) {
-    if (formatInversionHint(weather, d)) inversionDays++;
-  }
-  if (inversionDays === 0) return null;
-  if (inversionDays >= 3) return "im Trend-Zeitraum mehrtägig zähe Hochnebellagen mit Inversion möglich (im Mittelland trüb, in den Höhen sonnig)";
-  return "im Trend-Zeitraum zeitweise Hochnebel mit Inversion möglich";
-}
-
-function formatFoehnHint(weather: any, day: any): string | null {
-  if (!day?.date) return null;
-  const dirAvg = day.wind_dir_avg;
-  const windMax = day.wind_max?.avg ?? null;
-  const gustsMax = maxAcrossModels(day.wind_gusts_max) ?? null;
-  const tmaxAvg = day.tmax?.avg ?? null;
-  const precipAvg = day.precip?.avg ?? 0;
-  const climTmax = climatologyTmaxFromDate(day.date);
-
-  if (!isFoehnDirection(dirAvg)) return null;
-  const windOk = (windMax != null && windMax >= 25) || (gustsMax != null && gustsMax >= 45);
-  if (!windOk) return null;
-  if (climTmax == null || tmaxAvg == null || tmaxAvg < climTmax + 4) return null;
-  if (precipAvg >= 1.5) return null;
-
-  const strength = describeFoehnStrength(gustsMax, windMax);
-  const diurnal = diurnalFoehnPeak(weather, day.date);
-
-  const parts = [`Föhnlage — ${strength}, föhnig mild und trocken`];
-  if (diurnal) parts.push(diurnal);
-  parts.push(FOEHN_SPATIAL_HINT);
-  return parts.join("; ") + ".";
-}
-
-function formatFoehnTrendHint(days: any[]): string | null {
-  if (!days?.length) return null;
-  let anyFoehn = false;
-  let strongFoehn = false;
-  for (const day of days) {
-    const dirAvg = day.wind_dir_avg;
-    const windMax = day.wind_max?.avg ?? null;
-    const gustsMax = maxAcrossModels(day.wind_gusts_max) ?? null;
-    const tmaxAvg = day.tmax?.avg ?? null;
-    const precipAvg = day.precip?.avg ?? 0;
-    const climTmax = climatologyTmaxFromDate(day.date);
-    if (!isFoehnDirection(dirAvg)) continue;
-    const windOk = (windMax != null && windMax >= 25) || (gustsMax != null && gustsMax >= 45);
-    if (!windOk) continue;
-    if (climTmax == null || tmaxAvg == null || tmaxAvg < climTmax + 4) continue;
-    if (precipAvg >= 1.5) continue;
-    anyFoehn = true;
-    if ((gustsMax ?? 0) >= 70) strongFoehn = true;
-  }
-  if (!anyFoehn) return null;
-  if (strongFoehn) return "im Trend-Zeitraum zeitweise kräftige Föhnphasen mit milder, sehr trockener Südströmung möglich (Schwerpunkt östliche Seeufer Horn–Arbon–Roggwil)";
-  return "im Trend-Zeitraum zeitweise föhnige Phasen mit milder, trockener Südströmung möglich";
-}
-
 // Returns a unified weather object with `daily` (timeline) and `byModel` (per-model values)
 async function fetchWeather(
   lat: number,
@@ -1411,9 +624,6 @@ async function fetchWeather(
     `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
     () => fetchOpenMeteoOptional(lat, lon, longModels, false),
   );
-  await wait(500);
-  // ECMWF AIFS als separater Vergleichs-Layer (KI-Wettermodell). Optional, fail-soft.
-  const aifsData = await fetchAifsTimeline(lat, lon);
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
   if (!daily) {
     // All Open-Meteo tiers failed. Throw a typed error so the generation path
@@ -1427,8 +637,8 @@ async function fetchWeather(
   return {
     daily,
     hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
-    byModel: { short: shortData, mid: midData, long: longData, aifs: aifsData },
-    modelLists: { short: shortModels, mid: midModels, long: longModels, aifs: AIFS_MODEL },
+    byModel: { short: shortData, mid: midData, long: longData },
+    modelLists: { short: shortModels, mid: midModels, long: longModels },
   };
 }
 
@@ -1618,12 +828,10 @@ function formatDayData(weather: any, dayIndex: number) {
   const precip = aggregate(collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
   const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
   const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
-  const cape_max = aggregate(collectModelValuesTiered(weather, "cape_max", dayIndex));
-  const wind_gusts_max = aggregate(collectModelValuesTiered(weather, "wind_gusts_10m_max", dayIndex));
 
   // models actually contributing across all variables (transparency for the UI)
   const contributing = new Set<string>();
-  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h, cape_max, wind_gusts_max]) {
+  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h]) {
     if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
   }
 
@@ -1646,8 +854,6 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    cape_max,
-    wind_gusts_max,
   };
 }
 
@@ -1964,8 +1170,7 @@ Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = be
 Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
 WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.
-QUELLWOLKEN: Wenn im Datenblock ein Abschnitt "Quellwolken: …" mitgeliefert wird, übernimm den Hinweis sinngemäss in den Tagestext (nicht 1:1 kopieren). Verwende die Begriffe "Quellwolken", "Quellbewölkung" oder "Cumulus-Bildung" und nenne den Tagesabschnitt (z. B. "am Nachmittag"). Generische Phrasen wie "Wolken bilden sich" oder "Bewölkung nimmt zu" sind hier nicht zulässig. Fehlt der Abschnitt, KEINE Quellwolken erwähnen.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
@@ -1975,19 +1180,18 @@ Bei kurzen Tageseinträgen darf "Höchstwerte um Z Grad." direkt im selben Absat
 STATIONEN (MeteoSchweiz Realdaten-Anker, höchste Priorität wenn vorhanden):
 Wenn das Feld "stations" vorhanden ist, ziehe die korrigierten Stationswerte den reinen Modellwerten vor — sie wurden mit gemessenen Tageswerten der letzten 7 Tage bias-korrigiert.
 - "stations.GUT" (Güttingen, Bodenseeufer): Anker für den WÄRMSTEN Punkt im Radius. Nutze "corrected_tmax" als oberen Tagesmax-Wert in seenahen Lagen, "corrected_tmin" als frostärmsten Tmin am See.
-- "stations.BIZ" (Bischofszell, repräsentativ für die Senken im Aach- und Sittertal): Anker für den KÄLTESTEN Punkt im Perimeter. Nutze "corrected_tmin" als realistischen Senken-Tmin (überschreibt "topography.tmin_cold"). Der Stationsname "Bischofszell" wird im Fliesstext NIEMALS genannt — stattdessen "Aach- und Sittertal".
+- "stations.BIZ" (Bischofszell, Thurtal-Senke): Anker für den KÄLTESTEN Punkt im Radius. Nutze "corrected_tmin" als realistischen Senken-Tmin (überschreibt "topography.tmin_cold").
 Bilde den Hauptsatz "Tiefstwerte zwischen X und Y Grad." aus dem Bereich [stations.BIZ.corrected_tmin, stations.GUT.corrected_tmin] (auf ganze Grad gerundet, X = unterer, Y = oberer Wert).
 Bilde den Hauptsatz "Höchstwerte um Z Grad." aus dem Mittel oder oberen Wert von stations.GUT.corrected_tmax und dem Modell-tmax.avg.
 
-TOPOGRAPHIE (Senken im Oberthurgau-Perimeter):
+TOPOGRAPHIE (Senken / Tiefste Lagen im 15-km-Radius um Amriswil):
 Wenn "stations.BIZ.corrected_tmin" vorhanden ist, nutze diesen Wert als Senken-Tmin (statt "topography.tmin_cold"). Sonst gilt:
 Wenn im Tag das Feld "topography.tmin_cold" vorhanden ist UND "classification" entweder "strahlungsnacht" oder "teilweise_klar" ist, MUSS der modellierte Tiefstwert für die Senken zusätzlich genannt werden — als eigener Satz direkt nach dem Tiefstwerte-Satz.
-Format: "In den Senken im Aach- und Sittertal lokal bis X Grad." (X = Wert auf ganze Grad gerundet, OHNE weitere Ortsnamen oder Beispiele in Klammern).
+Format: "In den Senken (z. B. Hudelmoos, Riedflächen, Bodensee-nahe Mulden, Thurtal bei Bischofszell) lokal bis X Grad." (X = Wert auf ganze Grad gerundet).
 Bei X ≤ 4 Grad MUSS der Satz mit " - Bodenfrostgefahr." enden (statt nur Punkt).
 Bei X ≤ 0 Grad lautet der Anhang " - Frostgefahr in den Senken.".
 Bei "classification" = "bedeckt" UND fehlenden Stationsdaten: KEINEN Senken-Hinweis erzeugen.
-Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich Bodenseeufer–Aach-/Sittertal (intern: GUT/BIZ, NIE als Stationskürzel oder Ortsname "Bischofszell" im Output).
-ABSOLUT VERBOTEN im Output: die Wörter "Bischofszell", "Hudelmoos", "Riedflächen", "Thurtal", "Bodensee-nahe Mulden". Senken-Lagen ausschliesslich als "Aach- und Sittertal" beschreiben.`;
+Den Senken-Wert NIEMALS in den Haupt-Tiefstwert-Satz mischen — der Hauptsatz nennt den Bereich GUT/BIZ.`;
 
 export const DEFAULT_WIND_RULES = `STRIKT: Übernimm den Wert aus dem Feld "wind_label" WORTWÖRTLICH und EXAKT als ersten Satz des Wind-Absatzes (mit Punkt am Ende).
 Beispiel: wind_label = "Schwacher Südostwind" → Satz: "Schwacher Südostwind."
@@ -2040,27 +1244,6 @@ export function buildSystemPrompt(settings: any): string {
     "",
     "=== REGELN WIND ===",
     wind,
-    "",
-    "=== KI-MODELL-VERGLEICH (ECMWF AIFS) ===",
-    "Wenn im User-Prompt ein Block 'KI-Modell-Vergleich (ECMWF AIFS)' enthalten ist: Erwähne die Abweichung dezent als Unsicherheit (z. B. 'mehrheitlich trocken, KI-Modell deutet leichtes Schauerrisiko an' oder 'milder als die klassischen Modelle erwarten lassen'). Niemals AIFS gegen die klassischen Modelle ausspielen — die klassische Multi-Modell-Lösung bleibt Leitlinie. Maximal ein kurzer Hinweis pro Eintrag. Beim Trend ist der Vergleich Teil der Grosswetterlagen-Beschreibung (Tendenz-Aussage, keine konkreten Zahlen).",
-    "",
-    "=== BODENSEE-WASSERTEMPERATUR ===",
-    "Wenn im User-Prompt ein Block 'Bodensee-Hinweis' enthalten ist: Übernimm den Hinweis sinngemäss in den Fliesstext (nicht wörtlich kopieren). Erwähne ihn maximal einmal pro Eintrag, dezent und ortsbezogen ('am Seeufer', 'über dem See', 'in Seenähe'). Niemals erfinden — nur nennen, wenn der Block explizit vorhanden ist. Die Wassertemperatur ist ein klimatologischer Saisonwert, kein aktueller Messwert — formuliere entsprechend ('rund', 'saisonal', 'typischerweise').",
-    "",
-    "=== GEWITTER-HINWEIS ===",
-    "Wenn im User-Prompt ein Block 'Gewitter-Hinweis' enthalten ist: Übernimm die Stärke- und Tagesgang-Aussage sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende dabei das Pflicht-Vokabular ('Schaueraktivität', 'in Begleitung von Gewitter', 'kräftige Böen', 'Starkregen'). Bei kräftigen oder schweren Gewitterlagen klar benennen ('kräftige Gewitter wahrscheinlich', 'Hagel- und Sturmböenrisiko', 'lokal heftige Entwicklungen'). Den CAPE-Wert NIEMALS nennen, auch nicht 'konvektiv labile Lage' wörtlich übernehmen — nur die qualitative Aussage in natürliche Wettersprache überführen. Tagesgang-Hinweise ('Schwerpunkt am Nachmittag') in den Tagesablauf einbauen. Wenn KEIN solcher Block vorhanden ist, KEINE Aussagen zu Gewittern machen, die über das hinausgehen, was Niederschlag und Wettercode ohnehin nahelegen.",
-    "",
-    "=== FÖHN-HINWEIS ===",
-    "Wenn im User-Prompt ein Block 'Föhn-Hinweis' enthalten ist: Übernimm Stärke, Tagesgang und räumliche Differenzierung sinngemäss in den Fliesstext (nicht wörtlich kopieren). Verwende Föhn-Vokabular: 'föhnig mild', 'sehr trocken', 'kräftige Südböen', 'Föhnfenster', 'Föhnabbruch', 'Föhnsturm'. Bei Föhnsturm klar benennen. Prognose-Perimeter Oberthurgau: Horn – Münsterlingen – Erlen – Hauptwil-Gottshaus – Roggwil – Horn. Räumliche Differenzierung INNERHALB dieses Perimeters: östliche Seeufer (Horn, Arbon, Roggwil) am stärksten, mittlere Seezone (Egnach, Romanshorn, Uttwil) klar föhnig aber abgeschwächt, westliche Seezone (Altnau, Münsterlingen) nur schwach, Hinterland (Erlen, Hauptwil-Gottshaus, Amriswil-Hinterland) meist abgeschirmt. Orte AUSSERHALB des Perimeters NIEMALS erwähnen — insbesondere kein Rheintal, kein Vaduz/Buchs, kein Steckborn, kein westlicher Bodensee, kein Frauenfeld, kein Konstanz/Kreuzlingen. Wenn KEIN solcher Block vorhanden ist, KEINE Föhn-Aussagen.",
-    "",
-    "=== AKTUELLER RADAR (Nowcast) ===",
-    "Wenn im User-Prompt ein Block 'Aktueller Radar (Nowcast)' enthalten ist (nur bei Heute-Eintrag und ggf. Morgen): Diese Beobachtung hat VORRANG vor der Modellprognose für die nächsten 2-3 Stunden. Übernimm die Aussage sinngemäss zu Beginn des Tagesablaufs ('Aktuell zieht...', 'Bereits seit dem Morgen...', 'In den nächsten Stunden...'). Verwende natürliche Wettersprache, niemals 'Radar', 'Nowcast' oder 'Modell-Erwartung' wörtlich. Wenn der Block sagt 'Radar zeigt aktuell keinen Niederschlag', dann KEINE Erwähnung — die Aussage gilt nur, wenn etwas Konkretes passiert (Schauer aktiv, Niederschlag im Anzug, Modell-Korrektur nötig). Bei Modell-Unter-/Überschätzung: vorsichtig formulieren ('mehr Niederschlag als erwartet', 'die Wolken zerfallen rascher als die Modelle vorhersagen'). Wenn KEIN solcher Block vorhanden ist (Tage 2-10 oder Trend), keine kurzfristigen Radar-Aussagen.",
-    "",
-    "=== UNSICHERHEIT (Ensemble) ===",
-    "Wenn im User-Prompt (typischerweise im Trend Tag 6-10) ein Block 'Unsicherheit (Ensemble)' enthalten ist: Übernimm die Unsicherheits-Stufe sinngemäss in den Trend-Text. Bei 'verlässlicher Trend' kann selbstbewusster formuliert werden ('zeichnet sich ab', 'dürfte'). Bei 'moderater Unsicherheit' Konjunktiv und vorsichtige Formulierungen ('könnte', 'tendenziell', 'mit Schwankungen'). Bei 'hoher Unsicherheit' explizit auf mehrere mögliche Szenarien hinweisen ('das Bild ist unsicher', 'mehrere Szenarien sind möglich, von ... bis ...'). Bei bimodaler Niederschlagsverteilung beide Szenarien benennen. Niemals 'Ensemble', 'Sigma', 'P10/P90' wörtlich verwenden — nur die qualitative Unsicherheit in Wettersprache.",
-    "",
-    "=== HOCHNEBEL / INVERSION ===",
-    "Wenn im User-Prompt ein Block 'Hochnebel-Hinweis' enthalten ist: Übernimm die Aussage zu Hochnebeldecke, Nebelobergrenze und Auflösungstendenz sinngemäss. Vokabular: 'zähe Hochnebeldecke', 'Hochnebel mit Auflösungstendenz', 'Nebelobergrenze um etwa XXX m', 'oberhalb der Nebelgrenze sonnig', 'unterhalb trüb und kühl'. Bei Inversionslagen die typische Eigenschaft erwähnen: am Boden grau und kühl, in der Höhe (z.B. ab 800-1000 m) sonnig und mild. Wenn KEIN solcher Block vorhanden ist, KEINE Hochnebel-/Inversions-Aussagen erfinden.",
     "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
@@ -2141,10 +1324,6 @@ export const generateForecast = createServerFn({ method: "POST" })
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
       : null;
-    const ensembleEnabled = (settings as any)?.ensemble_enabled !== false;
-    const ensembleData: EnsembleData | null = (!degraded && ensembleEnabled)
-      ? await fetchEnsembleData(lat, lon).catch((e) => { console.warn("ensemble fetch failed", e); return null; })
-      : null;
     const biasEnabled = settings?.bias_enabled !== false;
     const biasStations = (settings?.bias_stations ?? "GUT,STG,TAE")
       .split(",").map((s: string) => s.trim()).filter(Boolean);
@@ -2181,21 +1360,7 @@ export const generateForecast = createServerFn({ method: "POST" })
 
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
-      const aifsCmp = formatAifsComparison(weather, firstData);
-      const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const lakeHint = formatLakeTemperatureHint(weather, firstData);
-      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
-      const stormHint = formatThunderstormHint(weather, firstData);
-      const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const cumulusHint = formatCumulusHint(weather, firstData);
-      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
-      const foehnHint = formatFoehnHint(weather, firstData);
-      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const radarHint = formatRadarNowHint(radarSnapshot);
-      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
-      const invHint = formatInversionHint(weather, firstData);
-      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -2210,22 +1375,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const aifsCmp = formatAifsComparison(weather, day);
-      const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const lakeHint = formatLakeTemperatureHint(weather, day);
-      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
-      const stormHint = formatThunderstormHint(weather, day);
-      const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const cumulusHint = formatCumulusHint(weather, day);
-      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
-      const foehnHint = formatFoehnHint(weather, day);
-      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      // Radar nur Tag 1 (i==1) — Tag 2-5 ausserhalb der Nowcast-Reichweite
-      const radarHint = i === 1 ? formatRadarNowHint(radarSnapshot) : null;
-      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
-      const invHint = formatInversionHint(weather, day);
-      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -2235,19 +1385,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     if (!degraded) {
       const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
-        const aifsTrend = formatAifsTrendComparison(weather, trendDays);
-        const aifsBlock = aifsTrend ? `\n\nKI-Modell-Vergleich (ECMWF AIFS, Tendenz Tag 6-10): ${aifsTrend}` : "";
-        const lakeTrend = formatLakeTemperatureTrendHint(trendDays);
-        const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
-        const stormTrend = formatThunderstormTrendHint(trendDays);
-        const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
-        const foehnTrend = formatFoehnTrendHint(trendDays);
-        const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
-        const invTrend = formatInversionTrendHint(weather, trendDays);
-        const invBlock = invTrend ? `\n\nHochnebel-Hinweis: ${invTrend}` : "";
-        const uncHint = formatUncertaintyHint(ensembleData, trendDays);
-        const uncBlock = uncHint ? `\n\nUnsicherheit (Ensemble): ${uncHint}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${invBlock}${uncBlock}`;
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
         })));
@@ -2294,10 +1432,6 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     const radarSnapshot = (settings?.radar_enabled !== false)
       ? await fetchRadarSnapshot(lat, lon).catch((e) => { console.warn("radar fetch failed", e); return null; })
-      : null;
-    const ensembleEnabled = (settings as any)?.ensemble_enabled !== false;
-    const ensembleData: EnsembleData | null = (!degraded && ensembleEnabled)
-      ? await fetchEnsembleData(lat, lon).catch((e) => { console.warn("ensemble fetch failed", e); return null; })
       : null;
 
     const biasEnabled = settings?.bias_enabled !== false;
@@ -2353,21 +1487,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
-      const aifsCmp = formatAifsComparison(weather, firstData);
-      const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const lakeHint = formatLakeTemperatureHint(weather, firstData);
-      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
-      const stormHint = formatThunderstormHint(weather, firstData);
-      const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const cumulusHint = formatCumulusHint(weather, firstData);
-      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
-      const foehnHint = formatFoehnHint(weather, firstData);
-      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const radarHint = formatRadarNowHint(radarSnapshot);
-      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
-      const invHint = formatInversionHint(weather, firstData);
-      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -2382,21 +1502,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const aifsCmp = formatAifsComparison(weather, day);
-      const aifsBlock = aifsCmp ? `\n\nKI-Modell-Vergleich (ECMWF AIFS): ${aifsCmp}` : "";
-      const lakeHint = formatLakeTemperatureHint(weather, day);
-      const lakeBlock = lakeHint ? `\n\nBodensee-Hinweis: ${lakeHint}` : "";
-      const stormHint = formatThunderstormHint(weather, day);
-      const stormBlock = stormHint ? `\n\nGewitter-Hinweis: ${stormHint}` : "";
-      const cumulusHint = formatCumulusHint(weather, day);
-      const cumulusBlock = cumulusHint ? `\n\nQuellwolken: ${cumulusHint}` : "";
-      const foehnHint = formatFoehnHint(weather, day);
-      const foehnBlock = foehnHint ? `\n\nFöhn-Hinweis: ${foehnHint}` : "";
-      const radarHint = i === 1 ? formatRadarNowHint(radarSnapshot) : null;
-      const radarBlock = radarHint ? `\n\nAktueller Radar (Nowcast): ${radarHint}` : "";
-      const invHint = formatInversionHint(weather, day);
-      const invBlock = invHint ? `\n\nHochnebel-Hinweis: ${invHint}` : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${aifsBlock}${lakeBlock}${cumulusBlock}${stormBlock}${foehnBlock}${radarBlock}${invBlock}`;
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
@@ -2406,19 +1512,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     if (!degraded) {
       const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
-        const aifsTrend = formatAifsTrendComparison(weather, trendDays);
-        const aifsBlock = aifsTrend ? `\n\nKI-Modell-Vergleich (ECMWF AIFS, Tendenz Tag 6-10): ${aifsTrend}` : "";
-        const lakeTrend = formatLakeTemperatureTrendHint(trendDays);
-        const lakeBlock = lakeTrend ? `\n\nBodensee-Hinweis: ${lakeTrend}` : "";
-        const stormTrend = formatThunderstormTrendHint(trendDays);
-        const stormBlock = stormTrend ? `\n\nGewitter-Hinweis: ${stormTrend}` : "";
-        const foehnTrend = formatFoehnTrendHint(trendDays);
-        const foehnBlock = foehnTrend ? `\n\nFöhn-Hinweis: ${foehnTrend}` : "";
-        const invTrend = formatInversionTrendHint(weather, trendDays);
-        const invBlock = invTrend ? `\n\nHochnebel-Hinweis: ${invTrend}` : "";
-        const uncHint = formatUncertaintyHint(ensembleData, trendDays);
-        const uncBlock = uncHint ? `\n\nUnsicherheit (Ensemble): ${uncHint}` : "";
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}${aifsBlock}${lakeBlock}${stormBlock}${foehnBlock}${invBlock}${uncBlock}`;
+        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}`;
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
