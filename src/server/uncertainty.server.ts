@@ -19,7 +19,7 @@ export type EnsembleDay = {
 
 export type EnsembleData = {
   fetched_at: string;
-  byDate: Map<string, EnsembleDay>;
+  byDate: Record<string, EnsembleDay>;
   source: string;
 };
 
