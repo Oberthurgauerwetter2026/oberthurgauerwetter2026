@@ -1289,6 +1289,9 @@ export function buildSystemPrompt(settings: any): string {
     "=== REGELN WIND ===",
     wind,
     "",
+    "=== NOWCAST / KONFIDENZ ===",
+    "Wenn der Datensatz ein Feld `nowcast` enthält: nutze `observed_now` (aktuelle Stationswerte) und `next_2h.trend` als verlässliche Anker für die ersten Stunden. Wenn `nowcast.confidence` 'niedrig' ist, formuliere vorsichtiger ('zeichnet sich ab', 'deutet sich an', 'unsichere Lage'). Bei `next_2h.trend === 'zunehmend'` Niederschlag explizit erwähnen, bei 'trocken' keine Schauer ankündigen. Bei `night_fog_likely === true` auf mögliches Aufkommen von Nebel hinweisen statt auf besonders kalte Nacht.",
+    "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
   ].join("\n");
