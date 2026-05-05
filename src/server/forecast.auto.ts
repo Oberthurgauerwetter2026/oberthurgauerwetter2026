@@ -567,6 +567,43 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
   return await callLovableAI("google/gemini-3-flash-preview", systemPrompt, userPrompt);
 }
 
+// Erkennt typische Verbalstil-Phrasen, die im Nominalstil vermieden werden sollen.
+function enforceNominalStyle(text: string): { violations: string[] } {
+  const patterns: Array<{ re: RegExp; label: string }> = [
+    { re: /\bdie\s+sonne\s+(scheint|scheinen)\b/i, label: "die Sonne scheint" },
+    { re: /\bziehen?\s+\w+\s+auf\b/i, label: "ziehen … auf" },
+    { re: /\bes\s+regnet\b/i, label: "es regnet" },
+    { re: /\bes\s+schneit\b/i, label: "es schneit" },
+    { re: /\bes\s+gewittert\b/i, label: "es gewittert" },
+    { re: /\bder\s+wind\s+weht\b/i, label: "der Wind weht" },
+    { re: /\bwir\s+erwarten\b/i, label: "wir erwarten" },
+    { re: /\bes\s+wird\s+\w+/i, label: "es wird …" },
+    { re: /\bzeigt\s+sich\b/i, label: "zeigt sich" },
+    { re: /\bpräsentiert\s+sich\b/i, label: "präsentiert sich" },
+    { re: /\bgestaltet\s+sich\b/i, label: "gestaltet sich" },
+  ];
+  const violations: string[] = [];
+  for (const { re, label } of patterns) if (re.test(text)) violations.push(label);
+  return { violations };
+}
+
+async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
+  const first = await generateText(systemPrompt, userPrompt);
+  const check = enforceNominalStyle(first);
+  if (check.violations.length === 0) return first;
+  console.log(`[nominal-style/auto] Verstöße erkannt: ${check.violations.join(", ")} — Retry`);
+  const retryPrompt = userPrompt +
+    `\n\nWICHTIG: Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${check.violations.join(", ")}). ` +
+    `Schreibe ZWINGEND im Nominal-/Telegrammstil — keine finiten Vollverben, sondern Substantiv-Phrasen. ` +
+    `Beispiele: statt "die Sonne scheint" → "Sonnenschein"; statt "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"; statt "es regnet" → "zeitweise Regen".`;
+  try {
+    return await generateText(systemPrompt, retryPrompt);
+  } catch (e) {
+    console.warn("[nominal-style/auto] Retry fehlgeschlagen, behalte Erstversuch", e);
+    return first;
+  }
+}
+
 // ===== Topography =====
 async function fetchElevationGrid(lat: number, lon: number, radiusKm: number) {
   const N = 10;
