@@ -1505,9 +1505,12 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
 
-    const [pressureSeries, snowSeries] = await Promise.all([
+    const [pressureSeries, snowSeries, nowcastInputs] = await Promise.all([
       fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
       fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
+      (settings?.nowcast_enabled !== false)
+        ? fetchNowcastInputs(lat, lon, biasStations).catch((e) => { console.warn("nowcast inputs failed", e); return null; })
+        : Promise.resolve(null),
     ]);
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
@@ -1534,6 +1537,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       }
       if (bias && bias.applied && !mosmix) {
         out = applyBiasToDay(out, bias);
+      }
+      if (dayIndex === 0 && nowcastInputs) {
+        const nc = computeNowcastResult(out, nowcastInputs, {
+          night_clear_cooling_c: settings?.night_clear_cooling_c,
+          nowcast_obs_horizon_h: settings?.nowcast_obs_horizon_h,
+        });
+        out = applyNowcastToDay(out, nc);
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
