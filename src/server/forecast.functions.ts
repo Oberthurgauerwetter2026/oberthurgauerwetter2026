@@ -2125,7 +2125,7 @@ export function buildSystemPrompt(settings: any): string {
     ? general
     : `${NOMINAL_STYLE_BLOCK}\n\n${general}`;
   return [
-    general,
+    generalWithStyle,
     "",
     "=== REGELN BEWÖLKUNG / SONNE / NIEDERSCHLAG ===",
     sky,
