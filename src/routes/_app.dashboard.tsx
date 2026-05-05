@@ -101,6 +101,48 @@ function Dashboard() {
         </Button>
       </div>
 
+      {settings && (
+        <Card>
+          <Collapsible open={mapOpen} onOpenChange={setMapOpen}>
+            <CollapsibleTrigger asChild>
+              <CardHeader className="cursor-pointer hover:bg-muted/30">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <MapIcon className="h-4 w-4" />
+                  Region & Stationen
+                  <span className="text-xs font-normal text-muted-foreground ml-2">
+                    {settings.location_name ?? "Standort"} · Radius {settings.radius_km ?? 15} km
+                  </span>
+                </CardTitle>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <CardContent>
+                <RegionMap
+                  lat={settings.location_lat}
+                  lon={settings.location_lon}
+                  locationName={settings.location_name ?? "Standort"}
+                  radiusKm={settings.radius_km ?? 15}
+                  stations={[
+                    { name: "Güttingen (GUT)", lat: 47.602, lon: 9.279, color: "#16a34a", role: "SMN-Bias" },
+                    { name: "St. Gallen (STG)", lat: 47.426, lon: 9.398, color: "#16a34a", role: "SMN-Bias" },
+                    { name: "Tänikon (TAE)", lat: 47.479, lon: 8.905, color: "#16a34a", role: "SMN-Bias" },
+                    { name: "Bischofszell (BIZ)", lat: 47.498, lon: 9.236, color: "#0891b2", role: "Stations-Anker" },
+                    { name: "Konstanz (10929)", lat: 47.677, lon: 9.190, color: "#7c3aed", role: "MOSMIX" },
+                    { name: "Friedrichshafen (10935)", lat: 47.671, lon: 9.511, color: "#7c3aed", role: "MOSMIX" },
+                  ]}
+                />
+                <div className="mt-2 text-xs text-muted-foreground flex flex-wrap gap-3">
+                  <span><span className="inline-block h-2 w-2 rounded-full bg-[#dc2626] mr-1" />Standort</span>
+                  <span><span className="inline-block h-2 w-2 rounded-full bg-[#16a34a] mr-1" />SMN-Bias-Stationen</span>
+                  <span><span className="inline-block h-2 w-2 rounded-full bg-[#0891b2] mr-1" />Stations-Anker (warm/kalt)</span>
+                  <span><span className="inline-block h-2 w-2 rounded-full bg-[#7c3aed] mr-1" />DWD MOSMIX</span>
+                </div>
+              </CardContent>
+            </CollapsibleContent>
+          </Collapsible>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Verlauf</CardTitle>
