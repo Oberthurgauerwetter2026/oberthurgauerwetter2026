@@ -2608,8 +2608,9 @@ export const publishToWordPress = createServerFn({ method: "POST" })
       .from("forecasts")
       .select("*")
       .eq("id", data.forecastId)
-      .single();
+      .maybeSingle();
     if (fErr) throw new Error(fErr.message);
+    if (!forecast) throw new Error("Prognose nicht mehr vorhanden.");
 
     const { data: entries, error: eErr } = await supabase
       .from("forecast_entries")
