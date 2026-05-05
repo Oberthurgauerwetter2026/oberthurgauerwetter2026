@@ -1884,6 +1884,9 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
 }
 
 // ===== AI text generation =====
+class GeminiQuotaError extends Error { constructor(msg: string) { super(msg); this.name = "GeminiQuotaError"; } }
+class GeminiAuthError extends Error { constructor(msg: string) { super(msg); this.name = "GeminiAuthError"; } }
+
 async function callGemini(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const geminiKey = process.env.GEMINI_API_KEY!;
   const delays = [0, 1500, 4000, 8000]; // 4 Versuche
@@ -1913,8 +1916,8 @@ async function callGemini(model: string, systemPrompt: string, userPrompt: strin
       continue;
     }
     clearTimeout(timeout);
-    if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht. Bitte später erneut versuchen.");
-    if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
+    if (res.status === 429) throw new GeminiQuotaError("Gemini Free Tageslimit (429).");
+    if (res.status === 401 || res.status === 403) throw new GeminiAuthError(`Gemini API-Key ungültig (${res.status}).`);
     if (res.status === 503 || res.status === 500 || res.status === 502 || res.status === 504) {
       lastErr = `${res.status}: ${await res.text()}`;
       continue; // retry
@@ -1951,8 +1954,8 @@ async function callLovableAI(model: string, systemPrompt: string, userPrompt: st
   } finally {
     clearTimeout(timeout);
   }
-  if (res.status === 429) throw new Error("KI-Limit erreicht. Bitte später erneut versuchen.");
-  if (res.status === 402) throw new Error("KI-Guthaben aufgebraucht. Bitte Workspace aufladen.");
+  if (res.status === 429) throw new Error("KI-Limit erreicht (Lovable AI). Bitte später erneut versuchen.");
+  if (res.status === 402) throw new Error("KI-Guthaben aufgebraucht (Lovable AI). Bitte Workspace aufladen.");
   if (!res.ok) throw new Error(`KI-Fehler ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content?.trim() ?? "";
@@ -1960,9 +1963,20 @@ async function callLovableAI(model: string, systemPrompt: string, userPrompt: st
 
 async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   if (process.env.GEMINI_API_KEY) {
-    return await callGemini("gemini-2.5-flash", systemPrompt, userPrompt);
+    try {
+      return await callGemini("gemini-2.5-flash", systemPrompt, userPrompt);
+    } catch (e: any) {
+      if (e instanceof GeminiQuotaError || e instanceof GeminiAuthError) {
+        console.warn(`[ai] Gemini nicht verfügbar (${e.message}) – Fallback auf Lovable AI.`);
+        if (process.env.LOVABLE_API_KEY) {
+          return await callLovableAI("google/gemini-3-flash-preview", systemPrompt, userPrompt);
+        }
+        throw new Error("KI-Tageslimit (Gemini Free) erreicht und kein Lovable-AI-Fallback konfiguriert.");
+      }
+      throw e;
+    }
   }
-  return await callLovableAI("google/gemini-2.5-pro", systemPrompt, userPrompt);
+  return await callLovableAI("google/gemini-3-flash-preview", systemPrompt, userPrompt);
 }
 
 // ===== Prompt-Bausteine =====
