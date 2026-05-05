@@ -32,7 +32,14 @@ function LoginPage() {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setSubmitting(false);
     if (error) {
-      toast.error(error.message);
+      const m = error.message.toLowerCase();
+      if (m.includes("invalid login credentials")) {
+        toast.error("E-Mail oder Passwort ist falsch. Falls du es vergessen hast, nutze „Passwort vergessen?“.");
+      } else if (m.includes("email not confirmed")) {
+        toast.error("Bitte bestätige zuerst deine E-Mail-Adresse.");
+      } else {
+        toast.error(error.message);
+      }
       return;
     }
     toast.success("Eingeloggt");
