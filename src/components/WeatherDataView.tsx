@@ -188,6 +188,9 @@ function DayTable({ data, title }: { data: Record<string, any>; title?: string }
           </tbody>
         </table>
       </div>
+      {((data as any).wind_regime || (data as any).snow_line) && (
+        <RegimeBadges wind_regime={(data as any).wind_regime} snow_line={(data as any).snow_line} />
+      )}
       {(data as any).topography && <TopographyBlock topo={(data as any).topography} />}
       {(data as any).stations && <StationsBlock stations={(data as any).stations} />}
     </div>
@@ -199,6 +202,30 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
   teilweise_klar: "Teilweise klar",
   bedeckt: "Bedeckt / windig",
 };
+
+const REGIME_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  foehn_strong: "destructive",
+  foehn_weak: "secondary",
+  bise_strong: "destructive",
+  bise_weak: "secondary",
+};
+
+function RegimeBadges({ wind_regime, snow_line }: { wind_regime?: any; snow_line?: any }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      {wind_regime && wind_regime.class && wind_regime.class !== "none" && (
+        <Badge variant={REGIME_VARIANTS[wind_regime.class] ?? "outline"} title={`Δp Föhn: ${wind_regime.dp_foehn} hPa · Δp Bise: ${wind_regime.dp_bise} hPa`}>
+          {wind_regime.label}
+        </Badge>
+      )}
+      {snow_line && snow_line.class && snow_line.class !== "none" && (
+        <Badge variant={snow_line.class === "low" ? "destructive" : "secondary"} title={`Nullgradgrenze ${snow_line.freezing_min}–${snow_line.freezing_max} m`}>
+          ❄ {snow_line.label}
+        </Badge>
+      )}
+    </div>
+  );
+}
 
 function TopographyBlock({ topo }: { topo: any }) {
   if (!topo) return null;

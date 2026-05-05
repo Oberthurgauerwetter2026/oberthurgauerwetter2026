@@ -6,6 +6,8 @@ import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
 import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
+import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
+import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
@@ -38,7 +40,34 @@ function applyRadarToDay(out: any, dayIndex: number, radar: RadarSnapshot | null
   }
 }
 
-// ===== Helpers =====
+// Hängt Druckgradient + Schneefallgrenze ans Tagesobjekt, wenn vorhanden.
+function applyRegimeToDay(
+  out: any,
+  pressureByDate: Map<string, DayPressure>,
+  snowByDate: Map<string, DaySnowLine>,
+) {
+  if (!out?.date) return;
+  const wr = pressureByDate.get(out.date);
+  if (wr) {
+    out.wind_regime = {
+      class: wr.class,
+      label: wr.label,
+      dp_foehn: wr.dp_foehn,
+      dp_bise: wr.dp_bise,
+    };
+  }
+  const sn = snowByDate.get(out.date);
+  if (sn && sn.class !== "none") {
+    out.snow_line = {
+      class: sn.class,
+      label: sn.label,
+      freezing_min: sn.freezing_min,
+      freezing_avg: sn.freezing_avg,
+      freezing_max: sn.freezing_max,
+      snow_line_min: sn.snow_line_min,
+    };
+  }
+}
 async function ensureStaff(supabase: any, userId: string) {
   const { data, error } = await supabase
     .from("user_roles")
@@ -1202,7 +1231,17 @@ Beispiel: wind_label = "Schwacher Südostwind" → Satz: "Schwacher Südostwind.
 ABSOLUT VERBOTEN: eine andere Windrichtung als die in "wind_label" zu nennen. Wenn "wind_label" "Südostwind" sagt, dann NIEMALS "Bise", "Ostwind", "Westwind" o.ä. schreiben. Wenn "wind_label" "Bise" sagt, NIE "Ostwind" oder "Nordostwind" schreiben.
 Du darfst nur sachlich ergänzen: Tageszeit-Bezug ("am Morgen", "im Tagesverlauf"), oder Böen-Hinweis bei Schauer/Gewitter ("kräftige Böen").
 Verwende NIE rohe Gradzahlen aus "wind_dir" oder "wind_dir_avg".
-Eine abweichende Windbezeichnung gilt als Verstoss gegen die Vorgaben.`;
+Eine abweichende Windbezeichnung gilt als Verstoss gegen die Vorgaben.
+
+WIND-REGIME (Druckgradient):
+Wenn "wind_regime.class" = "foehn_strong" oder "foehn_weak", erwähne kurz föhnige Aufhellungen / mildere Temperaturen im Wind-Absatz (nur wenn nicht im Widerspruch zur "wind_label").
+Wenn "wind_regime.class" = "bise_strong" oder "bise_weak" und "wind_label" eine Ostkomponente hat (Bise/Nordost/Ost), darf der Wind-Absatz "trockenkalt" o. ä. ergänzen.
+Bei "wind_regime.class" = "none": KEINE Erwähnung des Druckgradienten.
+
+SCHNEEFALLGRENZE:
+Wenn "snow_line.class" = "low" UND im Tag Niederschlag fällt (precip.avg ≥ 1 mm), MUSS ein kurzer Hinweis im Wetterverlauf-Absatz stehen, z. B. "Schneefallgrenze um {snow_line.snow_line_min} m" oder "in höheren Lagen Schneefall ab ca. {snow_line.snow_line_min} m".
+Bei "snow_line.class" = "high_terrain_only": optional "auf den höchsten Hügelzügen evtl. Schneeflocken".
+Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.`;
 
 const STRUCTURE_AND_EXAMPLES = `PFLICHT-STRUKTUR JEDES TAGES (genau in dieser Reihenfolge, jeweils eigener Absatz):
 Absatz 1: Wetterverlauf - Bewölkung, Niederschlag, Gewitter, Sonne mit Tageszeit-Bezug ("am Morgen", "im Tagesverlauf", "am Abend", "gegen Mittag").
@@ -1336,6 +1375,12 @@ export const generateForecast = createServerFn({ method: "POST" })
     const bias: BiasResult | null = biasEnabled && biasStations.length
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
+    const [pressureSeries, snowSeries] = await Promise.all([
+      fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
+      fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
+    ]);
+    const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
+    const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
     const withTopo = (dayIndex: number) => {
       let out = buildDay(dayIndex);
       if (!out) return null;
@@ -1345,6 +1390,7 @@ export const generateForecast = createServerFn({ method: "POST" })
         out = applyBiasToDay(out, bias);
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
+      applyRegimeToDay(out, pressureByDate, snowByDate);
       return out;
     };
     const today = weather.daily.time[0];
@@ -1447,6 +1493,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
 
+    const [pressureSeries, snowSeries] = await Promise.all([
+      fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
+      fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
+    ]);
+    const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
+    const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
+
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
@@ -1471,6 +1524,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         out = applyBiasToDay(out, bias);
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
+      applyRegimeToDay(out, pressureByDate, snowByDate);
       return out;
     };
     const today = weather.daily.time[0];
