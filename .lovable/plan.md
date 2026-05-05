@@ -1,41 +1,50 @@
-Ich habe die aktuellen Logs und den Code geprüft. Der Login schlägt aktuell nicht wegen einer allgemeinen App-Störung fehl, sondern weil das eingegebene Passwort nicht zum bestehenden Konto passt. Der Reset ist zusätzlich instabil, weil der Recovery-Link zwar eine temporäre Session erzeugt, die Seite aber diese Session noch nicht robust genug verarbeitet und der Reset-Link mehrfach/zu schnell neu angefordert wurde. Außerdem ist noch keine eigene E-Mail-Domain eingerichtet, wodurch GMX die Standard-Mails eher filtern oder verzögern kann.
+Die Logs zeigen: Die Reset-Mails werden technisch ausgelöst und der Link wird beim Öffnen als Login/Recovery-Flow akzeptiert. Dass er danach trotzdem als „nicht mehr gültig“ erscheint, liegt sehr wahrscheinlich daran, dass der temporäre Recovery-Login nicht zuverlässig in der App-Session landet bzw. durch Weiterleitungen/Mehrfachaufrufe sofort verbraucht wird. Zusätzlich ist keine eigene E-Mail-Domain eingerichtet, was die Zustellung und das Vertrauen bei GMX verschlechtert.
 
-Plan zur Lösung:
+Plan zur endgültigen Lösung:
 
-1. Passwort-Reset-Seite robust machen
-   - In `src/routes/reset-password.tsx` die Recovery-Token-Verarbeitung explizit absichern.
-   - Beim Laden der Seite sofort prüfen, ob der Link Hash-Parameter oder Query-Parameter für einen Recovery-Flow enthält.
-   - Nicht nur pauschal auf irgendeine vorhandene Session reagieren, sondern den Recovery-Zustand sauber setzen.
-   - Bei `Auth session missing` eine klare deutsche Meldung anzeigen: Link abgelaufen/bereits verwendet, bitte neuen Link anfordern.
-   - Nach erfolgreichem Passwortwechsel Session sauber beenden und zurück zum Login führen.
+1. Recovery-Flow in der App robuster machen
+   - Die Reset-Seite verarbeitet aktuell nur indirekt, ob eine Session entstanden ist.
+   - Ich werde die Seite so umbauen, dass sie Hash- und Query-Parameter des Recovery-Links aktiv auswertet.
+   - Falls ein `code`-Parameter ankommt, wird dieser explizit gegen eine Session eingetauscht.
+   - Falls `access_token`/`refresh_token` im Link ankommen, wird die Session explizit gesetzt.
+   - Danach werden Token aus der URL entfernt, damit Browser-Reloads oder Vorschau-Parameter den Link nicht erneut verbrauchen.
 
-2. Reset-Link-Anforderung benutzerfreundlicher machen
-   - In `src/routes/forgot-password.tsx` die Rate-Limit-Fehler verständlich übersetzen, statt die technische Meldung anzuzeigen.
-   - Nach erfolgreichem Senden den Button vorübergehend sperren bzw. Hinweise anzeigen, damit nicht mehrfach hintereinander Reset-Mails ausgelöst werden.
-   - Deutlich anzeigen: einige Minuten warten, Spam prüfen, Link nur einmal öffnen.
+2. Nicht automatisch zur App weiterleiten, solange Passwort-Reset läuft
+   - Der globale Auth-Provider sieht den Recovery-Link aktuell als normalen Login.
+   - Ich werde verhindern, dass der Recovery-Flow durch Login-/Dashboard-Logik oder Rollenladen gestört wird.
+   - Während `/reset-password` aktiv ist, bleibt der Nutzer auf der Reset-Seite, bis das neue Passwort gespeichert wurde.
 
-3. Login-Fehlermeldung verständlich machen
-   - In `src/routes/login.tsx` `Invalid login credentials` auf Deutsch übersetzen.
-   - Direkt auf den sicheren Weg verweisen: „Passwort vergessen?“ statt weiter mehrfach falsche Passwörter zu probieren.
+3. Reset-Link-Anforderung auf die stabile Projekt-URL korrigieren
+   - Aktuell werden Links auf die jeweilige Vorschau-/Projekt-URL erzeugt.
+   - Ich werde den Redirect möglichst auf die stabile veröffentlichte URL des Projekts setzen, damit der Link nicht durch wechselnde Preview-Parameter oder Editor-URLs beeinflusst wird.
+   - In der lokalen Vorschau bleibt die aktuelle Origin nutzbar, aber produktiv soll der stabile Link verwendet werden.
 
-4. Auth-Session-Hook stabilisieren
-   - In `src/hooks/use-auth.tsx` die Ladezustände sauberer setzen, auch wenn Rollen geladen werden oder fehlschlagen.
-   - Rollen nur nach vollständig wiederhergestellter Session laden.
-   - Damit vermeiden wir Race Conditions nach Login/Reset und hängende Ladezustände.
+4. Fehlermeldungen und Bedienung verbessern
+   - Die Reset-Seite bekommt klare Zustände:
+     - „Link wird geprüft“
+     - „Passwort kann gesetzt werden“
+     - „Link abgelaufen oder bereits verwendet“
+   - Bei ungültigem Link wird nicht nur blockiert, sondern direkt ein Button für einen neuen Link angeboten.
+   - Die Seite erklärt, dass immer nur der neueste Reset-Link verwendet werden darf.
 
-5. Daten-/Rollen-Situation prüfen und bei Bedarf reparieren
-   - Aktuell gibt es eine Admin-Rolle für dein Konto, aber keine passende Profilzeile. Das ist ein Inkonsistenzzeichen.
-   - Ich werde per sicherer Migration/Backend-Reparatur eine fehlende Profilzeile für bestehende Benutzer nachziehen und den Signup-Trigger wieder korrekt sicherstellen, damit zukünftige Konten konsistent angelegt werden.
-   - Rollen bleiben wie vorgeschrieben in der separaten Rollentabelle.
+5. Datenbank-/Trigger-Reparatur sauber nachziehen
+   - Die bestehende Migration versucht, einen Trigger auf neue Nutzer zu setzen, aber der aktuelle Backend-Zustand zeigt noch keinen Trigger.
+   - Ich werde per Migration sicherstellen, dass Profil-Erstellung und Rollenlogik für neue Benutzer zuverlässig aktiv sind.
+   - Rollen bleiben weiterhin in der separaten Rollen-Tabelle.
 
-6. E-Mail-Zustellung nachhaltig lösen
-   - Kurzfristig: neue Reset-Mail erst nach Ablauf des Limits anfordern und GMX Spam/Junk prüfen.
-   - Dauerhaft: eine eigene Absender-Domain in Lovable Cloud einrichten, z. B. eine Subdomain deiner Wetter-Domain. Danach kommen Reset- und Bestätigungsmails zuverlässiger und mit deinem Absender an.
+6. E-Mail-Domain einrichten
+   - Derzeit ist keine eigene E-Mail-Domain konfiguriert.
+   - Für zuverlässige GMX-Zustellung sollte eine eigene Absenderdomain eingerichtet werden, z. B. `mail.oberthurgauerwetter.ch` oder `noreply.oberthurgauerwetter.ch`.
+   - Danach werden die Passwort-Reset- und Bestätigungsmails über diese Domain verschickt.
 
-Nach Umsetzung solltest du so vorgehen:
-1. Auf „Passwort vergessen?“ klicken.
-2. Reset-Link genau einmal öffnen.
-3. Neues Passwort setzen.
-4. Danach mit diesem neuen Passwort einloggen.
+Nach Umsetzung gilt für dich:
+1. Alle alten Reset-Mails löschen.
+2. Genau einen neuen Reset-Link anfordern.
+3. 1–2 Minuten warten und nur die neueste Mail öffnen.
+4. Link genau einmal öffnen.
+5. Passwort setzen und danach normal einloggen.
 
-Wichtig: Wenn der Link vorher schon geöffnet wurde oder der Browser ihn mehrfach geladen hat, muss ein neuer Reset-Link angefordert werden.
+Technische Details:
+- Betroffene Dateien: `src/routes/reset-password.tsx`, `src/routes/forgot-password.tsx`, ggf. `src/hooks/use-auth.tsx` und eine neue Backend-Migration.
+- Es werden keine Rollen im Profil gespeichert.
+- Die Auth-E-Mail-Domain muss über Lovable Cloud eingerichtet werden; dafür öffne ich nach Freigabe den Domain-Setup-Schritt.
