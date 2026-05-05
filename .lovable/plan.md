@@ -1,32 +1,24 @@
-## Problem
+Ich habe den Fehler eingegrenzt: Im Cache liegt aktuell `ens:v1:47.547,9.299` mit `payload.byDate = {}`. Das kommt daher, dass eine JavaScript-`Map` als JSON gespeichert wurde; beim Wiederlesen ist es kein `Map` mehr und `.get()` existiert nicht.
 
-Das manuelle "Neu generieren" zeigt die Korrektur nicht, weil dafür `src/server/forecast.functions.ts` zuständig ist — nicht `forecast.auto.ts` (das nur der Cron nutzt). Beide Dateien enthalten Duplikate von `formatEveningNight`, `buildFirstEntryContext` und der Tag-Schleife.
+Plan zur Behebung:
 
-## Umsetzung in `src/server/forecast.functions.ts`
+1. `src/server/uncertainty.server.ts` JSON-sicher machen
+   - `EnsembleData.byDate` von `Map<string, EnsembleDay>` auf `Record<string, EnsembleDay>` umstellen.
+   - Beim Aufbau der Daten keine `Map` mehr speichern, sondern ein normales Objekt.
+   - `.get()`, `.set()` und `.entries()` durch objektbasierte Zugriffe ersetzen.
 
-Dieselben drei Änderungen wie in `forecast.auto.ts` übertragen:
+2. Defensive Kompatibilität einbauen
+   - In `formatUncertaintyHint` zuerst normalisieren:
+     - falls doch noch eine `Map` ankommt: in Objekt umwandeln
+     - falls ein Objekt ankommt: direkt verwenden
+     - falls ungültige Struktur ankommt: `null` zurückgeben statt Crash
+   - Dadurch bricht „Prognose öffnen“ auch bei alten oder unerwarteten Cache-Daten nicht mehr ab.
 
-1. **`formatEveningNight` (Zeile 1672)**
-   - Dritten Parameter `nextDayTminAvg?: number | null` ergänzen.
-   - Endstunde des Fensters von **05:00** auf **09:00** verlängern (Zeile 1686), damit das nächtliche Minimum (typisch gegen Sonnenaufgang) im Fenster liegt.
-   - Auch `endHour = 5` (Zeile 1800) auf `9` setzen und die Window-Labels entsprechend anpassen (Hinweis "Tiefstwert liegt typischerweise gegen Sonnenaufgang").
-   - Im Return (Zeile 1810) `tmin` als Minimum aus `hourlyTemps` UND `nextDayTminAvg` berechnen:
-     ```
-     tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null && Number.isFinite(nextDayTminAvg) ? [nextDayTminAvg] : []))),
-     ```
+3. Cache-Version anheben
+   - Cache-Key von `ens:v1:` auf `ens:v2:` ändern.
+   - Damit wird der kaputte vorhandene Cache-Eintrag nicht mehr verwendet; es ist keine riskante Datenbank-Löschung nötig.
 
-2. **`buildFirstEntryContext` (Zeile 1859)**
-   - Vor `formatEveningNight(weather)` das Daily-Tagesminimum für Tag 1 holen:
-     `const nextDay = useEvening ? formatDayData(weather, 1) : null;`
-     `const nextDayTmin = nextDay?.tmin?.avg ?? null;`
-   - Beim Aufruf mitgeben: `formatEveningNight(weather, undefined, nextDayTmin)`.
+4. Optionaler Sofort-Fallback für kaputten alten Cache
+   - Selbst wenn irgendwo noch `ens:v1` geladen würde, verhindert die defensive Normalisierung den Crash.
 
-3. **Tag-1-Schleife im "Neu generieren"-Handler (Zeile 2425 ff.)**
-   - Wenn `i === 1` und Abendmodus aktiv (`currentZurichHour() >= 12`):
-     - `day.tmin = null` setzen und `tmin_omitted_reason` ergänzen.
-     - User-Prompt um Hinweis erweitern: "Erwähne KEINEN Tiefstwert — bereits im Block 'Heute Abend & Nacht' genannt. Schreibe nur den Höchstwert."
-
-## Nicht geändert
-
-- Tage 2–5, Trendblock, System-Prompt.
-- `forecast.auto.ts` (bereits umgesetzt).
+Keine UI-Änderung nötig. Nach der Umsetzung sollte „Prognose öffnen“ bzw. „Neu generieren“ nicht mehr mit `ensemble.byDate.get is not a function` abbrechen.

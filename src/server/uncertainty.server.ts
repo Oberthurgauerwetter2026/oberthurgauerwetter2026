@@ -19,7 +19,7 @@ export type EnsembleDay = {
 
 export type EnsembleData = {
   fetched_at: string;
-  byDate: Map<string, EnsembleDay>;
+  byDate: Record<string, EnsembleDay>;
   source: string;
 };
 
@@ -78,15 +78,14 @@ function extractMemberValues(daily: any, varName: string, dayIdx: number): numbe
 }
 
 export async function fetchEnsembleData(lat: number, lon: number): Promise<EnsembleData | null> {
-  const cacheKey = `ens:v1:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const cacheKey = `ens:v2:${lat.toFixed(3)},${lon.toFixed(3)}`;
   return getOrSetCache(
     cacheKey,
     async () => {
       try {
         const raw = await fetchOpenMeteoEnsemble(lat, lon);
-        // Bei mehreren Modellen liefert die API ein Array; sonst ein Objekt.
         const blocks: any[] = Array.isArray(raw) ? raw : [raw];
-        const byDate = new Map<string, EnsembleDay>();
+        const byDate: Record<string, EnsembleDay> = {};
         for (const block of blocks) {
           const daily = block?.daily;
           const times: string[] = daily?.time ?? [];
@@ -94,25 +93,16 @@ export async function fetchEnsembleData(lat: number, lon: number): Promise<Ensem
             const date = times[i];
             const tmaxValues = extractMemberValues(daily, "temperature_2m_max", i);
             const pcpValues = extractMemberValues(daily, "precipitation_sum", i);
-
-            // Wenn schon Eintrag existiert, Member zusammenführen
-            const prev = byDate.get(date);
-            const allTmax = prev?.tmax ? null : tmaxValues; // wir aggregieren neu mit allen Werten
-            // Einfacher: per-date alle Member sammeln, am Ende quantile bilden
-            byDate.set(date, {
-              date,
-              tmax: null,
-              precip_prob_ensemble: null,
-              precip_bimodal: false,
-              // temporäre Felder
-              ...(prev ?? {}),
+            const prev = byDate[date];
+            byDate[date] = {
+              ...(prev ?? { date, tmax: null, precip_prob_ensemble: null, precip_bimodal: false }),
               _tmax: [...((prev as any)?._tmax ?? []), ...tmaxValues],
               _pcp: [...((prev as any)?._pcp ?? []), ...pcpValues],
-            } as any);
+            } as any;
           }
         }
-        // Quantile berechnen
-        for (const [date, entry] of byDate.entries()) {
+        for (const date of Object.keys(byDate)) {
+          const entry = byDate[date];
           const tmaxAll: number[] = (entry as any)._tmax ?? [];
           const pcpAll: number[] = (entry as any)._pcp ?? [];
           if (tmaxAll.length >= 5) {
@@ -128,12 +118,10 @@ export async function fetchEnsembleData(lat: number, lon: number): Promise<Ensem
             const wet = pcpAll.filter((v) => v > 1).length;
             const dry = pcpAll.filter((v) => v < 0.2).length;
             entry.precip_prob_ensemble = Math.round((wet / pcpAll.length) * 100);
-            // bimodal: sowohl deutliche Dry- als auch Wet-Anteile (≥ 30%)
             const dryFrac = dry / pcpAll.length;
             const wetFrac = wet / pcpAll.length;
             entry.precip_bimodal = dryFrac >= 0.3 && wetFrac >= 0.3;
           }
-          // temporäre Felder entfernen
           delete (entry as any)._tmax;
           delete (entry as any)._pcp;
         }
@@ -147,19 +135,31 @@ export async function fetchEnsembleData(lat: number, lon: number): Promise<Ensem
         return null;
       }
     },
-    60 * 60 * 1000, // 1 h TTL — Ensembles laufen 4× täglich
+    60 * 60 * 1000,
   );
 }
 
 // Liefert einen kompakten Hinweis-Text für den Trend-Prompt (Tage 4-10).
 export function formatUncertaintyHint(ensemble: EnsembleData | null, trendDays: any[]): string | null {
   if (!ensemble || !trendDays?.length) return null;
+
+  // Defensiv: byDate kann aus altem Cache als Map oder unerwartete Form kommen.
+  let byDate: Record<string, EnsembleDay>;
+  const raw: any = ensemble.byDate;
+  if (raw instanceof Map) {
+    byDate = Object.fromEntries(raw.entries());
+  } else if (raw && typeof raw === "object") {
+    byDate = raw as Record<string, EnsembleDay>;
+  } else {
+    return null;
+  }
+
   const sigmas: number[] = [];
   const bimodalDates: string[] = [];
   const spreads: { date: string; p10: number; p90: number; sigma: number; precipProb: number | null }[] = [];
 
   for (const d of trendDays) {
-    const e = ensemble.byDate.get(d.date);
+    const e = byDate[d.date];
     if (!e?.tmax) continue;
     sigmas.push(e.tmax.sigma);
     if (e.precip_bimodal) bimodalDates.push(d.date);
