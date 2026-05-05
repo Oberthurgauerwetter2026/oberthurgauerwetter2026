@@ -1366,6 +1366,9 @@ export function buildSystemPrompt(settings: any): string {
     "=== NOWCAST / KONFIDENZ ===",
     "Wenn der Datensatz ein Feld `nowcast` enthält: nutze `observed_now` (aktuelle Stationswerte) und `next_2h.trend` als verlässliche Anker für die ersten Stunden. Wenn `nowcast.confidence` 'niedrig' ist, formuliere vorsichtiger ('zeichnet sich ab', 'deutet sich an', 'unsichere Lage'). Bei `next_2h.trend === 'zunehmend'` Niederschlag explizit erwähnen, bei 'trocken' keine Schauer ankündigen. Bei `night_fog_likely === true` auf mögliches Aufkommen von Nebel hinweisen statt auf besonders kalte Nacht.",
     "",
+    "=== NIEDERSCHLAGS-TAGESGANG ===",
+    "Wenn der Datensatz ein Feld `precip_distribution` enthält, beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` fehlt: wie bisher, Tagesverlauf frei nach Standardregeln formulieren.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
+    "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
   ].join("\n");
