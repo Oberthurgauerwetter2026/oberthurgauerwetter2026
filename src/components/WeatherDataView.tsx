@@ -193,6 +193,54 @@ function DayTable({ data, title }: { data: Record<string, any>; title?: string }
       )}
       {(data as any).topography && <TopographyBlock topo={(data as any).topography} />}
       {(data as any).stations && <StationsBlock stations={(data as any).stations} />}
+      {(data as any).precip_distribution && <PrecipDistributionBlock dist={(data as any).precip_distribution} />}
+      {(data as any).mosmix_reference && <MosmixReferenceBlock ref={(data as any).mosmix_reference} />}
+    </div>
+  );
+}
+
+function PrecipDistributionBlock({ dist }: { dist: any }) {
+  const order = ["night", "morning", "afternoon", "evening"] as const;
+  const peak = dist.peak_block;
+  return (
+    <div className="rounded-md border p-2 space-y-1">
+      <div className="text-xs font-medium text-foreground">Niederschlags-Tagesgang (Open-Meteo stündlich)</div>
+      <div className="grid grid-cols-4 gap-2 text-xs">
+        {order.map((k) => {
+          const b = dist.blocks?.[k];
+          if (!b) return <div key={k} className="text-muted-foreground">–</div>;
+          const isPeak = peak === k;
+          return (
+            <div key={k} className={`rounded p-1.5 ${isPeak ? "bg-primary/15 border border-primary/40" : "bg-muted/30"}`}>
+              <div className="font-medium">{b.label}</div>
+              <div className="tabular-nums">{fmt(b.precip_mm, 1)} mm</div>
+              <div className="text-muted-foreground tabular-nums">max {b.max_prob != null ? `${b.max_prob}%` : "–"}</div>
+              <div className="text-muted-foreground">{b.wet_hours}h ≥0.2mm</div>
+            </div>
+          );
+        })}
+      </div>
+      {peak && (
+        <div className="text-xs text-muted-foreground">
+          Spitze: <span className="font-medium text-foreground">{dist.blocks[peak].label}</span> ·
+          {" "}{fmt(dist.peak_block_precip_mm, 1)} mm · max {dist.peak_block_prob ?? "–"}%
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MosmixReferenceBlock({ ref }: { ref: any }) {
+  return (
+    <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+      <div className="font-medium text-foreground mb-0.5">MOSMIX (Referenz, nicht verwendet)</div>
+      <div className="tabular-nums">
+        Tmin {fmt(ref.tmin, 1)}°C · Tmax {fmt(ref.tmax, 1)}°C · Niederschlag {fmt(ref.precip, 1)} mm · Wind max {fmt(ref.wind_max, 1)} km/h
+        {ref.cloudcover_avg != null && <> · Bewölkung {ref.cloudcover_avg}%</>}
+      </div>
+      {Array.isArray(ref.stations) && ref.stations.length > 0 && (
+        <div>Stationen: {ref.stations.join(", ")}</div>
+      )}
     </div>
   );
 }
