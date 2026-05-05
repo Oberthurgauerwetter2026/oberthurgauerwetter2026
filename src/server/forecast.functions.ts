@@ -959,6 +959,7 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
+    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
   };
 }
 
