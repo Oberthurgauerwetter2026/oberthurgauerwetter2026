@@ -188,6 +188,9 @@ function DayTable({ data, title }: { data: Record<string, any>; title?: string }
           </tbody>
         </table>
       </div>
+      {((data as any).wind_regime || (data as any).snow_line) && (
+        <RegimeBadges wind_regime={(data as any).wind_regime} snow_line={(data as any).snow_line} />
+      )}
       {(data as any).topography && <TopographyBlock topo={(data as any).topography} />}
       {(data as any).stations && <StationsBlock stations={(data as any).stations} />}
     </div>
