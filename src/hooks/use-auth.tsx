@@ -29,7 +29,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(newSession?.user ?? null);
       if (newSession?.user) {
         // defer role fetch to avoid deadlock
-        setTimeout(() => fetchRoles(newSession.user.id), 0);
+        setTimeout(() => {
+          fetchRoles(newSession.user.id).catch(() => setRoles([]));
+        }, 0);
       } else {
         setRoles([]);
       }
@@ -39,11 +41,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(existing);
       setUser(existing?.user ?? null);
       if (existing?.user) {
-        fetchRoles(existing.user.id).finally(() => setLoading(false));
+        fetchRoles(existing.user.id)
+          .catch(() => setRoles([]))
+          .finally(() => setLoading(false));
       } else {
         setLoading(false);
       }
-    });
+    }).catch(() => setLoading(false));
 
     return () => subscription.unsubscribe();
   }, []);
