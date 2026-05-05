@@ -1954,8 +1954,8 @@ async function callLovableAI(model: string, systemPrompt: string, userPrompt: st
   } finally {
     clearTimeout(timeout);
   }
-  if (res.status === 429) throw new Error("KI-Limit erreicht (Lovable AI). Bitte später erneut versuchen.");
-  if (res.status === 402) throw new Error("KI-Guthaben aufgebraucht (Lovable AI). Bitte Workspace aufladen.");
+  if (res.status === 429) throw new Error("Beide KI-Quellen aktuell nicht verfügbar: Gemini Free Tageslimit erreicht und Lovable AI rate-limitiert. Bitte später erneut versuchen.");
+  if (res.status === 402) throw new Error("Beide KI-Quellen aktuell nicht verfügbar: Gemini Free Tageslimit erreicht und Lovable-AI-Workspace-Guthaben aufgebraucht. Bitte Workspace-Guthaben aufladen (Settings → Workspace → Usage) oder bis zum Gemini-Reset (UTC-Mitternacht) warten.");
   if (!res.ok) throw new Error(`KI-Fehler ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content?.trim() ?? "";
