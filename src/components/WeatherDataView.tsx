@@ -230,7 +230,7 @@ function PrecipDistributionBlock({ dist }: { dist: any }) {
   );
 }
 
-function MosmixReferenceBlock({ ref }: { ref: any }) {
+function MosmixReferenceBlock({ data: ref }: { data: any }) {
   return (
     <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
       <div className="font-medium text-foreground mb-0.5">MOSMIX (Referenz, nicht verwendet)</div>
