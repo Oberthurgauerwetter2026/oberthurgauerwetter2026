@@ -1483,6 +1483,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
 
+    const [pressureSeries, snowSeries] = await Promise.all([
+      fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
+      fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
+    ]);
+    const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
+    const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
+
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
@@ -1507,6 +1514,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         out = applyBiasToDay(out, bias);
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
+      applyRegimeToDay(out, pressureByDate, snowByDate);
       return out;
     };
     const today = weather.daily.time[0];
