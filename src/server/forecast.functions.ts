@@ -172,7 +172,9 @@ function enforceNominalStyle(text: string): { violations: string[] } {
 async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
   const first = await generateText(systemPrompt, userPrompt);
   const check = enforceNominalStyle(first);
-  if (check.violations.length === 0) return first;
+  // Nur retryen wenn mehrere Verstöße — einzelne Treffer (oft Hilfsverben) akzeptieren,
+  // um Latenz zu sparen und das Gateway-Timeout nicht zu reissen.
+  if (check.violations.length < 2) return first;
   console.log(`[nominal-style] Verstöße erkannt: ${check.violations.join(", ")} — Retry`);
   const retryPrompt = userPrompt +
     `\n\nWICHTIG: Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${check.violations.join(", ")}). ` +
