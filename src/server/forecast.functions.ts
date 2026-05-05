@@ -172,7 +172,9 @@ function enforceNominalStyle(text: string): { violations: string[] } {
 async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
   const first = await generateText(systemPrompt, userPrompt);
   const check = enforceNominalStyle(first);
-  if (check.violations.length === 0) return first;
+  // Nur retryen wenn mehrere Verstöße — einzelne Treffer (oft Hilfsverben) akzeptieren,
+  // um Latenz zu sparen und das Gateway-Timeout nicht zu reissen.
+  if (check.violations.length < 2) return first;
   console.log(`[nominal-style] Verstöße erkannt: ${check.violations.join(", ")} — Retry`);
   const retryPrompt = userPrompt +
     `\n\nWICHTIG: Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${check.violations.join(", ")}). ` +
@@ -1092,7 +1094,7 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
+  const timeout = setTimeout(() => controller.abort(), 30000);
   let res: Response;
   try {
     res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -1103,7 +1105,9 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-pro",
+        // gemini-2.5-flash: schneller als pro und kein Free-Tier-Bottleneck
+        // (vermeidet ~3-5s pro Call durch Gemini-Free 429 + Gateway-Fallback)
+        model: "google/gemini-2.5-flash",
         temperature: 0.2,
         top_p: 0.9,
         messages: [
