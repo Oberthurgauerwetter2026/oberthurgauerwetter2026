@@ -95,11 +95,7 @@ export async function fetchEnsembleData(lat: number, lon: number): Promise<Ensem
             const pcpValues = extractMemberValues(daily, "precipitation_sum", i);
             const prev = byDate[date];
             byDate[date] = {
-              date,
-              tmax: null,
-              precip_prob_ensemble: null,
-              precip_bimodal: false,
-              ...(prev ?? {}),
+              ...(prev ?? { date, tmax: null, precip_prob_ensemble: null, precip_bimodal: false }),
               _tmax: [...((prev as any)?._tmax ?? []), ...tmaxValues],
               _pcp: [...((prev as any)?._pcp ?? []), ...pcpValues],
             } as any;
