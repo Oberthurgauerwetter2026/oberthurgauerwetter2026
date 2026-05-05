@@ -7,7 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { generateForecast, deleteForecast } from "@/server/forecast.functions";
 import { toast } from "sonner";
-import { Loader2, Plus, ExternalLink, FileEdit, Trash2 } from "lucide-react";
+import { Loader2, Plus, ExternalLink, FileEdit, Trash2, Map as MapIcon } from "lucide-react";
+import { RegionMap } from "@/components/RegionMap";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 export const Route = createFileRoute("/_app/dashboard")({
   component: Dashboard,
