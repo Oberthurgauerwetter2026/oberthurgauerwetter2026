@@ -1,36 +1,38 @@
-## Ziel
+## Problem
+Die Meldung „KI-Guthaben aufgebraucht. Bitte Workspace aufladen." erscheint weiterhin, obwohl `GEMINI_API_KEY` gesetzt ist und der Code Gemini bevorzugt aufrufen sollte.
 
-Der Tiefstwert, der bisher für "Morgen, Dienstag" berechnet wird (Tagesminimum aus den Open-Meteo-Daily-Daten von Tag 1), soll im Block "Heute Abend & Nacht" als Tiefstwert erscheinen — denn dieses Tagesminimum entsteht typischerweise in der Nacht/am frühen Morgen, also genau in dem Zeitfenster, das der Abendblock abdeckt.
+## Ursache
+Mein letzter Fix hat einen **stillen Fallback** auf Lovable AI eingebaut: Wenn der Gemini-Aufruf aus irgendeinem Grund scheitert (z.B. Modellname `gemini-2.5-pro` wird von der v1beta-API nicht akzeptiert, Netzwerkfehler, unerwartete Antwortstruktur), wird automatisch auf Lovable AI umgeschwenkt — und dort liefert der Provider `402 KI-Guthaben aufgebraucht`. Die Original-Meldung von Gemini geht im `console.warn` unter und du siehst nur den Lovable-AI-Fehler.
 
-Im Block "Morgen, Dienstag" bleibt der Tiefstwert weiterhin weggelassen (bereits umgesetzt).
+Zudem: `gemini-2.5-pro` ist in `v1beta` ggf. nicht direkt verfügbar — der korrekte Modell-Identifier ist oft `gemini-2.5-pro` ODER `gemini-2.5-pro-latest` ODER `gemini-2.0-flash-exp`. Der Free-Tier unterstützt **`gemini-2.5-flash`** garantiert, **`gemini-2.5-pro`** dagegen nur eingeschränkt.
 
-## Problem aktuell
+## Fix
 
-- "Heute Abend & Nacht" berechnet `tmin` aus den **stündlichen** Temperaturen im Fenster (heute startHour → morgen 09:00). Das ergibt z. B. 14 °C.
-- "Morgen, Dienstag" hatte (aus den Open-Meteo-Daily-Daten) `tmin = 9 °C` — was eigentlich das nächtliche Minimum darstellt.
-- Beide Werte sind inkonsistent. Der korrekte nächtliche Tiefstwert (9 °C) muss in den Abendblock.
+### 1. `src/server/forecast.functions.ts` — `generateText` (Z. 1946–1958)
+Stillen Fallback entfernen. Wenn `GEMINI_API_KEY` gesetzt ist → ausschliesslich Gemini, Fehler werden direkt an den Aufrufer durchgereicht (echte Fehlermeldung sichtbar):
 
-## Umsetzung in `src/server/forecast.auto.ts`
+```ts
+async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
+  if (process.env.GEMINI_API_KEY) {
+    return await callGemini("gemini-2.5-flash", systemPrompt, userPrompt);
+  }
+  return await callLovableAI("google/gemini-2.5-pro", systemPrompt, userPrompt);
+}
+```
 
-1. **`formatEveningNight` erweitern**
-   - Neuen Parameter `nextDayTminAvg: number | null` hinzufügen.
-   - Beim Berechnen von `tmin` (aktuell Zeile 421: `tmin: r1(Math.min(...hourlyTemps))`) das Minimum aus *beiden* Quellen nehmen:
-     ```
-     tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null ? [nextDayTminAvg] : [])))
-     ```
-   - Damit fließt das Daily-Tagesminimum von Tag 1 mit in den Tiefstwert ein.
+### 2. Modell-Wechsel auf `gemini-2.5-flash` (beide Dateien)
+- `forecast.functions.ts` Z. 1949: `gemini-2.5-pro` → `gemini-2.5-flash`
+- `forecast.auto.ts` bleibt bei `gemini-2.5-flash` (schon korrekt), aber auch dort den stillen Fallback entfernen
 
-2. **`buildFirstEntryContext` anpassen**
-   - Vor dem Aufruf von `formatEveningNight(weather)` das Tag-1-Objekt holen (`formatDayData(weather, 1)`) und dessen `tmin?.avg` als zweiten Parameter übergeben.
-   - Damit nutzt der Abendblock dasselbe nächtliche Minimum, das vorher im "Morgen"-Block erschien.
+**Begründung Modellwahl:** `gemini-2.5-flash` ist im Free-Tier mit 250 Req/Tag stabil verfügbar und liefert für Wettertexte mehr als ausreichende Qualität. Falls du später bewusst Pro-Qualität willst, kannst du auf `gemini-2.5-pro` umstellen — dann aber im Wissen, dass das Free-Limit dort nur 100 Req/Tag beträgt und teilweise gar nicht im Free-Tier verfügbar ist.
 
-3. **Keine Änderung** an:
-   - `runAutoForecast` (Tag-1-`tmin = null` bleibt wie umgesetzt).
-   - `forecast.functions.ts` (System-Prompt unverändert).
-   - Tagen 2–5 und Trendblock.
+### 3. `forecast.auto.ts` `generateText` (Z. 529–539)
+Gleicher Fix: kein stiller Fallback mehr.
 
-## Erwartetes Ergebnis
+## Verifikation nach dem Fix
+- Forecast neu generieren
+- Falls weiterhin Fehler: die echte Gemini-Fehlermeldung wird jetzt angezeigt (z.B. „Gemini-Fehler 404: model not found" → dann wechseln wir auf einen anderen Modellnamen)
 
-- "Heute Abend & Nacht": Tiefstwert ≈ 9 °C (statt 14 °C).
-- "Morgen, Dienstag 05. Mai": kein Tiefstwert genannt, nur Höchstwert.
-- Konsistenter, einmalig genannter Nacht-Tiefstwert.
+## Geänderte Dateien
+- `src/server/forecast.functions.ts`
+- `src/server/forecast.auto.ts`

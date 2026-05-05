@@ -292,7 +292,7 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
   return `Heute Abend & Nacht`;
 }
 
-function formatEveningNight(weather: any, startHourOverride?: number, nextDayTminAvg?: number | null) {
+function formatEveningNight(weather: any, startHourOverride?: number) {
   const h = weather.hourly;
   if (!h?.time) return null;
   const today = weather.daily.time[0];
@@ -304,7 +304,7 @@ function formatEveningNight(weather: any, startHourOverride?: number, nextDayTmi
     .filter(({ t }) => {
       const dt = new Date(t);
       const dateStr = t.slice(0, 10);
-      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 9);
+      return (dateStr === today && dt.getHours() >= startHour) || (dateStr === tomorrow && dt.getHours() < 5);
     });
   if (!slice.length) return null;
 
@@ -408,17 +408,17 @@ function formatEveningNight(weather: any, startHourOverride?: number, nextDayTmi
   const wind_max = hourlyWinds.length ? r1(Math.max(...hourlyWinds)) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
 
-  const endHour = 9;
+  const endHour = 5;
   const window_label =
-    startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend, Nacht und frühen Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`
-    : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - Nachmittag, Abend, Nacht und früher Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`
-    : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - Abend, Nacht und früher Morgen (Tiefstwert liegt typischerweise gegen Sonnenaufgang)`;
+    startHour < 12 ? `${String(startHour).padStart(2, "0")}:00 (heute) bis ${String(endHour).padStart(2, "0")}:00 (morgen früh) - umfasst Tag, Abend und Nacht`
+    : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Nachmittag, Abend und Nacht`
+    : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Abend und Nacht`;
 
   return {
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
-    tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null && Number.isFinite(nextDayTminAvg) ? [nextDayTminAvg] : []))),
+    tmin: r1(Math.min(...hourlyTemps)),
     tmax: r1(Math.max(...hourlyTemps)),
     precip_total: r1(hourlyPrecs.reduce((a, b) => a + b, 0)),
     wind_max,
@@ -466,9 +466,7 @@ function buildTimeOfDayHint(hour: number): string {
 function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, today: string) {
   const hour = currentZurichHour();
   const useEvening = hour >= 12;
-  const nextDay = useEvening ? formatDayData(weather, 1) : null;
-  const nextDayTmin = nextDay?.tmin?.avg ?? null;
-  const evening = useEvening ? formatEveningNight(weather, undefined, nextDayTmin) : null;
+  const evening = useEvening ? formatEveningNight(weather) : null;
   let firstData: any;
   let windowHint = "";
   if (useEvening && evening) {
@@ -492,40 +490,24 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
 
 async function callGemini(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const geminiKey = process.env.GEMINI_API_KEY!;
-  const delays = [0, 1500, 4000, 8000];
-  let lastErr = "";
-  for (let attempt = 0; attempt < delays.length; attempt++) {
-    if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
-    let res: Response;
-    try {
-      res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-            generationConfig: { temperature: 0.2, topP: 0.9 },
-          }),
-        },
-      );
-    } catch (e: any) {
-      lastErr = `Netzwerk: ${e?.message ?? e}`;
-      continue;
-    }
-    if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht.");
-    if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
-    if (res.status >= 500 && res.status < 600) {
-      lastErr = `${res.status}: ${await res.text()}`;
-      continue;
-    }
-    if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}`);
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
-    return text.trim();
-  }
-  throw new Error(`Gemini überlastet. Letzter Fehler: ${lastErr}`);
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        generationConfig: { temperature: 0.2, topP: 0.9 },
+      }),
+    },
+  );
+  if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht.");
+  if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
+  if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}`);
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
+  return text.trim();
 }
 
 async function callLovableAI(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
@@ -838,18 +820,13 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: firstData, forecast_id: forecast.id });
   }
   for (let i = 1; i <= 5; i++) {
-    let day = withTopo(i);
+    const day = withTopo(i);
     if (!day) continue;
-    let extraHint = "";
-    if (i === 1 && autoHour >= 12) {
-      day = { ...day, tmin: null, tmin_omitted_reason: "Tiefstwert wurde bereits im Block 'Heute Abend & Nacht' genannt" };
-      extraHint = `\n\nWICHTIG: Erwähne für diesen Tag KEINEN Tiefstwert — der nächtliche Tiefstwert wurde bereits im vorherigen Abschnitt 'Heute Abend & Nacht' angegeben. Schreibe nur den Höchstwert.`;
-    }
     const date = new Date(day.date);
     const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
     const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
     const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-    const body = enforceSkyConsistency(await generateText(promptTemplate, `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted}:\n${JSON.stringify(day, null, 2)}${extraHint}`), day);
+    const body = enforceSkyConsistency(await generateText(promptTemplate, `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted}:\n${JSON.stringify(day, null, 2)}`), day);
     entries.push({ position: i + 1, entry_date: day.date, title, body, weather_data: day, forecast_id: forecast.id });
   }
   {
