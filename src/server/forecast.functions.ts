@@ -2228,12 +2228,6 @@ export const generateForecast = createServerFn({ method: "POST" })
       return out;
     };
     const today = weather.daily.time[0];
-    const { data: forecast, error: fErr } = await supabase
-      .from("forecasts")
-      .insert({ forecast_date: today, status: "draft", created_by: userId })
-      .select()
-      .single();
-    if (fErr) throw new Error(fErr.message);
 
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
@@ -2317,12 +2311,24 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
     }
 
+    // Erst KI-Tasks ausführen, dann Forecast anlegen — verhindert leere Entwürfe bei KI-Fehler.
     const entries = (await Promise.all(tasks)).sort((a, b) => a.position - b.position);
+
+    const { data: forecast, error: fErr } = await supabase
+      .from("forecasts")
+      .insert({ forecast_date: today, status: "draft", created_by: userId })
+      .select()
+      .single();
+    if (fErr) throw new Error(fErr.message);
 
     const { error: eErr } = await supabase
       .from("forecast_entries")
       .insert(entries.map((entry) => ({ ...entry, forecast_id: forecast.id })));
-    if (eErr) throw new Error(eErr.message);
+    if (eErr) {
+      // Cleanup: leere Forecast-Zeile wieder entfernen
+      await supabase.from("forecasts").delete().eq("id", forecast.id);
+      throw new Error(eErr.message);
+    }
 
     return { forecastId: forecast.id };
   });
