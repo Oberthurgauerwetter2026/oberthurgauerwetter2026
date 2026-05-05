@@ -825,6 +825,79 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   return merged;
 }
 
+// Stündlicher Niederschlags-Tagesgang aus Open-Meteo (Tag 0/1).
+// Liefert 4 Blöcke (night/morning/afternoon/evening) mit mm-Summe + max % Wahrscheinlichkeit.
+function computePrecipDistribution(weather: any, dayIndex: number): any | null {
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return null;
+
+  const collectArrs = (base: string): number[][] => {
+    const out: number[][] = [];
+    if (Array.isArray(h[base])) out.push(h[base]);
+    for (const k of Object.keys(h)) {
+      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push(h[k]);
+    }
+    return out;
+  };
+  const precArrs = collectArrs("precipitation");
+  const probArrs = collectArrs("precipitation_probability");
+  if (!precArrs.length) return null;
+
+  const blocks = {
+    night: { range: [0, 6], label: "Nacht (00–06)" },
+    morning: { range: [6, 12], label: "Vormittag (06–12)" },
+    afternoon: { range: [12, 18], label: "Nachmittag (12–18)" },
+    evening: { range: [18, 24], label: "Abend (18–24)" },
+  } as const;
+
+  const result: Record<string, { label: string; precip_mm: number; max_prob: number | null; wet_hours: number }> = {};
+  let peakBlock: string | null = null;
+  let peakSum = 0;
+  let peakProb: number | null = null;
+
+  for (const [key, { range, label }] of Object.entries(blocks)) {
+    let sum = 0;
+    let wet = 0;
+    let maxProb: number | null = null;
+    let hourCount = 0;
+    for (let i = 0; i < (h.time as string[]).length; i++) {
+      const t = h.time[i] as string;
+      if (!t.startsWith(dateStr)) continue;
+      const hour = parseInt(t.slice(11, 13), 10);
+      if (!Number.isFinite(hour) || hour < range[0] || hour >= range[1]) continue;
+      // Mittel über Modelle pro Stunde
+      const precVals = precArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+      if (!precVals.length) continue;
+      const meanPrec = precVals.reduce((a, b) => a + b, 0) / precVals.length;
+      sum += meanPrec;
+      if (meanPrec >= 0.2) wet += 1;
+      hourCount += 1;
+      const probVals = probArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+      if (probVals.length) {
+        const m = Math.max(...probVals);
+        if (maxProb == null || m > maxProb) maxProb = m;
+      }
+    }
+    if (!hourCount) continue;
+    const rounded = Math.round(sum * 10) / 10;
+    result[key] = { label, precip_mm: rounded, max_prob: maxProb, wet_hours: wet };
+    if (rounded > peakSum) { peakSum = rounded; peakBlock = key; peakProb = maxProb; }
+  }
+
+  if (!Object.keys(result).length) return null;
+  const allMaxProb = Object.values(result).map((b) => b.max_prob).filter((v): v is number => v != null);
+  const overallMaxProb = allMaxProb.length ? Math.max(...allMaxProb) : null;
+
+  return {
+    blocks: result,
+    peak_block: peakSum >= 1 ? peakBlock : null,
+    peak_block_precip_mm: peakSum >= 1 ? Math.round(peakSum * 10) / 10 : 0,
+    peak_block_prob: peakSum >= 1 ? peakProb : null,
+    overall_max_prob: overallMaxProb,
+  };
+}
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
