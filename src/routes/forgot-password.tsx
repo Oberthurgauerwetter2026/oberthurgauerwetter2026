@@ -43,6 +43,7 @@ function ForgotPasswordPage() {
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 Falls ein Konto mit dieser E-Mail existiert, hast du eine Nachricht erhalten. Schau auch im Spam-Ordner nach.
+                Wichtig: Den Link in der E-Mail nur <strong>einmal</strong> anklicken – Mehrfachklicks machen ihn ungültig.
               </p>
               <Link to="/login" className="text-sm text-primary hover:underline">Zurück zum Login</Link>
             </div>
