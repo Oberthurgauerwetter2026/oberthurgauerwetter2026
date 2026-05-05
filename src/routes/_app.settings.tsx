@@ -400,11 +400,6 @@ function SettingsPage() {
           <CardDescription>
             Grundregeln für Sprache, Satzbau und Vokabular. Leer lassen für die Standard-Vorlage.
             Spezifische Regeln zu Bewölkung, Temperatur und Wind unten separat anpassen.
-            <br />
-            <span className="text-xs text-muted-foreground">
-              Hinweis: Die unverhandelbaren Nominal-/Telegrammstil-Regeln werden automatisch zusätzlich
-              zu deinem Text mitgesendet — du musst sie hier nicht wiederholen.
-            </span>
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">

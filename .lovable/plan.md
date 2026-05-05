@@ -1,28 +1,26 @@
-## Diagnose
+Ich habe die Ursache gefunden: Die Neuerstellung nutzt aktuell zuerst den direkt hinterlegten Gemini-Key (`GEMINI_API_KEY`). Wenn dieser wegen Tageslimit mit 429 antwortet, wird der Fehler sofort an die Oberfläche gegeben – obwohl `LOVABLE_API_KEY` ebenfalls vorhanden ist und bereits eine Lovable-AI-Funktion im Code existiert. Der Fallback wird aktuell nur genutzt, wenn gar kein Gemini-Key vorhanden ist, nicht wenn Gemini limitiert ist.
 
-Die Meldung „Cannot coerce the result to a single JSON object" stammt von PostgREST und tritt auf, wenn `.single()` **0** (oder mehr als 1) Zeilen zurückbekommt. Im Code wird `.single()` an drei Stellen verwendet:
+Plan zur Behebung:
 
-1. **`src/routes/_app.forecast.$forecastId.tsx:54`** — beim Laden der Prognose im Editor. Wenn die Forecast-ID in der URL nicht (mehr) existiert (z. B. nach Löschen, oder weil eine andere Browser-Tab-Instanz parallel regeneriert hat), knallt es genau hier.
-2. `src/server/forecast.functions.ts:2353` — direkt nach `.insert(...).select().single()`. Selten kritisch, weil insert sicher 1 Zeile zurückgibt.
-3. `src/server/forecast.functions.ts:2611` — beim WordPress-Publish per ID.
+1. `src/server/forecast.functions.ts` anpassen
+   - `generateText()` so ändern, dass bei Gemini-429 automatisch auf Lovable AI gewechselt wird.
+   - Auch bei temporären Gemini-Problemen sinnvoll fallbacken, statt die Prognose abzubrechen.
+   - Den Lovable-AI-Default auf ein schnelles Modell setzen (`google/gemini-3-flash-preview`), damit komplette Neuerstellungen mit mehreren Texten weniger wahrscheinlich erneut in Limits laufen.
+   - Fehlertexte klarer machen: Nur wenn auch der Fallback fehlschlägt, wird ein echter KI-Fehler angezeigt.
 
-In der DB existieren aktuell mehrere Forecast-Zeilen für 2026-05-05 — wenn eine davon mitten in einem Workflow weggeräumt wird (Cleanup nach KI-Fehler, Delete via Dashboard), liefert die nachfolgende `.single()`-Abfrage 0 Zeilen → genau die Fehlermeldung.
+2. `src/server/forecast.auto.ts` ebenfalls anpassen
+   - Die automatische Tagesprognose nutzt eine separate, ähnliche KI-Implementierung. Dort denselben Fallback einbauen, damit geplante/automatische Generierungen nicht am Gemini-Free-Limit scheitern.
+   - Lovable-AI-Fehler 402/429 dort ebenfalls verständlich behandeln.
 
-## Plan
+3. Optionales Logging ergänzen
+   - Bei Gemini-429 serverseitig eine Warnung loggen: „Gemini limitiert, wechsle auf Lovable AI“.
+   - Keine Secrets ausgeben.
 
-### 1. `src/routes/_app.forecast.$forecastId.tsx` — robust laden
-- `.single()` → `.maybeSingle()` umstellen.
-- Wenn `f` null ist und kein Fehler vorliegt: freundliche Toast-Meldung „Prognose nicht gefunden – evtl. wurde sie gerade gelöscht oder neu generiert." anzeigen und einen „Zurück zum Dashboard"-Hinweis im UI rendern.
-- Bestehende UI für „leere Einträge" bleibt unberührt.
+4. Keine Datenbankänderung nötig
+   - Beide benötigten Secrets sind bereits vorhanden: `GEMINI_API_KEY` und `LOVABLE_API_KEY`.
+   - Keine neuen Tabellen oder Einstellungen erforderlich.
 
-### 2. `src/server/forecast.functions.ts:2611` — Publish-Lookup absichern
-- `.single()` → `.maybeSingle()` mit klarem Fehler-Throw „Prognose nicht mehr vorhanden" statt PostgREST-Coerce-Meldung.
-
-### 3. `src/server/forecast.functions.ts:2353` — Insert-Result
-- Hier ist `.single()` korrekt (Insert garantiert 1 Zeile). Belassen, aber Fehlerausgabe um den Hinweis ergänzen, falls künftig RLS o. Ä. zuschlägt.
-
-### Was nicht passiert
-- Keine DB-Migrationen.
-- Keine Änderung am Generierungs-/Cleanup-Flow.
-
-Sobald freigegeben, setze ich 1–3 um.
+Erwartetes Ergebnis:
+- „Neue Prognose generieren“, „Komplett neu generieren“ und einzelne Einträge neu generieren brechen nicht mehr mit „KI-Tageslimit (Gemini Free) erreicht“ ab.
+- Wenn Gemini Free limitiert ist, generiert die App automatisch über Lovable AI weiter.
+- Nur falls auch Lovable AI limitiert oder Guthaben fehlt, erscheint eine entsprechende Meldung.

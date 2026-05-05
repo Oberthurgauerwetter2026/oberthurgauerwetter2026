@@ -51,12 +51,11 @@ function ForecastEditor() {
   async function load() {
     setLoading(true);
     const [{ data: f, error: fe }, { data: es, error: ee }] = await Promise.all([
-      supabase.from("forecasts").select("*").eq("id", forecastId).maybeSingle(),
+      supabase.from("forecasts").select("*").eq("id", forecastId).single(),
       supabase.from("forecast_entries").select("*").eq("forecast_id", forecastId).order("position"),
     ]);
     if (fe) toast.error(fe.message);
     if (ee) toast.error(ee.message);
-    if (!f && !fe) toast.error("Prognose nicht gefunden – evtl. wurde sie gerade gelöscht oder neu generiert.");
     setForecast(f);
     setEntries(es ?? []);
     setLoading(false);
@@ -190,15 +189,6 @@ function ForecastEditor() {
           </Button>
         </div>
       </div>
-
-      {entries.length === 0 && (
-        <Card>
-          <CardContent className="py-6 text-sm text-muted-foreground">
-            Diese Prognose enthält keine Einträge — die KI-Generierung ist beim ersten Versuch fehlgeschlagen
-            (z. B. KI-Limit / Guthaben). Mit „Komplett neu generieren" erneut versuchen oder im Dashboard löschen.
-          </CardContent>
-        </Card>
-      )}
 
       <div className="space-y-4">
         {entries.map((entry) => (

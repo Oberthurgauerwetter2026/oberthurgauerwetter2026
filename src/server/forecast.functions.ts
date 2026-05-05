@@ -1954,8 +1954,8 @@ async function callLovableAI(model: string, systemPrompt: string, userPrompt: st
   } finally {
     clearTimeout(timeout);
   }
-  if (res.status === 429) throw new Error("Beide KI-Quellen aktuell nicht verfügbar: Gemini Free Tageslimit erreicht und Lovable AI rate-limitiert. Bitte später erneut versuchen.");
-  if (res.status === 402) throw new Error("Beide KI-Quellen aktuell nicht verfügbar: Gemini Free Tageslimit erreicht und Lovable-AI-Workspace-Guthaben aufgebraucht. Bitte Workspace-Guthaben aufladen (Settings → Workspace → Usage) oder bis zum Gemini-Reset (UTC-Mitternacht) warten.");
+  if (res.status === 429) throw new Error("KI-Limit erreicht (Lovable AI). Bitte später erneut versuchen.");
+  if (res.status === 402) throw new Error("KI-Guthaben aufgebraucht (Lovable AI). Bitte Workspace aufladen.");
   if (!res.ok) throw new Error(`KI-Fehler ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content?.trim() ?? "";
@@ -2087,45 +2087,13 @@ Schwache, spürbare Bise.
 
 Gib NUR den Fliesstext aus - keinen Titel, keine Einleitung, keine Erklärung.`;
 
-// Unverhandelbarer Stil-Block: wird IMMER in den System-Prompt eingefügt,
-// auch wenn der Benutzer in app_settings.ai_prompt_template einen kürzeren
-// Custom-Prompt ohne explizite Nominalstil-Regeln hinterlegt hat.
-export const NOMINAL_STYLE_BLOCK = `═══════════════════════════════════════════════════════════
-OBERSTE STIL-REGEL: NOMINAL- / TELEGRAMMSTIL (NICHT VERHANDELBAR)
-═══════════════════════════════════════════════════════════
-Schreibe konsequent im Nominalstil (Telegrammstil). Substantiv-Phrasen statt Vollverben.
-Finite Vollverben sind grundsätzlich zu vermeiden. Hilfsverben ("sein", "werden", "bleiben") nur, wenn unumgänglich.
-Jeder Satz, der mit einem konjugierten Vollverb arbeitet, ist ein Verstoss gegen diese Regel.
-
-VORHER → NACHHER (genau so umsetzen):
-- "die Sonne scheint" → "Sonnenschein"
-- "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"
-- "es regnet zeitweise" → "zeitweise Regen"
-- "es schneit am Morgen" → "am Morgen Schneefall"
-- "der Wind weht mässig aus Westen" → "mässiger Westwind"
-- "die Bewölkung nimmt zu" → "zunehmende Bewölkung"
-- "es bilden sich Quellwolken" → "Bildung von Quellwolken"
-- "der Himmel klart auf" → "Auflockerung der Bewölkung"
-- "die Temperaturen steigen" → "steigende Temperaturen"
-- "Gewitter sind möglich" → "lokal Gewitterneigung"
-
-KONTRAST-BEISPIEL (Pflichtlektüre):
-FALSCH (Verbalstil): "Am Morgen scheint die Sonne, später ziehen Wolken auf und es regnet zeitweise. Der Wind weht mässig aus Westen."
-RICHTIG (Nominalstil): "Am Morgen sonnig, im Tagesverlauf Aufzug von Wolkenfeldern - zeitweise Regen. Mässiger Westwind."
-═══════════════════════════════════════════════════════════`;
-
 export function buildSystemPrompt(settings: any): string {
   const general = settings?.ai_prompt_template?.trim() || DEFAULT_GENERAL_STYLE;
   const sky = settings?.prompt_sky?.trim() || DEFAULT_SKY_RULES;
   const temp = settings?.prompt_temp?.trim() || DEFAULT_TEMP_RULES;
   const wind = settings?.prompt_wind?.trim() || DEFAULT_WIND_RULES;
-  // Nominalstil-Block immer voranstellen, sofern er nicht ohnehin im
-  // (ggf. überschriebenen) General-Block enthalten ist.
-  const generalWithStyle = general.includes("OBERSTE STIL-REGEL: NOMINAL")
-    ? general
-    : `${NOMINAL_STYLE_BLOCK}\n\n${general}`;
   return [
-    generalWithStyle,
+    general,
     "",
     "=== REGELN BEWÖLKUNG / SONNE / NIEDERSCHLAG ===",
     sky,
@@ -2260,6 +2228,12 @@ export const generateForecast = createServerFn({ method: "POST" })
       return out;
     };
     const today = weather.daily.time[0];
+    const { data: forecast, error: fErr } = await supabase
+      .from("forecasts")
+      .insert({ forecast_date: today, status: "draft", created_by: userId })
+      .select()
+      .single();
+    if (fErr) throw new Error(fErr.message);
 
     const tasks: Array<Promise<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any }>> = [];
 
@@ -2343,24 +2317,12 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
     }
 
-    // Erst KI-Tasks ausführen, dann Forecast anlegen — verhindert leere Entwürfe bei KI-Fehler.
     const entries = (await Promise.all(tasks)).sort((a, b) => a.position - b.position);
-
-    const { data: forecast, error: fErr } = await supabase
-      .from("forecasts")
-      .insert({ forecast_date: today, status: "draft", created_by: userId })
-      .select()
-      .single();
-    if (fErr) throw new Error(fErr.message);
 
     const { error: eErr } = await supabase
       .from("forecast_entries")
       .insert(entries.map((entry) => ({ ...entry, forecast_id: forecast.id })));
-    if (eErr) {
-      // Cleanup: leere Forecast-Zeile wieder entfernen
-      await supabase.from("forecasts").delete().eq("id", forecast.id);
-      throw new Error(eErr.message);
-    }
+    if (eErr) throw new Error(eErr.message);
 
     return { forecastId: forecast.id };
   });
@@ -2608,9 +2570,8 @@ export const publishToWordPress = createServerFn({ method: "POST" })
       .from("forecasts")
       .select("*")
       .eq("id", data.forecastId)
-      .maybeSingle();
+      .single();
     if (fErr) throw new Error(fErr.message);
-    if (!forecast) throw new Error("Prognose nicht mehr vorhanden.");
 
     const { data: entries, error: eErr } = await supabase
       .from("forecast_entries")
