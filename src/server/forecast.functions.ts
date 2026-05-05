@@ -1882,37 +1882,7 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
 }
 
 // ===== AI text generation =====
-async function callGemini(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
-  const geminiKey = process.env.GEMINI_API_KEY!;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
-  let res: Response;
-  try {
-    res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-          generationConfig: { temperature: 0.2, topP: 0.9 },
-        }),
-      },
-    );
-  } finally {
-    clearTimeout(timeout);
-  }
-  if (res.status === 429) throw new Error("KI-Tageslimit (Gemini Free) erreicht. Bitte später erneut versuchen.");
-  if (res.status === 401 || res.status === 403) throw new Error("Gemini API-Key ungültig.");
-  if (!res.ok) throw new Error(`Gemini-Fehler ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? "";
-  return text.trim();
-}
-
-async function callLovableAI(model: string, systemPrompt: string, userPrompt: string): Promise<string> {
+async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
   const controller = new AbortController();
@@ -1922,9 +1892,12 @@ async function callLovableAI(model: string, systemPrompt: string, userPrompt: st
     res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       signal: controller.signal,
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
-        model,
+        model: "google/gemini-2.5-pro",
         temperature: 0.2,
         top_p: 0.9,
         messages: [
@@ -1941,13 +1914,6 @@ async function callLovableAI(model: string, systemPrompt: string, userPrompt: st
   if (!res.ok) throw new Error(`KI-Fehler ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content?.trim() ?? "";
-}
-
-async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
-  if (process.env.GEMINI_API_KEY) {
-    return await callGemini("gemini-2.5-flash", systemPrompt, userPrompt);
-  }
-  return await callLovableAI("google/gemini-2.5-pro", systemPrompt, userPrompt);
 }
 
 // ===== Prompt-Bausteine =====
