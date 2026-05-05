@@ -194,7 +194,7 @@ function DayTable({ data, title }: { data: Record<string, any>; title?: string }
       {(data as any).topography && <TopographyBlock topo={(data as any).topography} />}
       {(data as any).stations && <StationsBlock stations={(data as any).stations} />}
       {(data as any).precip_distribution && <PrecipDistributionBlock dist={(data as any).precip_distribution} />}
-      {(data as any).mosmix_reference && <MosmixReferenceBlock ref={(data as any).mosmix_reference} />}
+      {(data as any).mosmix_reference && <MosmixReferenceBlock data={(data as any).mosmix_reference} />}
     </div>
   );
 }
