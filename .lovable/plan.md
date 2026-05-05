@@ -1,26 +1,19 @@
-## Ziel
+# Fix: "Cannot destructure property 'forecastId'" beim Generieren
 
-Der Trend-Block soll die **Grosswetterlage** für Tag 6–10 umreissen — bewusst allgemeiner und weniger detailliert als die Tagesprognosen.
+## Ursache
+Der Vite-Dev-Server hat eine veraltete SSR-Modulgraph-Referenz auf die nicht mehr existierende Datei `src/server/uncertainty.server.ts`. Beim Aufruf von `generateForecast` schlägt das Modul-Loading fehl (HTTP 500), der Client erhält `null` zurück und destrukturiert es → der Fehler.
 
-## Änderung
+Im Quellcode existiert kein Import von `uncertainty.server` mehr (`rg` findet 0 Treffer) — es ist rein ein Dev-Server-Cache-Problem.
 
-In `src/server/forecast.functions.ts` an beiden Stellen (Zeile 1388 in `generateForecast`, Zeile 1515 in `regenerateForecast`) den User-Prompt erweitern:
+## Umsetzung
+**Eine triviale Änderung in `src/server/forecast.functions.ts`**, die Vite zwingt, das Modul neu aufzulösen und den verwaisten Eintrag aus dem SSR-Modulgraphen zu entfernen:
 
-**Vorher:**
-```ts
-`Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10 auf Basis dieser Daten:\n${JSON.stringify(trendDays, null, 2)}`
-```
+- Eine harmlose Kommentarzeile am Dateianfang ergänzen (z. B. `// cache-bust: re-resolve module graph`).
 
-**Nachher:**
-```ts
-`Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}`
-```
+Das triggert eine HMR-Reload des Servermoduls; der stale `uncertainty.server`-Knoten wird dabei verworfen, und `generateForecast` lässt sich wieder laden.
 
-## Nicht geändert
+## Test
+Nach der Änderung im Dashboard auf "Neue Prognose generieren" klicken — sollte ohne Destructure-Fehler durchlaufen.
 
-- Datenbasis (`trendDays = [6,7,8,9,10]`), Titel, Position, Nominalstil-Validator, System-Prompt-Template — alles unberührt.
-- Tagesprognosen 1–5 bleiben so detailliert wie bisher.
-
-## Dateien
-
-- `src/server/forecast.functions.ts` — 2 identische Prompt-Edits
+## Falls A nicht greift
+Dann ist ein vollständiger Dev-Server-Restart nötig (Variante B) — das würde ich dann als Folge-Schritt machen.
