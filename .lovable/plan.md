@@ -1,19 +1,29 @@
-# Fix: "Cannot destructure property 'forecastId'" beim Generieren
+# Fix: 504 "upstream request timeout" bei Prognose-Generierung
 
 ## Ursache
-Der Vite-Dev-Server hat eine veraltete SSR-Modulgraph-Referenz auf die nicht mehr existierende Datei `src/server/uncertainty.server.ts`. Beim Aufruf von `generateForecast` schlägt das Modul-Loading fehl (HTTP 500), der Client erhält `null` zurück und destrukturiert es → der Fehler.
+`generateForecast` macht 6–7 parallele AI-Calls (Tag 0–5 + Trend) an `google/gemini-2.5-pro` über das Lovable-AI-Gateway. Das Gateway logt für jeden Call:
 
-Im Quellcode existiert kein Import von `uncertainty.server` mehr (`rg` findet 0 Treffer) — es ist rein ein Dev-Server-Cache-Problem.
+```
+[ai] Gemini nicht verfügbar (Gemini Free Tageslimit (429.)) – Fallback auf Lovable AI.
+```
+
+Jeder Call kostet dadurch ~3–5 s zusätzliche Wartezeit (erst Gemini-Free probieren → 429 → Fallback). Bei 7 parallelen Calls + möglichem Style-Retry summiert sich die Latenz über das Gateway-Timeout (~60 s) → **504**.
 
 ## Umsetzung
-**Eine triviale Änderung in `src/server/forecast.functions.ts`**, die Vite zwingt, das Modul neu aufzulösen und den verwaisten Eintrag aus dem SSR-Modulgraphen zu entfernen:
 
-- Eine harmlose Kommentarzeile am Dateianfang ergänzen (z. B. `// cache-bust: re-resolve module graph`).
+**1. Modellwechsel in `src/server/forecast.functions.ts` (`generateText`, ~Zeile 1106)**
+- Von `google/gemini-2.5-pro` auf **`google/gemini-2.5-flash`**.
+- Flash ist deutlich schneller, hat keinen Free-Tier-Engpass und liefert für Wettertexte genügend Qualität. Damit entfallen die Fallback-Loops im Gateway.
 
-Das triggert eine HMR-Reload des Servermoduls; der stale `uncertainty.server`-Knoten wird dabei verworfen, und `generateForecast` lässt sich wieder laden.
+**2. Abort-Timeout nachziehen (~Zeile 1095)**
+- Aktuell 45 s pro Call → für Flash auf 30 s reduzieren (schnellerer Failure-Modus, falls ein Call hängt).
+
+**3. Style-Retry konditional machen (`generateTextNominal`, ~Zeile 172)**
+- Aktuell: bei jedem erkannten Verstoß ein zweiter voller AI-Call.
+- Neu: nur retryen, wenn die Verstoß-Anzahl ≥ 2 ist (einzelne Hilfsverb-Treffer akzeptieren). Spart im Schnitt ~1 Extra-Call pro Generierung.
 
 ## Test
-Nach der Änderung im Dashboard auf "Neue Prognose generieren" klicken — sollte ohne Destructure-Fehler durchlaufen.
+Nach dem Deploy im Dashboard "Neue Prognose generieren" klicken — sollte in ~15–30 s durchlaufen, kein 504 mehr.
 
-## Falls A nicht greift
-Dann ist ein vollständiger Dev-Server-Restart nötig (Variante B) — das würde ich dann als Folge-Schritt machen.
+## Optional / später
+Falls die Qualität von Flash nicht reicht: pro Tagesblock individuell wählen (Tag 1–2 mit Pro, Tag 3–5 + Trend mit Flash) oder auf `google/gemini-3-flash-preview` upgraden.

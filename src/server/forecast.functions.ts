@@ -1092,7 +1092,7 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
+  const timeout = setTimeout(() => controller.abort(), 30000);
   let res: Response;
   try {
     res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -1103,7 +1103,9 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-pro",
+        // gemini-2.5-flash: schneller als pro und kein Free-Tier-Bottleneck
+        // (vermeidet ~3-5s pro Call durch Gemini-Free 429 + Gateway-Fallback)
+        model: "google/gemini-2.5-flash",
         temperature: 0.2,
         top_p: 0.9,
         messages: [
