@@ -365,6 +365,11 @@ export function WeatherDataView({ data }: { data: any }) {
     }
 
     const directAggKeys = Object.keys(data).filter((k) => isAgg((data as any)[k]));
+    // Day-0 flat format: scalar fields + central by_model { model: { field: value } }.
+    // Render as a single DayTable so flatToAggs() inside DayTable converts it.
+    if (directAggKeys.length === 0 && flatToAggs(data as any)) {
+      return <DayTable data={data} />;
+    }
     const nestedSectionKeys = Object.keys(data).filter(
       (k) => k !== "topography" && (data as any)[k] && typeof (data as any)[k] === "object" && !isAgg((data as any)[k]) && !Array.isArray((data as any)[k]),
     );
