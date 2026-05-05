@@ -1,26 +1,36 @@
-Ich habe die Ursache gefunden: Die Neuerstellung nutzt aktuell zuerst den direkt hinterlegten Gemini-Key (`GEMINI_API_KEY`). Wenn dieser wegen Tageslimit mit 429 antwortet, wird der Fehler sofort an die Oberfläche gegeben – obwohl `LOVABLE_API_KEY` ebenfalls vorhanden ist und bereits eine Lovable-AI-Funktion im Code existiert. Der Fallback wird aktuell nur genutzt, wenn gar kein Gemini-Key vorhanden ist, nicht wenn Gemini limitiert ist.
+## Ziel
 
-Plan zur Behebung:
+Der Tiefstwert, der bisher für "Morgen, Dienstag" berechnet wird (Tagesminimum aus den Open-Meteo-Daily-Daten von Tag 1), soll im Block "Heute Abend & Nacht" als Tiefstwert erscheinen — denn dieses Tagesminimum entsteht typischerweise in der Nacht/am frühen Morgen, also genau in dem Zeitfenster, das der Abendblock abdeckt.
 
-1. `src/server/forecast.functions.ts` anpassen
-   - `generateText()` so ändern, dass bei Gemini-429 automatisch auf Lovable AI gewechselt wird.
-   - Auch bei temporären Gemini-Problemen sinnvoll fallbacken, statt die Prognose abzubrechen.
-   - Den Lovable-AI-Default auf ein schnelles Modell setzen (`google/gemini-3-flash-preview`), damit komplette Neuerstellungen mit mehreren Texten weniger wahrscheinlich erneut in Limits laufen.
-   - Fehlertexte klarer machen: Nur wenn auch der Fallback fehlschlägt, wird ein echter KI-Fehler angezeigt.
+Im Block "Morgen, Dienstag" bleibt der Tiefstwert weiterhin weggelassen (bereits umgesetzt).
 
-2. `src/server/forecast.auto.ts` ebenfalls anpassen
-   - Die automatische Tagesprognose nutzt eine separate, ähnliche KI-Implementierung. Dort denselben Fallback einbauen, damit geplante/automatische Generierungen nicht am Gemini-Free-Limit scheitern.
-   - Lovable-AI-Fehler 402/429 dort ebenfalls verständlich behandeln.
+## Problem aktuell
 
-3. Optionales Logging ergänzen
-   - Bei Gemini-429 serverseitig eine Warnung loggen: „Gemini limitiert, wechsle auf Lovable AI“.
-   - Keine Secrets ausgeben.
+- "Heute Abend & Nacht" berechnet `tmin` aus den **stündlichen** Temperaturen im Fenster (heute startHour → morgen 09:00). Das ergibt z. B. 14 °C.
+- "Morgen, Dienstag" hatte (aus den Open-Meteo-Daily-Daten) `tmin = 9 °C` — was eigentlich das nächtliche Minimum darstellt.
+- Beide Werte sind inkonsistent. Der korrekte nächtliche Tiefstwert (9 °C) muss in den Abendblock.
 
-4. Keine Datenbankänderung nötig
-   - Beide benötigten Secrets sind bereits vorhanden: `GEMINI_API_KEY` und `LOVABLE_API_KEY`.
-   - Keine neuen Tabellen oder Einstellungen erforderlich.
+## Umsetzung in `src/server/forecast.auto.ts`
 
-Erwartetes Ergebnis:
-- „Neue Prognose generieren“, „Komplett neu generieren“ und einzelne Einträge neu generieren brechen nicht mehr mit „KI-Tageslimit (Gemini Free) erreicht“ ab.
-- Wenn Gemini Free limitiert ist, generiert die App automatisch über Lovable AI weiter.
-- Nur falls auch Lovable AI limitiert oder Guthaben fehlt, erscheint eine entsprechende Meldung.
+1. **`formatEveningNight` erweitern**
+   - Neuen Parameter `nextDayTminAvg: number | null` hinzufügen.
+   - Beim Berechnen von `tmin` (aktuell Zeile 421: `tmin: r1(Math.min(...hourlyTemps))`) das Minimum aus *beiden* Quellen nehmen:
+     ```
+     tmin: r1(Math.min(...hourlyTemps, ...(nextDayTminAvg != null ? [nextDayTminAvg] : [])))
+     ```
+   - Damit fließt das Daily-Tagesminimum von Tag 1 mit in den Tiefstwert ein.
+
+2. **`buildFirstEntryContext` anpassen**
+   - Vor dem Aufruf von `formatEveningNight(weather)` das Tag-1-Objekt holen (`formatDayData(weather, 1)`) und dessen `tmin?.avg` als zweiten Parameter übergeben.
+   - Damit nutzt der Abendblock dasselbe nächtliche Minimum, das vorher im "Morgen"-Block erschien.
+
+3. **Keine Änderung** an:
+   - `runAutoForecast` (Tag-1-`tmin = null` bleibt wie umgesetzt).
+   - `forecast.functions.ts` (System-Prompt unverändert).
+   - Tagen 2–5 und Trendblock.
+
+## Erwartetes Ergebnis
+
+- "Heute Abend & Nacht": Tiefstwert ≈ 9 °C (statt 14 °C).
+- "Morgen, Dienstag 05. Mai": kein Tiefstwert genannt, nur Höchstwert.
+- Konsistenter, einmalig genannter Nacht-Tiefstwert.
