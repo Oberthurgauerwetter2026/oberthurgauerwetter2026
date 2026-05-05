@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,16 +15,24 @@ type Status = "checking" | "ready" | "no_session";
 
 function translateAuthError(message: string): string {
   const m = message.toLowerCase();
-  if (m.includes("auth session missing")) {
+  if (m.includes("auth session missing") || m.includes("invalid") || m.includes("expired")) {
     return "Der Reset-Link ist abgelaufen oder wurde bereits verwendet. Bitte fordere einen neuen Link an.";
   }
   if (m.includes("same") && m.includes("password")) {
     return "Das neue Passwort darf nicht mit dem alten identisch sein.";
   }
-  if (m.includes("weak") || m.includes("at least")) {
+  if (m.includes("weak") || m.includes("at least") || m.includes("6 characters") || m.includes("8 characters")) {
     return "Das Passwort ist zu schwach. Bitte mindestens 8 Zeichen wählen.";
   }
   return message;
+}
+
+function cleanUrl() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.hash = "";
+  url.search = "";
+  window.history.replaceState({}, "", url.toString());
 }
 
 function ResetPasswordPage() {
@@ -33,36 +41,102 @@ function ResetPasswordPage() {
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<Status>("checking");
+  const handledRef = useRef(false);
 
   useEffect(() => {
-    let recovered = false;
+    let cancelled = false;
 
-    // Hash-/Query-Token sofort erkennen → optimistisch auf Recovery-Flow setzen
-    if (typeof window !== "undefined") {
-      const hash = window.location.hash || "";
-      const search = window.location.search || "";
-      if (hash.includes("type=recovery") || search.includes("type=recovery") || hash.includes("access_token")) {
-        // Wir sind im Recovery-Flow; Supabase verarbeitet den Token gleich
-      }
-    }
-
+    // Listener für PASSWORD_RECOVERY-Event von Supabase
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (cancelled) return;
       if (event === "PASSWORD_RECOVERY" || (event === "SIGNED_IN" && session)) {
-        recovered = true;
         setStatus("ready");
       }
     });
 
-    // Fallback: Session kurz nach Mount prüfen
-    const t = setTimeout(async () => {
-      if (recovered) return;
-      const { data } = await supabase.auth.getSession();
-      setStatus(data.session ? "ready" : "no_session");
-    }, 1200);
+    async function init() {
+      if (handledRef.current) return;
+      handledRef.current = true;
+
+      try {
+        // 1) Falls bereits eine Session besteht (z. B. nach Auto-Detect), direkt ready
+        const { data: existing } = await supabase.auth.getSession();
+        if (existing.session) {
+          if (!cancelled) setStatus("ready");
+          return;
+        }
+
+        if (typeof window === "undefined") return;
+        const hash = window.location.hash.startsWith("#")
+          ? window.location.hash.slice(1)
+          : window.location.hash;
+        const hashParams = new URLSearchParams(hash);
+        const queryParams = new URLSearchParams(window.location.search);
+
+        // Fehler aus URL erkennen
+        const errCode = hashParams.get("error_code") || queryParams.get("error_code");
+        const errDesc = hashParams.get("error_description") || queryParams.get("error_description");
+        if (errCode || errDesc) {
+          if (!cancelled) {
+            setStatus("no_session");
+            toast.error(translateAuthError(errDesc || errCode || ""));
+          }
+          cleanUrl();
+          return;
+        }
+
+        // 2) PKCE-Flow: ?code=...
+        const code = queryParams.get("code");
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          cleanUrl();
+          if (error) {
+            if (!cancelled) {
+              setStatus("no_session");
+              toast.error(translateAuthError(error.message));
+            }
+            return;
+          }
+          if (!cancelled) setStatus("ready");
+          return;
+        }
+
+        // 3) Implicit-Flow: #access_token=...&refresh_token=...
+        const accessToken = hashParams.get("access_token");
+        const refreshToken = hashParams.get("refresh_token");
+        if (accessToken && refreshToken) {
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          cleanUrl();
+          if (error) {
+            if (!cancelled) {
+              setStatus("no_session");
+              toast.error(translateAuthError(error.message));
+            }
+            return;
+          }
+          if (!cancelled) setStatus("ready");
+          return;
+        }
+
+        // 4) Fallback: kurz auf das Auth-Event warten
+        setTimeout(async () => {
+          if (cancelled) return;
+          const { data } = await supabase.auth.getSession();
+          setStatus(data.session ? "ready" : "no_session");
+        }, 1500);
+      } catch (e) {
+        if (!cancelled) setStatus("no_session");
+      }
+    }
+
+    init();
 
     return () => {
+      cancelled = true;
       subscription.unsubscribe();
-      clearTimeout(t);
     };
   }, []);
 
@@ -78,7 +152,6 @@ function ResetPasswordPage() {
       return;
     }
     setSubmitting(true);
-    // Vor updateUser nochmals Session sicherstellen
     const { data: sessionData } = await supabase.auth.getSession();
     if (!sessionData.session) {
       setSubmitting(false);
@@ -118,8 +191,9 @@ function ResetPasswordPage() {
           {status === "no_session" ? (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Der Link ist abgelaufen oder wurde bereits verwendet. Bitte fordere einen neuen Reset-Link an.
-                Wichtig: Den Link in der E-Mail nur <strong>einmal</strong> anklicken.
+                Der Link ist abgelaufen oder wurde bereits verwendet. Bitte fordere einen neuen
+                Reset-Link an. Wichtig: Immer nur die <strong>neueste</strong> Mail öffnen und den
+                Link nur <strong>einmal</strong> anklicken.
               </p>
               <Button asChild className="w-full">
                 <Link to="/forgot-password">Neuen Link anfordern</Link>
