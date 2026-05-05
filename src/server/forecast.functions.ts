@@ -2087,13 +2087,45 @@ Schwache, spürbare Bise.
 
 Gib NUR den Fliesstext aus - keinen Titel, keine Einleitung, keine Erklärung.`;
 
+// Unverhandelbarer Stil-Block: wird IMMER in den System-Prompt eingefügt,
+// auch wenn der Benutzer in app_settings.ai_prompt_template einen kürzeren
+// Custom-Prompt ohne explizite Nominalstil-Regeln hinterlegt hat.
+export const NOMINAL_STYLE_BLOCK = `═══════════════════════════════════════════════════════════
+OBERSTE STIL-REGEL: NOMINAL- / TELEGRAMMSTIL (NICHT VERHANDELBAR)
+═══════════════════════════════════════════════════════════
+Schreibe konsequent im Nominalstil (Telegrammstil). Substantiv-Phrasen statt Vollverben.
+Finite Vollverben sind grundsätzlich zu vermeiden. Hilfsverben ("sein", "werden", "bleiben") nur, wenn unumgänglich.
+Jeder Satz, der mit einem konjugierten Vollverb arbeitet, ist ein Verstoss gegen diese Regel.
+
+VORHER → NACHHER (genau so umsetzen):
+- "die Sonne scheint" → "Sonnenschein"
+- "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"
+- "es regnet zeitweise" → "zeitweise Regen"
+- "es schneit am Morgen" → "am Morgen Schneefall"
+- "der Wind weht mässig aus Westen" → "mässiger Westwind"
+- "die Bewölkung nimmt zu" → "zunehmende Bewölkung"
+- "es bilden sich Quellwolken" → "Bildung von Quellwolken"
+- "der Himmel klart auf" → "Auflockerung der Bewölkung"
+- "die Temperaturen steigen" → "steigende Temperaturen"
+- "Gewitter sind möglich" → "lokal Gewitterneigung"
+
+KONTRAST-BEISPIEL (Pflichtlektüre):
+FALSCH (Verbalstil): "Am Morgen scheint die Sonne, später ziehen Wolken auf und es regnet zeitweise. Der Wind weht mässig aus Westen."
+RICHTIG (Nominalstil): "Am Morgen sonnig, im Tagesverlauf Aufzug von Wolkenfeldern - zeitweise Regen. Mässiger Westwind."
+═══════════════════════════════════════════════════════════`;
+
 export function buildSystemPrompt(settings: any): string {
   const general = settings?.ai_prompt_template?.trim() || DEFAULT_GENERAL_STYLE;
   const sky = settings?.prompt_sky?.trim() || DEFAULT_SKY_RULES;
   const temp = settings?.prompt_temp?.trim() || DEFAULT_TEMP_RULES;
   const wind = settings?.prompt_wind?.trim() || DEFAULT_WIND_RULES;
+  // Nominalstil-Block immer voranstellen, sofern er nicht ohnehin im
+  // (ggf. überschriebenen) General-Block enthalten ist.
+  const generalWithStyle = general.includes("OBERSTE STIL-REGEL: NOMINAL")
+    ? general
+    : `${NOMINAL_STYLE_BLOCK}\n\n${general}`;
   return [
-    general,
+    generalWithStyle,
     "",
     "=== REGELN BEWÖLKUNG / SONNE / NIEDERSCHLAG ===",
     sky,
