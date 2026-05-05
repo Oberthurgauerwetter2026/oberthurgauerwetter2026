@@ -51,11 +51,12 @@ function ForecastEditor() {
   async function load() {
     setLoading(true);
     const [{ data: f, error: fe }, { data: es, error: ee }] = await Promise.all([
-      supabase.from("forecasts").select("*").eq("id", forecastId).single(),
+      supabase.from("forecasts").select("*").eq("id", forecastId).maybeSingle(),
       supabase.from("forecast_entries").select("*").eq("forecast_id", forecastId).order("position"),
     ]);
     if (fe) toast.error(fe.message);
     if (ee) toast.error(ee.message);
+    if (!f && !fe) toast.error("Prognose nicht gefunden – evtl. wurde sie gerade gelöscht oder neu generiert.");
     setForecast(f);
     setEntries(es ?? []);
     setLoading(false);
