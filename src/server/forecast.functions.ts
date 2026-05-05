@@ -1241,7 +1241,7 @@ Bei "wind_regime.class" = "none": KEINE Erwähnung des Druckgradienten.
 SCHNEEFALLGRENZE:
 Wenn "snow_line.class" = "low" UND im Tag Niederschlag fällt (precip.avg ≥ 1 mm), MUSS ein kurzer Hinweis im Wetterverlauf-Absatz stehen, z. B. "Schneefallgrenze um {snow_line.snow_line_min} m" oder "in höheren Lagen Schneefall ab ca. {snow_line.snow_line_min} m".
 Bei "snow_line.class" = "high_terrain_only": optional "auf den höchsten Hügelzügen evtl. Schneeflocken".
-Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.
+Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.`;
 
 const STRUCTURE_AND_EXAMPLES = `PFLICHT-STRUKTUR JEDES TAGES (genau in dieser Reihenfolge, jeweils eigener Absatz):
 Absatz 1: Wetterverlauf - Bewölkung, Niederschlag, Gewitter, Sonne mit Tageszeit-Bezug ("am Morgen", "im Tagesverlauf", "am Abend", "gegen Mittag").
