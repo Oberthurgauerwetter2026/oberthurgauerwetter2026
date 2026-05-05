@@ -1231,7 +1231,17 @@ Beispiel: wind_label = "Schwacher Südostwind" → Satz: "Schwacher Südostwind.
 ABSOLUT VERBOTEN: eine andere Windrichtung als die in "wind_label" zu nennen. Wenn "wind_label" "Südostwind" sagt, dann NIEMALS "Bise", "Ostwind", "Westwind" o.ä. schreiben. Wenn "wind_label" "Bise" sagt, NIE "Ostwind" oder "Nordostwind" schreiben.
 Du darfst nur sachlich ergänzen: Tageszeit-Bezug ("am Morgen", "im Tagesverlauf"), oder Böen-Hinweis bei Schauer/Gewitter ("kräftige Böen").
 Verwende NIE rohe Gradzahlen aus "wind_dir" oder "wind_dir_avg".
-Eine abweichende Windbezeichnung gilt als Verstoss gegen die Vorgaben.`;
+Eine abweichende Windbezeichnung gilt als Verstoss gegen die Vorgaben.
+
+WIND-REGIME (Druckgradient):
+Wenn "wind_regime.class" = "foehn_strong" oder "foehn_weak", erwähne kurz föhnige Aufhellungen / mildere Temperaturen im Wind-Absatz (nur wenn nicht im Widerspruch zur "wind_label").
+Wenn "wind_regime.class" = "bise_strong" oder "bise_weak" und "wind_label" eine Ostkomponente hat (Bise/Nordost/Ost), darf der Wind-Absatz "trockenkalt" o. ä. ergänzen.
+Bei "wind_regime.class" = "none": KEINE Erwähnung des Druckgradienten.
+
+SCHNEEFALLGRENZE:
+Wenn "snow_line.class" = "low" UND im Tag Niederschlag fällt (precip.avg ≥ 1 mm), MUSS ein kurzer Hinweis im Wetterverlauf-Absatz stehen, z. B. "Schneefallgrenze um {snow_line.snow_line_min} m" oder "in höheren Lagen Schneefall ab ca. {snow_line.snow_line_min} m".
+Bei "snow_line.class" = "high_terrain_only": optional "auf den höchsten Hügelzügen evtl. Schneeflocken".
+Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.
 
 const STRUCTURE_AND_EXAMPLES = `PFLICHT-STRUKTUR JEDES TAGES (genau in dieser Reihenfolge, jeweils eigener Absatz):
 Absatz 1: Wetterverlauf - Bewölkung, Niederschlag, Gewitter, Sonne mit Tageszeit-Bezug ("am Morgen", "im Tagesverlauf", "am Abend", "gegen Mittag").
