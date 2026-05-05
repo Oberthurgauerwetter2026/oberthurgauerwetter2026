@@ -40,7 +40,34 @@ function applyRadarToDay(out: any, dayIndex: number, radar: RadarSnapshot | null
   }
 }
 
-// ===== Helpers =====
+// Hängt Druckgradient + Schneefallgrenze ans Tagesobjekt, wenn vorhanden.
+function applyRegimeToDay(
+  out: any,
+  pressureByDate: Map<string, DayPressure>,
+  snowByDate: Map<string, DaySnowLine>,
+) {
+  if (!out?.date) return;
+  const wr = pressureByDate.get(out.date);
+  if (wr) {
+    out.wind_regime = {
+      class: wr.class,
+      label: wr.label,
+      dp_foehn: wr.dp_foehn,
+      dp_bise: wr.dp_bise,
+    };
+  }
+  const sn = snowByDate.get(out.date);
+  if (sn && sn.class !== "none") {
+    out.snow_line = {
+      class: sn.class,
+      label: sn.label,
+      freezing_min: sn.freezing_min,
+      freezing_avg: sn.freezing_avg,
+      freezing_max: sn.freezing_max,
+      snow_line_min: sn.snow_line_min,
+    };
+  }
+}
 async function ensureStaff(supabase: any, userId: string) {
   const { data, error } = await supabase
     .from("user_roles")
