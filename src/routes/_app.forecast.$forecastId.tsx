@@ -190,6 +190,15 @@ function ForecastEditor() {
         </div>
       </div>
 
+      {entries.length === 0 && (
+        <Card>
+          <CardContent className="py-6 text-sm text-muted-foreground">
+            Diese Prognose enthält keine Einträge — die KI-Generierung ist beim ersten Versuch fehlgeschlagen
+            (z. B. KI-Limit / Guthaben). Mit „Komplett neu generieren" erneut versuchen oder im Dashboard löschen.
+          </CardContent>
+        </Card>
+      )}
+
       <div className="space-y-4">
         {entries.map((entry) => (
           <Card key={entry.id}>
