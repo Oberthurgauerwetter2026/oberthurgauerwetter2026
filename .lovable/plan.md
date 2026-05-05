@@ -1,50 +1,35 @@
-Die Logs zeigen: Die Reset-Mails werden technisch ausgelöst und der Link wird beim Öffnen als Login/Recovery-Flow akzeptiert. Dass er danach trotzdem als „nicht mehr gültig“ erscheint, liegt sehr wahrscheinlich daran, dass der temporäre Recovery-Login nicht zuverlässig in der App-Session landet bzw. durch Weiterleitungen/Mehrfachaufrufe sofort verbraucht wird. Zusätzlich ist keine eigene E-Mail-Domain eingerichtet, was die Zustellung und das Vertrauen bei GMX verschlechtert.
+Ich sehe jetzt klarer, warum die Seite den Link als „abgelaufen“ meldet: Der Backend-Log zeigt, dass der Link beim Öffnen tatsächlich erfolgreich verifiziert wird (Login/Recovery über `/verify`), aber die App erkennt die daraus entstandene Sitzung nicht zuverlässig und fällt nach dem Timeout auf „kein gültiger Link“ zurück. Das ist kein Zustellproblem mehr.
 
-Plan zur endgültigen Lösung:
+Plan:
 
-1. Recovery-Flow in der App robuster machen
-   - Die Reset-Seite verarbeitet aktuell nur indirekt, ob eine Session entstanden ist.
-   - Ich werde die Seite so umbauen, dass sie Hash- und Query-Parameter des Recovery-Links aktiv auswertet.
-   - Falls ein `code`-Parameter ankommt, wird dieser explizit gegen eine Session eingetauscht.
-   - Falls `access_token`/`refresh_token` im Link ankommen, wird die Session explizit gesetzt.
-   - Danach werden Token aus der URL entfernt, damit Browser-Reloads oder Vorschau-Parameter den Link nicht erneut verbrauchen.
+1. `src/routes/reset-password.tsx` robust umbauen
+   - Nicht mehr zuerst `getSession()` prüfen und danach erst Tokens auswerten.
+   - Zuerst immer URL-Parameter/Hash auswerten:
+     - `?code=...` per `exchangeCodeForSession()`
+     - `#access_token=...&refresh_token=...` per `setSession()`
+     - Fehlerparameter klar anzeigen
+   - Danach aktiv auf eine wiederhergestellte Sitzung warten, nicht nur 1.5 Sekunden blind per Timeout.
+   - Nach erfolgreichem Link-Check erst die URL bereinigen, damit Reloads den Link nicht erneut verbrauchen.
+   - Die Passwortfelder nur anzeigen, wenn `getUser()` oder eine Session sicher vorhanden ist.
+   - Interne Debug-Ausgabe in der Konsole ergänzen, damit man bei einem erneuten Fehler sieht, ob der Browser `code`, `access_token`, `refresh_token` oder einen Fehler erhalten hat, ohne Tokens selbst auszugeben.
 
-2. Nicht automatisch zur App weiterleiten, solange Passwort-Reset läuft
-   - Der globale Auth-Provider sieht den Recovery-Link aktuell als normalen Login.
-   - Ich werde verhindern, dass der Recovery-Flow durch Login-/Dashboard-Logik oder Rollenladen gestört wird.
-   - Während `/reset-password` aktiv ist, bleibt der Nutzer auf der Reset-Seite, bis das neue Passwort gespeichert wurde.
+2. Recovery-Link mit OTP-Fallback unterstützen
+   - Falls der Link nicht als Session-URL, sondern als `token_hash`/`type=recovery` ankommt, zusätzlich `verifyOtp({ type: 'recovery', token_hash })` verwenden.
+   - Das deckt beide üblichen Auth-Link-Formate ab und verhindert, dass gültige Recovery-Links fälschlich als abgelaufen gelten.
 
-3. Reset-Link-Anforderung auf die stabile Projekt-URL korrigieren
-   - Aktuell werden Links auf die jeweilige Vorschau-/Projekt-URL erzeugt.
-   - Ich werde den Redirect möglichst auf die stabile veröffentlichte URL des Projekts setzen, damit der Link nicht durch wechselnde Preview-Parameter oder Editor-URLs beeinflusst wird.
-   - In der lokalen Vorschau bleibt die aktuelle Origin nutzbar, aber produktiv soll der stabile Link verwendet werden.
+3. `src/hooks/use-auth.tsx` entschärfen
+   - Den globalen AuthProvider so anpassen, dass er Recovery-/Signed-In-Events nicht durch parallele Rollenabfragen oder Loading-State-Rennen stört.
+   - Rollen weiterhin verzögert laden, aber `loading` zuverlässig beenden, auch wenn Rollenabfrage fehlschlägt.
 
-4. Fehlermeldungen und Bedienung verbessern
-   - Die Reset-Seite bekommt klare Zustände:
-     - „Link wird geprüft“
-     - „Passwort kann gesetzt werden“
-     - „Link abgelaufen oder bereits verwendet“
-   - Bei ungültigem Link wird nicht nur blockiert, sondern direkt ein Button für einen neuen Link angeboten.
-   - Die Seite erklärt, dass immer nur der neueste Reset-Link verwendet werden darf.
+4. `src/routes/forgot-password.tsx` Redirect stabilisieren
+   - Statt der aktuell geöffneten Domain eine stabile App-URL verwenden, damit der Reset nicht zwischen Preview-/Published-/alter Lovableproject-Domain springt.
+   - Für die aktuelle Vorschau wird der stabile Preview-Link verwendet; nach Veröffentlichung kann der Published-Link genutzt werden.
+   - Die Hinweise auf der Seite bleiben, aber der Fehler liegt nicht mehr bei GMX oder zu langsamem Öffnen.
 
-5. Datenbank-/Trigger-Reparatur sauber nachziehen
-   - Die bestehende Migration versucht, einen Trigger auf neue Nutzer zu setzen, aber der aktuelle Backend-Zustand zeigt noch keinen Trigger.
-   - Ich werde per Migration sicherstellen, dass Profil-Erstellung und Rollenlogik für neue Benutzer zuverlässig aktiv sind.
-   - Rollen bleiben weiterhin in der separaten Rollen-Tabelle.
+5. Danach Testablauf
+   - Alten Reset-Link verwerfen.
+   - Genau einen neuen Link anfordern.
+   - Link öffnen: Erwartet wird direkt das Formular „Neues Passwort setzen“.
+   - Passwort speichern: Danach wird man abgemeldet und kann sich mit dem neuen Passwort anmelden.
 
-6. E-Mail-Domain einrichten
-   - Derzeit ist keine eigene E-Mail-Domain konfiguriert.
-   - Für zuverlässige GMX-Zustellung sollte eine eigene Absenderdomain eingerichtet werden, z. B. `mail.oberthurgauerwetter.ch` oder `noreply.oberthurgauerwetter.ch`.
-   - Danach werden die Passwort-Reset- und Bestätigungsmails über diese Domain verschickt.
-
-Nach Umsetzung gilt für dich:
-1. Alle alten Reset-Mails löschen.
-2. Genau einen neuen Reset-Link anfordern.
-3. 1–2 Minuten warten und nur die neueste Mail öffnen.
-4. Link genau einmal öffnen.
-5. Passwort setzen und danach normal einloggen.
-
-Technische Details:
-- Betroffene Dateien: `src/routes/reset-password.tsx`, `src/routes/forgot-password.tsx`, ggf. `src/hooks/use-auth.tsx` und eine neue Backend-Migration.
-- Es werden keine Rollen im Profil gespeichert.
-- Die Auth-E-Mail-Domain muss über Lovable Cloud eingerichtet werden; dafür öffne ich nach Freigabe den Domain-Setup-Schritt.
+Wichtig: Es gibt aktuell keine eigene E-Mail-Domain im Projekt. Das ist für Zustellbarkeit langfristig sinnvoll, ist aber nicht die Ursache für „Mail kommt schnell, Link wird sofort als abgelaufen angezeigt“. Die unmittelbare Lösung ist die robuste Verarbeitung des Recovery-Links in der App.

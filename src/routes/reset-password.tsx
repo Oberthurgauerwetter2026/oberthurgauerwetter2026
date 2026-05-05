@@ -14,17 +14,23 @@ export const Route = createFileRoute("/reset-password")({
 type Status = "checking" | "ready" | "no_session";
 
 function translateAuthError(message: string): string {
-  const m = message.toLowerCase();
-  if (m.includes("auth session missing") || m.includes("invalid") || m.includes("expired")) {
+  const m = (message || "").toLowerCase();
+  if (
+    m.includes("auth session missing") ||
+    m.includes("invalid") ||
+    m.includes("expired") ||
+    m.includes("otp_expired") ||
+    m.includes("access_denied")
+  ) {
     return "Der Reset-Link ist abgelaufen oder wurde bereits verwendet. Bitte fordere einen neuen Link an.";
   }
   if (m.includes("same") && m.includes("password")) {
     return "Das neue Passwort darf nicht mit dem alten identisch sein.";
   }
-  if (m.includes("weak") || m.includes("at least") || m.includes("6 characters") || m.includes("8 characters")) {
+  if (m.includes("weak") || m.includes("at least") || m.includes("characters")) {
     return "Das Passwort ist zu schwach. Bitte mindestens 8 Zeichen wählen.";
   }
-  return message;
+  return message || "Unbekannter Fehler.";
 }
 
 function cleanUrl() {
@@ -46,10 +52,12 @@ function ResetPasswordPage() {
   useEffect(() => {
     let cancelled = false;
 
-    // Listener für PASSWORD_RECOVERY-Event von Supabase
+    // Listener für PASSWORD_RECOVERY/SIGNED_IN — Supabase setzt die Session
+    // beim Laden der Seite mit dem Recovery-Hash automatisch.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
-      if (event === "PASSWORD_RECOVERY" || (event === "SIGNED_IN" && session)) {
+      console.info("[reset-password] auth event:", event, !!session);
+      if ((event === "PASSWORD_RECOVERY" || event === "SIGNED_IN" || event === "INITIAL_SESSION") && session) {
         setStatus("ready");
       }
     });
@@ -59,75 +67,112 @@ function ResetPasswordPage() {
       handledRef.current = true;
 
       try {
-        // 1) Falls bereits eine Session besteht (z. B. nach Auto-Detect), direkt ready
+        if (typeof window !== "undefined") {
+          const hash = window.location.hash.startsWith("#")
+            ? window.location.hash.slice(1)
+            : window.location.hash;
+          const hashParams = new URLSearchParams(hash);
+          const queryParams = new URLSearchParams(window.location.search);
+
+          console.info("[reset-password] params:", {
+            hasCode: !!queryParams.get("code"),
+            hasAccessToken: !!hashParams.get("access_token"),
+            hasTokenHash: !!(queryParams.get("token_hash") || hashParams.get("token_hash")),
+            type: queryParams.get("type") || hashParams.get("type"),
+            error: hashParams.get("error_code") || queryParams.get("error_code"),
+          });
+
+          // Fehler aus URL erkennen
+          const errCode = hashParams.get("error_code") || queryParams.get("error_code");
+          const errDesc = hashParams.get("error_description") || queryParams.get("error_description");
+          if (errCode || errDesc) {
+            if (!cancelled) {
+              setStatus("no_session");
+              toast.error(translateAuthError(errDesc || errCode || ""));
+            }
+            cleanUrl();
+            return;
+          }
+
+          // 1) PKCE-Flow: ?code=...
+          const code = queryParams.get("code");
+          if (code) {
+            const { error } = await supabase.auth.exchangeCodeForSession(code);
+            if (error) {
+              if (!cancelled) {
+                setStatus("no_session");
+                toast.error(translateAuthError(error.message));
+              }
+              cleanUrl();
+              return;
+            }
+            if (!cancelled) setStatus("ready");
+            cleanUrl();
+            return;
+          }
+
+          // 2) Token-Hash-Flow: ?token_hash=...&type=recovery
+          const tokenHash = queryParams.get("token_hash") || hashParams.get("token_hash");
+          const type = (queryParams.get("type") || hashParams.get("type")) as
+            | "recovery" | "signup" | "magiclink" | "email" | null;
+          if (tokenHash && type) {
+            const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+            if (error) {
+              if (!cancelled) {
+                setStatus("no_session");
+                toast.error(translateAuthError(error.message));
+              }
+              cleanUrl();
+              return;
+            }
+            if (!cancelled) setStatus("ready");
+            cleanUrl();
+            return;
+          }
+
+          // 3) Implicit-Flow: #access_token=...&refresh_token=...
+          const accessToken = hashParams.get("access_token");
+          const refreshToken = hashParams.get("refresh_token");
+          if (accessToken && refreshToken) {
+            const { error } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (error) {
+              if (!cancelled) {
+                setStatus("no_session");
+                toast.error(translateAuthError(error.message));
+              }
+              cleanUrl();
+              return;
+            }
+            if (!cancelled) setStatus("ready");
+            cleanUrl();
+            return;
+          }
+        }
+
+        // 4) Kein Token in URL: schon eine Session vorhanden?
         const { data: existing } = await supabase.auth.getSession();
         if (existing.session) {
           if (!cancelled) setStatus("ready");
           return;
         }
 
-        if (typeof window === "undefined") return;
-        const hash = window.location.hash.startsWith("#")
-          ? window.location.hash.slice(1)
-          : window.location.hash;
-        const hashParams = new URLSearchParams(hash);
-        const queryParams = new URLSearchParams(window.location.search);
-
-        // Fehler aus URL erkennen
-        const errCode = hashParams.get("error_code") || queryParams.get("error_code");
-        const errDesc = hashParams.get("error_description") || queryParams.get("error_description");
-        if (errCode || errDesc) {
-          if (!cancelled) {
-            setStatus("no_session");
-            toast.error(translateAuthError(errDesc || errCode || ""));
-          }
-          cleanUrl();
-          return;
-        }
-
-        // 2) PKCE-Flow: ?code=...
-        const code = queryParams.get("code");
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          cleanUrl();
-          if (error) {
-            if (!cancelled) {
-              setStatus("no_session");
-              toast.error(translateAuthError(error.message));
-            }
-            return;
-          }
-          if (!cancelled) setStatus("ready");
-          return;
-        }
-
-        // 3) Implicit-Flow: #access_token=...&refresh_token=...
-        const accessToken = hashParams.get("access_token");
-        const refreshToken = hashParams.get("refresh_token");
-        if (accessToken && refreshToken) {
-          const { error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-          cleanUrl();
-          if (error) {
-            if (!cancelled) {
-              setStatus("no_session");
-              toast.error(translateAuthError(error.message));
-            }
-            return;
-          }
-          if (!cancelled) setStatus("ready");
-          return;
-        }
-
-        // 4) Fallback: kurz auf das Auth-Event warten
-        setTimeout(async () => {
-          if (cancelled) return;
+        // 5) Aktiv warten (max. 4s) bis Supabase die Session aus dem URL-Hash
+        //    automatisch wiederhergestellt hat.
+        const start = Date.now();
+        while (!cancelled && Date.now() - start < 4000) {
+          await new Promise((r) => setTimeout(r, 250));
           const { data } = await supabase.auth.getSession();
-          setStatus(data.session ? "ready" : "no_session");
-        }, 1500);
+          if (data.session) {
+            if (!cancelled) setStatus("ready");
+            return;
+          }
+        }
+        if (!cancelled) setStatus("no_session");
       } catch (e) {
+        console.error("[reset-password] init error:", e);
         if (!cancelled) setStatus("no_session");
       }
     }
@@ -193,7 +238,8 @@ function ResetPasswordPage() {
               <p className="text-sm text-muted-foreground">
                 Der Link ist abgelaufen oder wurde bereits verwendet. Bitte fordere einen neuen
                 Reset-Link an. Wichtig: Immer nur die <strong>neueste</strong> Mail öffnen und den
-                Link nur <strong>einmal</strong> anklicken.
+                Link nur <strong>einmal</strong> anklicken (nicht in mehreren Tabs öffnen, keine
+                Vorschau-/Virenscanner-Klicks).
               </p>
               <Button asChild className="w-full">
                 <Link to="/forgot-password">Neuen Link anfordern</Link>
