@@ -31,6 +31,14 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<{ location_lat: number; location_lon: number; location_name: string | null; radius_km: number | null; bias_stations: string | null; mosmix_stations: string | null } | null>(null);
+  const [mapOpen, setMapOpen] = useState(false);
+
+  useEffect(() => {
+    supabase.from("app_settings").select("location_lat,location_lon,location_name,radius_km,bias_stations,mosmix_stations").maybeSingle().then(({ data }) => {
+      if (data) setSettings(data as any);
+    });
+  }, []);
 
   async function load() {
     setLoading(true);
