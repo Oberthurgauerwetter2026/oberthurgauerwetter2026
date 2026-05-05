@@ -22,6 +22,7 @@ export type RadarSnapshot = {
     hours: { time: string; mm: number }[];
     next_2h_mm: number;
   };
+  forecast_hours: { time: string; mm: number }[]; // bis zu 6h
   model_expected_past_3h_mm: number | null;
   source: string;
 };
