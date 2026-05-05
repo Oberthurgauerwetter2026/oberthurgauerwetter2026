@@ -13,6 +13,20 @@ export const Route = createFileRoute("/reset-password")({
 
 type Status = "checking" | "ready" | "no_session";
 
+function translateAuthError(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes("auth session missing")) {
+    return "Der Reset-Link ist abgelaufen oder wurde bereits verwendet. Bitte fordere einen neuen Link an.";
+  }
+  if (m.includes("same") && m.includes("password")) {
+    return "Das neue Passwort darf nicht mit dem alten identisch sein.";
+  }
+  if (m.includes("weak") || m.includes("at least")) {
+    return "Das Passwort ist zu schwach. Bitte mindestens 8 Zeichen wählen.";
+  }
+  return message;
+}
+
 function ResetPasswordPage() {
   const navigate = useNavigate();
   const [password, setPassword] = useState("");
@@ -23,6 +37,15 @@ function ResetPasswordPage() {
   useEffect(() => {
     let recovered = false;
 
+    // Hash-/Query-Token sofort erkennen → optimistisch auf Recovery-Flow setzen
+    if (typeof window !== "undefined") {
+      const hash = window.location.hash || "";
+      const search = window.location.search || "";
+      if (hash.includes("type=recovery") || search.includes("type=recovery") || hash.includes("access_token")) {
+        // Wir sind im Recovery-Flow; Supabase verarbeitet den Token gleich
+      }
+    }
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY" || (event === "SIGNED_IN" && session)) {
         recovered = true;
@@ -30,13 +53,12 @@ function ResetPasswordPage() {
       }
     });
 
-    // Fallback: prüfe nach kurzer Zeit, ob bereits eine Session existiert
-    // (Supabase konsumiert den Hash-Token automatisch beim Mount)
+    // Fallback: Session kurz nach Mount prüfen
     const t = setTimeout(async () => {
       if (recovered) return;
       const { data } = await supabase.auth.getSession();
       setStatus(data.session ? "ready" : "no_session");
-    }, 800);
+    }, 1200);
 
     return () => {
       subscription.unsubscribe();
@@ -56,10 +78,21 @@ function ResetPasswordPage() {
       return;
     }
     setSubmitting(true);
+    // Vor updateUser nochmals Session sicherstellen
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session) {
+      setSubmitting(false);
+      setStatus("no_session");
+      toast.error("Der Reset-Link ist abgelaufen. Bitte fordere einen neuen Link an.");
+      return;
+    }
     const { error } = await supabase.auth.updateUser({ password });
     if (error) {
       setSubmitting(false);
-      toast.error(error.message);
+      toast.error(translateAuthError(error.message));
+      if (error.message.toLowerCase().includes("auth session missing")) {
+        setStatus("no_session");
+      }
       return;
     }
     toast.success("Passwort aktualisiert – bitte neu anmelden");
@@ -75,7 +108,7 @@ function ResetPasswordPage() {
           <CardTitle>Neues Passwort setzen</CardTitle>
           <CardDescription>
             {status === "ready"
-              ? "Wähle ein neues, sicheres Passwort."
+              ? "Wähle ein neues, sicheres Passwort (mind. 8 Zeichen)."
               : status === "checking"
               ? "Recovery-Link wird geprüft…"
               : "Kein gültiger Recovery-Link."}
