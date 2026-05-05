@@ -1420,22 +1420,34 @@ export const generateForecast = createServerFn({ method: "POST" })
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
       // Tag 0/1: MOSMIX bevorzugt — überschreibt Roh-Werte, kein Stations-Bias.
-      const mosmix = dayIndex <= 1 ? mosmixByDate.get(omDay.date) : null;
+      // Nur Tag 0: MOSMIX überschreibt Roh-Werte (kein Stations-Bias).
+      // Tag 1: Open-Meteo Multi-Modell + Stations-Bias führen, MOSMIX nur als Referenz.
+      const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
+      const mosmix = dayIndex === 0 ? mosmixDay : null;
       let base: any;
       if (mosmix) {
-        // MOSMIX ist Primärquelle. Open-Meteo bleibt als Referenz im Feld om_reference.
         base = enrichMosmixDay({
           ...mosmix,
-          // weathercode/precip_prob aus Open-Meteo übernehmen (MOSMIX hat das nicht)
           weathercode: omDay.weathercode,
           precip_prob: omDay.precip_prob,
           om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
         });
       } else {
         base = omDay;
+        // Tag 1: MOSMIX als Cross-Check anhängen (nicht im Text verwenden)
+        if (dayIndex === 1 && mosmixDay) {
+          base = { ...base, mosmix_reference: {
+            tmin: mosmixDay.tmin?.avg ?? null,
+            tmax: mosmixDay.tmax?.avg ?? null,
+            precip: mosmixDay.precip?.avg ?? null,
+            wind_max: mosmixDay.wind_max?.avg ?? null,
+            cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+            stations: mosmixDay.mosmix_stations ?? [],
+            per_station: mosmixDay.mosmix_per_station ?? {},
+          } };
+        }
       }
       const out: any = { ...base, topography: applyTopography(base, topo) };
-      // Stations-Bias nur dann anhängen, wenn nicht schon MOSMIX-korrigiert.
       if (!mosmix) {
         const st = applyStationBias(base, stationBiases);
         if (st) out.stations = st;
