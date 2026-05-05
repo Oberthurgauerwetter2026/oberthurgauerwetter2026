@@ -1607,7 +1607,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
-      const mosmix = dayIndex <= 1 ? mosmixByDate.get(omDay.date) : null;
+      const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
+      const mosmix = dayIndex === 0 ? mosmixDay : null;
       let base: any;
       if (mosmix) {
         base = enrichMosmixDay({
@@ -1618,6 +1619,17 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         });
       } else {
         base = omDay;
+        if (dayIndex === 1 && mosmixDay) {
+          base = { ...base, mosmix_reference: {
+            tmin: mosmixDay.tmin?.avg ?? null,
+            tmax: mosmixDay.tmax?.avg ?? null,
+            precip: mosmixDay.precip?.avg ?? null,
+            wind_max: mosmixDay.wind_max?.avg ?? null,
+            cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+            stations: mosmixDay.mosmix_stations ?? [],
+            per_station: mosmixDay.mosmix_per_station ?? {},
+          } };
+        }
       }
       let out: any = { ...base, topography: applyTopography(base, topo) };
       if (!mosmix) {
