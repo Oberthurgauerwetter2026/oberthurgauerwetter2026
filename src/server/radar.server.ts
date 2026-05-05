@@ -113,6 +113,7 @@ export async function fetchRadarSnapshot(lat: number, lon: number): Promise<Rada
             hours: future.slice(0, 2),
             next_2h_mm: Math.round(sum(future.slice(0, 2)) * 10) / 10,
           },
+          forecast_hours: future.slice(0, 6),
           model_expected_past_3h_mm: modelExpectedPast,
           source: "open-meteo:meteoswiss_icon_ch1 (radar-assimiliert) + icon_d2 (Vergleich)",
         };
