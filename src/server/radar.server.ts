@@ -22,6 +22,7 @@ export type RadarSnapshot = {
     hours: { time: string; mm: number }[];
     next_2h_mm: number;
   };
+  forecast_hours: { time: string; mm: number }[]; // bis zu 6h
   model_expected_past_3h_mm: number | null;
   source: string;
 };
@@ -33,7 +34,7 @@ async function fetchOMPrecip(lat: number, lon: number) {
   url.searchParams.set("timezone", "Europe/Zurich");
   url.searchParams.set("hourly", "precipitation");
   url.searchParams.set("past_hours", "3");
-  url.searchParams.set("forecast_hours", "3");
+  url.searchParams.set("forecast_hours", "6");
   url.searchParams.set("models", "meteoswiss_icon_ch1");
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error(`Open-Meteo radar proxy ${res.status}`);
@@ -112,6 +113,7 @@ export async function fetchRadarSnapshot(lat: number, lon: number): Promise<Rada
             hours: future.slice(0, 2),
             next_2h_mm: Math.round(sum(future.slice(0, 2)) * 10) / 10,
           },
+          forecast_hours: future.slice(0, 6),
           model_expected_past_3h_mm: modelExpectedPast,
           source: "open-meteo:meteoswiss_icon_ch1 (radar-assimiliert) + icon_d2 (Vergleich)",
         };

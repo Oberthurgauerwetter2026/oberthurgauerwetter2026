@@ -19,6 +19,7 @@ export type Database = {
           ai_prompt_template: string | null
           bias_enabled: boolean
           bias_lookback_days: number
+          bias_per_hour_enabled: boolean
           bias_stations: string
           bias_strength: number
           id: string
@@ -30,6 +31,9 @@ export type Database = {
           models_shortterm: string | null
           mosmix_enabled: boolean
           mosmix_stations: string
+          night_clear_cooling_c: number
+          nowcast_enabled: boolean
+          nowcast_obs_horizon_h: number
           prompt_sky: string | null
           prompt_temp: string | null
           prompt_wind: string | null
@@ -51,6 +55,7 @@ export type Database = {
           ai_prompt_template?: string | null
           bias_enabled?: boolean
           bias_lookback_days?: number
+          bias_per_hour_enabled?: boolean
           bias_stations?: string
           bias_strength?: number
           id?: string
@@ -62,6 +67,9 @@ export type Database = {
           models_shortterm?: string | null
           mosmix_enabled?: boolean
           mosmix_stations?: string
+          night_clear_cooling_c?: number
+          nowcast_enabled?: boolean
+          nowcast_obs_horizon_h?: number
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null
@@ -83,6 +91,7 @@ export type Database = {
           ai_prompt_template?: string | null
           bias_enabled?: boolean
           bias_lookback_days?: number
+          bias_per_hour_enabled?: boolean
           bias_stations?: string
           bias_strength?: number
           id?: string
@@ -94,6 +103,9 @@ export type Database = {
           models_shortterm?: string | null
           mosmix_enabled?: boolean
           mosmix_stations?: string
+          night_clear_cooling_c?: number
+          nowcast_enabled?: boolean
+          nowcast_obs_horizon_h?: number
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null
