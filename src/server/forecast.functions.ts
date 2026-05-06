@@ -1943,8 +1943,8 @@ export const generateForecast = createServerFn({ method: "POST" })
       : "";
     const maxDayLoop = degraded ? 1 : 5;
 
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
     {
-      const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
