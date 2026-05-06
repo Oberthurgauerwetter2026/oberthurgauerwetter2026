@@ -1055,10 +1055,14 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     if (s) by_model[m] = s;
   }
 
-  // Hour-by-hour averages across models
+  // Hour-by-hour averages across models — long-range Modelle ausschliessen,
+  // da sie für die nächsten Stunden zu grob sind und den Mittelwert verzerren.
+  const isUsableModel = (m: string) => !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
   const hourAvg = (arrs: Record<string, number[]>, i: number): number | null => {
-    const vals = Object.values(arrs)
-      .map((arr) => arr[i])
+    const entries = Object.entries(arrs).filter(([m]) => m === "default" || isUsableModel(m));
+    const useArrs = entries.length ? entries : Object.entries(arrs);
+    const vals = useArrs
+      .map(([, arr]) => arr[i])
       .filter((v) => v != null && Number.isFinite(v));
     return vals.length ? avg(vals) : null;
   };
