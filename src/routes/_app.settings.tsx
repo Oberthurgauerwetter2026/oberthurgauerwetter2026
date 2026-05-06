@@ -54,6 +54,8 @@ function SettingsPage() {
     bias_strength: 70,
     tag0_weight_mosmix: 40,
     tag0_weight_om: 60,
+    tag1_weight_mosmix: 50,
+    tag1_weight_om: 50,
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
