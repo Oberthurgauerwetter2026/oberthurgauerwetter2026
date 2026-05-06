@@ -89,6 +89,8 @@ function SettingsPage() {
         bias_stations: (settings as any).bias_stations ?? "GUT,STG,TAE",
         bias_lookback_days: (settings as any).bias_lookback_days ?? 7,
         bias_strength: (settings as any).bias_strength ?? 70,
+        tag0_weight_mosmix: (settings as any).tag0_weight_mosmix ?? 40,
+        tag0_weight_om: (settings as any).tag0_weight_om ?? 60,
       });
     }
     if (session && !defaults) {
