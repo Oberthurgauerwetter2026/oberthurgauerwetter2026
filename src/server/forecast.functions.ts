@@ -1602,7 +1602,8 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tag1WMosmix = Math.max(0, Math.min(100, settings?.tag1_weight_mosmix ?? 50));
     const tag1WOm = Math.max(0, Math.min(100, settings?.tag1_weight_om ?? 50));
     const buildDay = (dayIndex: number) => {
-      const omDay = formatDayData(weather, dayIndex);
+      const omDayBase = formatDayData(weather, dayIndex);
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
       if (!omDay) return null;
       // Tag 0 & Tag 1: gewichteter Mix Open-Meteo + MOSMIX. Stations-Bias greift.
       // Tag 2+: Open-Meteo + Stations-Bias.
@@ -1772,7 +1773,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const tag1WMosmix2 = Math.max(0, Math.min(100, settings?.tag1_weight_mosmix ?? 50));
     const tag1WOm2 = Math.max(0, Math.min(100, settings?.tag1_weight_om ?? 50));
     const withTopo = (dayIndex: number) => {
-      const omDay = formatDayData(weather, dayIndex);
+      const omDayBase = formatDayData(weather, dayIndex);
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
       if (!omDay) return null;
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
       let base: any = omDay;
