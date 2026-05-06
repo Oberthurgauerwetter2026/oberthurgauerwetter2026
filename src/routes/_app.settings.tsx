@@ -93,6 +93,8 @@ function SettingsPage() {
         bias_strength: (settings as any).bias_strength ?? 70,
         tag0_weight_mosmix: (settings as any).tag0_weight_mosmix ?? 40,
         tag0_weight_om: (settings as any).tag0_weight_om ?? 60,
+        tag1_weight_mosmix: (settings as any).tag1_weight_mosmix ?? 50,
+        tag1_weight_om: (settings as any).tag1_weight_om ?? 50,
       });
     }
     if (session && !defaults) {
