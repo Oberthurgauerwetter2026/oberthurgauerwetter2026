@@ -1,38 +1,58 @@
-## Tag-1 ebenfalls als konfigurierbaren MOSMIX/Open-Meteo-Mix
+# Abend/Nacht-Prognose an Tag-0-Veredelung angleichen
 
-Aktuell ist Tag 1 fix: Open-Meteo führt, MOSMIX nur als Referenz (`mosmix_reference`). Für Tag 0 gibt es bereits den gewichteten Mix (`mixOmWithMosmix`) plus zwei DB-Spalten und (frisch) zwei UI-Slider. Wir erweitern dasselbe Muster auf Tag 1.
+## Ursache der Abweichung
 
-### Änderungen
+`formatEveningNight()` in `src/server/forecast.functions.ts` baut den ersten Eintrag (ab 12:00 Uhr Schweizer Zeit) aus **rohen, stündlichen Open-Meteo-Werten** und mittelt ungewichtet über alle geladenen Modelle. Es läuft **nicht** durch:
 
-**1. DB-Migration**
-- `app_settings` erweitern um:
-  - `tag1_weight_mosmix int not null default 50`
-  - `tag1_weight_om int not null default 50`
-- Default 50/50 als neutrale Ausgangslage für Tag 1 (MOSMIX hat dort traditionell mehr Gewicht als heute, Open-Meteo-Modelle bleiben aber stark).
+- MOSMIX-Mix (Tag 0: 40/60)
+- Stations-Bias-Korrektur (GUT/STG/TAE)
+- Radar-Korrektur (ICON-CH1 vs. ICON-D2)
+- Nowcast-Anker
 
-**2. `src/server/forecast.functions.ts`**
-- Beide `buildDay` / `withTopo`-Stellen (Zeilen ~1462–1488 und ~1639–1675):
-  - Werte einlesen: `tag1WMosmix`, `tag1WOm` (mit Clamp 0–100, Default 50/50).
-  - Im `dayIndex === 1`-Zweig statt nur `mosmix_reference` jetzt `base = mixOmWithMosmix(omDay, mosmixDay, tag1WMosmix, tag1WOm)` aufrufen — analog zu Tag 0.
-  - `mosmix_reference` für Tag 1 entfällt (Mix übernimmt die Werte; `mix_weights` wird sichtbar).
-- Bias-Korrektur greift weiterhin auf allen Tagen.
-- Nowcast/Radar bleibt unverändert (Tag 0 only für Nowcast).
-- Zod-Schema in `updateSettings` ergänzen:
-  - `tag1_weight_mosmix: z.number().int().min(0).max(100).optional()`
-  - `tag1_weight_om: z.number().int().min(0).max(100).optional()`
+Der Tag-0-Tagesdatensatz, den du im Vergleich siehst, hat all das **drauf**. Daher: gleicher Tag, andere Zahl, vor allem beim Niederschlag.
 
-**3. `src/routes/_app.settings.tsx`**
-- Form-State + `load()` um `tag1_weight_mosmix` (50) und `tag1_weight_om` (50) erweitern.
-- Im MOSMIX-Card-Block direkt unter den Tag-0-Slidern zwei weitere Slider 0–100 % einfügen:
-  - "Tag 1 — Gewicht MOSMIX (%)"
-  - "Tag 1 — Gewicht Open-Meteo Modelle (%)"
-  - Hinweistext: "Default 50/50. Tag 1 mischt MOSMIX-Stationsensemble (10935/10929) mit Open-Meteo-Modellen (ICON-EU, ICON-D2, IFS …). Stations-Bias und Bias-Korrektur wirken zusätzlich. Nowcast/Radar greift nur Tag 0."
-  - Live-Anzeige der normalisierten Aufteilung.
+Zusätzlich:
+- Stündliche Modellauswahl ist nicht tier-gewichtet (Long-range-Modelle zählen gleich viel wie ICON-CH1).
+- `precip_distribution` (Blöcke night/evening) hat dasselbe Problem.
 
-**4. `src/components/WeatherDataView.tsx`**
-- Das bereits vorhandene `mix_weights`-Badge zeigt automatisch auch für Tag 1 den Mix-Anteil (kein zusätzlicher Code nötig, ggf. nur Label "Tag 0/1 Mix" generischer).
-- `MosmixReferenceBlock` für Tag 1 nicht mehr separat anzeigen (Werte sind jetzt im Mix), oder weiterhin als reine Referenz behalten — Empfehlung: weglassen, da redundant.
+## Was getan wird
 
-### Erwartetes Verhalten
+### 1. `formatEveningNight()` neu skalieren
+Nach Berechnung der rohen `precip_total` einen **Skalierungsfaktor** anwenden, der aus dem bereits veredelten Tag-0-Wert abgeleitet wird:
 
-Tag 0 und Tag 1 sind jeweils unabhängig regelbar: 4 Slider in `/settings` (Tag 0: 40/60 default, Tag 1: 50/50 default). Höheres MOSMIX-Gewicht = stärker DWD-Stationsensemble; höheres OM-Gewicht = stärker hochauflösende Modelle. Tag 2+ bleibt wie bisher reines Open-Meteo + Bias.
+```text
+factor = veredelt_tag0.precip.avg / roh_tag0.precip_sum_open_meteo
+evening.precip_total *= factor
+```
+
+Begründung: das Verhältnis aus „mit Mix+Bias+Radar" zu „nur OM-Roh" am Gesamttag ist die beste Annäherung daran, wie sich diese Korrekturen auf das Restfenster auswirken. Vermeidet, das ganze MOSMIX/Bias/Radar-Pipeline-Konstrukt stundenscharf neu zu bauen.
+
+Edge cases:
+- roher Tagessumme ≈ 0 → factor = 1 (keine Skalierung), aber wenn Radar/Nowcast Niederschlag liefert → `evening.precip_total = max(evening.precip_total, radar.next_2h_mm)`.
+- factor auf [0.3, 3.0] deckeln (gleich wie Radar-Korrektur).
+
+### 2. `nowcast` & `radar` direkt einfließen lassen
+- Wenn Radar-Snapshot für die nächsten 2h Niederschlag zeigt (`radar.forecast_next_2h.next_2h_mm > 0`) und das Fenster die nächsten Stunden umfasst: `evening.precip_total = max(skalierter_wert, next_2h_mm)`.
+- Diese Werte stehen schon im `weather_data` des Tag-0-Eintrags zur Verfügung.
+
+### 3. `precip_distribution` (night/evening Blöcke) gleich skalieren
+Auf die zwei Blöcke „evening" und „night" denselben factor anwenden, damit die Block-Beschreibung im Prompt konsistent zur Tagessumme bleibt.
+
+### 4. Tier-Gewichtung in `formatEveningNight`
+Stündliche Modelle nach derselben Tier-Logik gewichten wie `collectModelValuesTiered` (Short > Mid > Long). Long-range-Modelle (GFS, IFS) werden für das Restfenster heute praktisch ignoriert.
+
+### 5. Im `weather_data` ablegen
+- `evening.precip_total_raw_om` (vor Skalierung)
+- `evening.precip_scale_factor`
+- `evening.precip_sources` (welche Korrekturen aktiv waren)
+
+So sieht man im UI (`WeatherDataView`) genau, woher die Differenz kommt.
+
+## Geänderte Dateien
+
+- `src/server/forecast.functions.ts` — `formatEveningNight`, `buildFirstEntryContext`, Übergabe der Tag-0-Aggregate
+- `src/components/WeatherDataView.tsx` — neuen Block für Abend/Nacht-Veredelung anzeigen
+
+## Erwartetes Verhalten
+
+Niederschlag im Abend/Nacht-Eintrag liegt nahe am, was du in den Modellen + Radar manuell siehst, statt eines reinen ungewichteten OM-Mittelwerts. Temperatur/Wind bleiben unverändert (dort ist die Abweichung typischerweise klein und Bias würde auf Stundenebene mehr Aufwand bedeuten — kann später nachgezogen werden).
