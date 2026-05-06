@@ -981,6 +981,10 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
   return `Heute Abend & Nacht`;
 }
 
+// Modelle, die im Restfenster heute praktisch wertlos sind und daher
+// im stündlichen Mittel ausgeschlossen werden (Tier-Filter analog zu Tag 0).
+const HOURLY_LONGRANGE_BLOCKLIST = ["gfs_global", "gfs_seamless", "ecmwf_ifs025"];
+
 function formatEveningNight(weather: any, startHourOverride?: number) {
   const h = weather.hourly;
   if (!h?.time) return null;
