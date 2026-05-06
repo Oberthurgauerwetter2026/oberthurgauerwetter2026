@@ -985,7 +985,12 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
 // im stündlichen Mittel ausgeschlossen werden (Tier-Filter analog zu Tag 0).
 const HOURLY_LONGRANGE_BLOCKLIST = ["gfs_global", "gfs_seamless", "ecmwf_ifs025"];
 
-function formatEveningNight(weather: any, startHourOverride?: number) {
+type RadarForRefine = {
+  forecast_next_2h?: { hours?: { time: string; mm: number }[] };
+  forecast_hours?: { time: string; mm: number }[];
+} | null;
+
+function formatEveningNight(weather: any, startHourOverride?: number, radar?: RadarForRefine) {
   const h = weather.hourly;
   if (!h?.time) return null;
   const today = weather.daily.time[0];
@@ -1124,14 +1129,46 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Abend und Nacht`;
 
   const precip_total_raw = r1(hourlyPrecs.reduce((a, b) => a + b, 0));
+
+  // Stundenscharfe Veredelung: pro Stunde die beste verfügbare Quelle wählen.
+  // Reihenfolge: Radar-Nowcast (0–2h) > ICON-CH1 radar-assimiliert (2–6h) > Modellmittel.
+  const radarMap = new Map<string, number>();
+  for (const r of radar?.forecast_hours ?? []) radarMap.set(r.time, r.mm);
+  const nowcastMap = new Map<string, number>();
+  for (const r of radar?.forecast_next_2h?.hours ?? []) nowcastMap.set(r.time, r.mm);
+
+  const precip_by_hour: Array<{ time: string; mm: number; source: string }> = [];
+  for (let k = 0; k < slice.length; k++) {
+    const { t } = slice[k];
+    const fallbackMm = hourlyPrecs[k] ?? 0;
+    let mm = fallbackMm;
+    let source = "om_hourly_short_tier";
+    if (nowcastMap.has(t)) {
+      mm = nowcastMap.get(t)!;
+      source = "radar_nowcast";
+    } else if (radarMap.has(t)) {
+      mm = radarMap.get(t)!;
+      source = "icon_ch1_radar";
+    }
+    precip_by_hour.push({ time: t, mm: r1(mm), source });
+  }
+  const precip_total_refined = r1(precip_by_hour.reduce((a, b) => a + b.mm, 0));
+  const sourceCounts: Record<string, number> = {};
+  for (const h of precip_by_hour) sourceCounts[h.source] = (sourceCounts[h.source] ?? 0) + 1;
+  const sourcesSummary = Object.entries(sourceCounts)
+    .map(([s, c]) => `${c}h ${s}`)
+    .join(" · ");
+
   return {
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
     tmin: r1(Math.min(...hourlyTemps)),
     tmax: r1(Math.max(...hourlyTemps)),
-    precip_total: precip_total_raw,
+    precip_total: precip_total_refined,
     precip_total_raw_om: precip_total_raw,
+    precip_by_hour,
+    precip_sources: sourcesSummary,
     wind_max,
     wind_dir_avg,
     wind_dir_compass,
@@ -1182,47 +1219,19 @@ function buildFirstEntryContext(
   weather: any,
   withTopo: (i: number) => any,
   today: string,
-  radarSnapshot?: { forecast_next_2h?: { next_2h_mm?: number } } | null,
+  radarSnapshot?: RadarForRefine,
 ) {
   const hour = currentZurichHour();
   const useEvening = hour >= 12;
-  const evening = useEvening ? formatEveningNight(weather) : null;
+  const evening = useEvening ? formatEveningNight(weather, undefined, radarSnapshot) : null;
   let firstData: any;
   let windowHint = "";
   if (useEvening && evening) {
     const base = withTopo(0) ?? {};
-    // Skaliere precip_total mit dem Verhältnis "veredelt / roh OM" am Tag 0,
-    // damit MOSMIX-Mix, Stations-Bias und Radar-Korrektur auch im Restfenster greifen.
-    const refinedDayPrecip: number | null = base?.precip?.avg ?? null;
-    const rawDayPrecip: number | null = (() => {
-      const om = formatDayData(weather, 0);
-      return om?.precip?.avg ?? null;
-    })();
-    let scale_factor = 1;
-    const sources: string[] = ["open-meteo:hourly"];
-    if (refinedDayPrecip != null && rawDayPrecip != null && rawDayPrecip > 0.05) {
-      scale_factor = refinedDayPrecip / rawDayPrecip;
-      scale_factor = Math.max(0.3, Math.min(3.0, scale_factor));
-      if (Math.abs(scale_factor - 1) > 0.01) sources.push("tag0_refined_ratio");
-    }
-    let precip_total_scaled = Math.max(0, Math.round(evening.precip_total * scale_factor * 10) / 10);
-    // Radar-Nowcast als Untergrenze für die nächsten 2h
-    const next2h = radarSnapshot?.forecast_next_2h?.next_2h_mm ?? 0;
-    if (next2h > 0 && next2h > precip_total_scaled) {
-      precip_total_scaled = Math.round(next2h * 10) / 10;
-      sources.push("radar_next_2h_floor");
-    }
     firstData = {
       ...evening,
       date: today,
       topography: base.topography ?? null,
-      precip_total: precip_total_scaled,
-      precip_scale_factor: Math.round(scale_factor * 100) / 100,
-      precip_sources: sources,
-      tag0_refined_precip_mm: refinedDayPrecip,
-      tag0_raw_om_precip_mm: rawDayPrecip,
-      // Radar/Nowcast-Verweis sichtbar machen
-      radar_next_2h_mm: next2h || null,
     };
     windowHint = `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ${evening.window_label}. Beziehe dich nur auf diese Stunden, NICHT auf den schon vergangenen Tagesabschnitt. Beschreibe den Verlauf chronologisch innerhalb dieses Fensters.`;
   } else {
