@@ -2044,7 +2044,7 @@ export const regenerateEntry = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     if (!entry) throw new Error("Eintrag nicht gefunden (ID ungültig oder keine Berechtigung).");
 
-    const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:\n${JSON.stringify(entry.weather_data, null, 2)}`;
+    const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data);
     const body = enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data);
     const { error: uErr } = await supabase
       .from("forecast_entries")
