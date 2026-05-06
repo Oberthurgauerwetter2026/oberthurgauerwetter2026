@@ -1461,26 +1461,19 @@ export const generateForecast = createServerFn({ method: "POST" })
 
     const tag0WMosmix = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
     const tag0WOm = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
+    const tag1WMosmix = Math.max(0, Math.min(100, settings?.tag1_weight_mosmix ?? 50));
+    const tag1WOm = Math.max(0, Math.min(100, settings?.tag1_weight_om ?? 50));
     const buildDay = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
-      // Tag 0: gewichteter Mix Open-Meteo + MOSMIX (Variante C). Stations-Bias greift.
-      // Tag 1: Open-Meteo führt, MOSMIX nur als Referenz. Stations-Bias greift.
+      // Tag 0 & Tag 1: gewichteter Mix Open-Meteo + MOSMIX. Stations-Bias greift.
       // Tag 2+: Open-Meteo + Stations-Bias.
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
       let base: any = omDay;
       if (dayIndex === 0 && mosmixDay) {
         base = mixOmWithMosmix(omDay, mosmixDay, tag0WMosmix, tag0WOm);
       } else if (dayIndex === 1 && mosmixDay) {
-        base = { ...base, mosmix_reference: {
-          tmin: mosmixDay.tmin?.avg ?? null,
-          tmax: mosmixDay.tmax?.avg ?? null,
-          precip: mosmixDay.precip?.avg ?? null,
-          wind_max: mosmixDay.wind_max?.avg ?? null,
-          cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
-          stations: mosmixDay.mosmix_stations ?? [],
-          per_station: mosmixDay.mosmix_per_station ?? {},
-        } };
+        base = mixOmWithMosmix(omDay, mosmixDay, tag1WMosmix, tag1WOm);
       }
       const out: any = { ...base, topography: applyTopography(base, topo) };
       const st = applyStationBias(base, stationBiases);
@@ -1638,6 +1631,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     const tag0WMosmix2 = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
     const tag0WOm2 = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
+    const tag1WMosmix2 = Math.max(0, Math.min(100, settings?.tag1_weight_mosmix ?? 50));
+    const tag1WOm2 = Math.max(0, Math.min(100, settings?.tag1_weight_om ?? 50));
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
@@ -1646,15 +1641,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       if (dayIndex === 0 && mosmixDay) {
         base = mixOmWithMosmix(omDay, mosmixDay, tag0WMosmix2, tag0WOm2);
       } else if (dayIndex === 1 && mosmixDay) {
-        base = { ...base, mosmix_reference: {
-          tmin: mosmixDay.tmin?.avg ?? null,
-          tmax: mosmixDay.tmax?.avg ?? null,
-          precip: mosmixDay.precip?.avg ?? null,
-          wind_max: mosmixDay.wind_max?.avg ?? null,
-          cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
-          stations: mosmixDay.mosmix_stations ?? [],
-          per_station: mosmixDay.mosmix_per_station ?? {},
-        } };
+        base = mixOmWithMosmix(omDay, mosmixDay, tag1WMosmix2, tag1WOm2);
       }
       let out: any = { ...base, topography: applyTopography(base, topo) };
       const st = applyStationBias(base, stationBiases);
@@ -1904,6 +1891,8 @@ export const updateSettings = createServerFn({ method: "POST" })
         bias_strength: z.number().int().min(0).max(100).optional(),
         tag0_weight_mosmix: z.number().int().min(0).max(100).optional(),
         tag0_weight_om: z.number().int().min(0).max(100).optional(),
+        tag1_weight_mosmix: z.number().int().min(0).max(100).optional(),
+        tag1_weight_om: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )

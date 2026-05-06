@@ -54,6 +54,8 @@ function SettingsPage() {
     bias_strength: 70,
     tag0_weight_mosmix: 40,
     tag0_weight_om: 60,
+    tag1_weight_mosmix: 50,
+    tag1_weight_om: 50,
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -91,6 +93,8 @@ function SettingsPage() {
         bias_strength: (settings as any).bias_strength ?? 70,
         tag0_weight_mosmix: (settings as any).tag0_weight_mosmix ?? 40,
         tag0_weight_om: (settings as any).tag0_weight_om ?? 60,
+        tag1_weight_mosmix: (settings as any).tag1_weight_mosmix ?? 50,
+        tag1_weight_om: (settings as any).tag1_weight_om ?? 50,
       });
     }
     if (session && !defaults) {
@@ -309,6 +313,36 @@ function SettingsPage() {
               Stations-Bias, Nowcast und Radar wirken zusätzlich on top. Summe wird intern normalisiert
               (aktuell: {Math.round((form.tag0_weight_mosmix / Math.max(1, form.tag0_weight_mosmix + form.tag0_weight_om)) * 100)} % MOSMIX
               / {Math.round((form.tag0_weight_om / Math.max(1, form.tag0_weight_mosmix + form.tag0_weight_om)) * 100)} % Open-Meteo).
+            </p>
+          </div>
+          <div className="space-y-2 pt-2 border-t">
+            <Label>Tag 1 — Gewicht MOSMIX ({form.tag1_weight_mosmix} %)</Label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={form.tag1_weight_mosmix}
+              onChange={(e) => setForm({ ...form, tag1_weight_mosmix: parseInt(e.target.value || "0", 10) })}
+              className="w-full"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Tag 1 — Gewicht Open-Meteo Modelle ({form.tag1_weight_om} %)</Label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={form.tag1_weight_om}
+              onChange={(e) => setForm({ ...form, tag1_weight_om: parseInt(e.target.value || "0", 10) })}
+              className="w-full"
+            />
+            <p className="text-xs text-muted-foreground">
+              Gewichteter Mix für morgen (tmin, tmax, Niederschlag, Wind, Bewölkung).
+              Default 50 / 50. MOSMIX bringt das DWD-Stationsensemble (10935/10929), Open-Meteo
+              die hochauflösenden Modelle (ICON-EU, ICON-D2, IFS …). Stations-Bias und Bias-Korrektur
+              wirken zusätzlich. Nowcast/Radar greift nur Tag 0. Aktuell:
+              {" "}{Math.round((form.tag1_weight_mosmix / Math.max(1, form.tag1_weight_mosmix + form.tag1_weight_om)) * 100)} % MOSMIX
+              / {Math.round((form.tag1_weight_om / Math.max(1, form.tag1_weight_mosmix + form.tag1_weight_om)) * 100)} % Open-Meteo.
             </p>
           </div>
         </CardContent>

@@ -43,6 +43,8 @@ export type Database = {
           radius_km: number | null
           tag0_weight_mosmix: number
           tag0_weight_om: number
+          tag1_weight_mosmix: number
+          tag1_weight_om: number
           topo_elev_max: number | null
           topo_elev_median: number | null
           topo_elev_min: number | null
@@ -81,6 +83,8 @@ export type Database = {
           radius_km?: number | null
           tag0_weight_mosmix?: number
           tag0_weight_om?: number
+          tag1_weight_mosmix?: number
+          tag1_weight_om?: number
           topo_elev_max?: number | null
           topo_elev_median?: number | null
           topo_elev_min?: number | null
@@ -119,6 +123,8 @@ export type Database = {
           radius_km?: number | null
           tag0_weight_mosmix?: number
           tag0_weight_om?: number
+          tag1_weight_mosmix?: number
+          tag1_weight_om?: number
           topo_elev_max?: number | null
           topo_elev_median?: number | null
           topo_elev_min?: number | null
