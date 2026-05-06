@@ -1081,6 +1081,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
+    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
   };
 }
 
