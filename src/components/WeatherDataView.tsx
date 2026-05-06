@@ -194,7 +194,14 @@ function DayTable({ data, title }: { data: Record<string, any>; title?: string }
       {(data as any).topography && <TopographyBlock topo={(data as any).topography} />}
       {(data as any).stations && <StationsBlock stations={(data as any).stations} />}
       {(data as any).precip_distribution && <PrecipDistributionBlock dist={(data as any).precip_distribution} />}
-      {(data as any).mosmix_reference && <MosmixReferenceBlock data={(data as any).mosmix_reference} />}
+      {(data as any).mix_weights && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
+          <span className="font-medium text-foreground">Tag-0-Mix:</span>{" "}
+          <span className="tabular-nums">{(data as any).mix_weights.mosmix_pct}% MOSMIX · {(data as any).mix_weights.om_pct}% Open-Meteo</span>{" "}
+          <span className="text-muted-foreground">+ Stations-Bias + Bias-Korrektur + Nowcast/Radar</span>
+        </div>
+      )}
+      {(data as any).mosmix_reference && <MosmixReferenceBlock data={(data as any).mosmix_reference} isMixed={Boolean((data as any).mix_weights)} />}
     </div>
   );
 }
