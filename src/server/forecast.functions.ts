@@ -936,11 +936,24 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
 // Kompaktes Stundenprofil pro Tag: Median + Spread aus allen verfügbaren Modellen
 // für temperature, precipitation, wind, cloudcover, sunshine. Liefert eine Tabelle
 // mit 24 Zeilen (oder weniger ab fromHour). Wird der KI als Tagesgang-Anker mitgegeben.
+type HourlyProfileRow = {
+  h: number;
+  t: number | null;
+  t_spread: number;
+  p: number;
+  p_spread: number;
+  w: number | null;
+  c: number | null;
+  s: number | null;
+  n_models: number;
+  src?: "obs" | "mix" | "mod"; // obs = SMN/Radar, mix = Übergang, mod = Modell-Median (default)
+};
+
 function buildHourlyProfile(
   weather: any,
   dayIndex: number,
   fromHour: number = 0,
-): Array<{ h: number; t: number | null; t_spread: number; p: number; p_spread: number; w: number | null; c: number | null; s: number | null; n_models: number }> | null {
+): HourlyProfileRow[] | null {
   const h = weather?.hourly;
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
@@ -973,7 +986,7 @@ function buildHourlyProfile(
   const sample = (arrs: Array<{ model: string; arr: number[] }>, i: number): number[] =>
     arrs.map(({ arr }) => arr[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
 
-  const out: Array<{ h: number; t: number | null; t_spread: number; p: number; p_spread: number; w: number | null; c: number | null; s: number | null; n_models: number }> = [];
+  const out: HourlyProfileRow[] = [];
   for (let i = 0; i < (h.time as string[]).length; i++) {
     const ts = h.time[i] as string;
     if (!ts.startsWith(dateStr)) continue;
@@ -996,17 +1009,125 @@ function buildHourlyProfile(
       c: median(cv) != null ? Math.round(median(cv)!) : null,
       s: median(sv) != null ? r1(median(sv)! / 60) : null, // Sekunden → Minuten
       n_models: tv.length,
+      src: "mod",
     });
   }
   return out.length ? out : null;
 }
 
+// Beobachtungs-Overlay für Tag 0: ersetzt die vergangenen Stunden im Profil
+// durch reale SMN-/Radar-Messwerte. Aktuelle + nächste Stunde werden als
+// Übergang markiert (Werte bleiben Modell, src="mix").
+function applyObservedOverlay(
+  profile: HourlyProfileRow[] | null,
+  dateStr: string, // lokales Tagesdatum YYYY-MM-DD (Europe/Zurich)
+  smn: Array<{ rows: Array<{ time: string; temp_c: number | null; precip_mm: number | null; wind_kmh: number | null; cloud_pct: number | null }> }> | null | undefined,
+  radar: { observed?: { hours?: Array<{ time: string; mm: number }> } } | null | undefined,
+  nowAt: Date = new Date(),
+): HourlyProfileRow[] | null {
+  if (!profile?.length) return profile;
+
+  // Index SMN-Zeilen nach lokalem ISO-Stundenstempel "YYYY-MM-DDTHH"
+  const localKey = (d: Date) => {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Zurich",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", hour12: false,
+    }).formatToParts(d);
+    const p: Record<string, string> = {};
+    for (const x of parts) p[x.type] = x.value;
+    const hh = p.hour === "24" ? "00" : p.hour;
+    return `${p.year}-${p.month}-${p.day}T${hh}`;
+  };
+
+  type Acc = { temp: number[]; wind: number[]; cloud: number[]; precip: number[] };
+  const smnByHour = new Map<string, Acc>();
+  for (const st of smn ?? []) {
+    for (const r of st.rows ?? []) {
+      const t = new Date(r.time);
+      if (!Number.isFinite(t.getTime())) continue;
+      const k = localKey(t);
+      let acc = smnByHour.get(k);
+      if (!acc) { acc = { temp: [], wind: [], cloud: [], precip: [] }; smnByHour.set(k, acc); }
+      if (r.temp_c != null) acc.temp.push(r.temp_c);
+      if (r.wind_kmh != null) acc.wind.push(r.wind_kmh);
+      if (r.cloud_pct != null) acc.cloud.push(r.cloud_pct);
+      if (r.precip_mm != null) acc.precip.push(r.precip_mm);
+    }
+  }
+
+  const radarByHour = new Map<string, number>();
+  for (const rh of radar?.observed?.hours ?? []) {
+    const t = new Date(rh.time);
+    if (!Number.isFinite(t.getTime())) continue;
+    radarByHour.set(localKey(t), rh.mm);
+  }
+
+  const nowHour = parseInt(localKey(nowAt).slice(11, 13), 10);
+  const mean = (xs: number[]) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  const sprd = (xs: number[]) => xs.length >= 2 ? Math.max(...xs) - Math.min(...xs) : 0;
+
+  return profile.map((row) => {
+    const key = `${dateStr}T${String(row.h).padStart(2, "0")}`;
+    const isPast = row.h < nowHour;          // vollständig vergangen
+    const isCurrent = row.h === nowHour;     // aktuelle Stunde
+    const isNext = row.h === nowHour + 1;    // direkt darauf
+    const smnAcc = smnByHour.get(key);
+    const radarMm = radarByHour.get(key);
+
+    if (isPast && (smnAcc || radarMm != null)) {
+      const t = smnAcc ? mean(smnAcc.temp) : null;
+      const w = smnAcc ? mean(smnAcc.wind) : null;
+      const c = smnAcc ? mean(smnAcc.cloud) : null;
+      const p = radarMm != null ? radarMm : (smnAcc ? mean(smnAcc.precip) ?? row.p : row.p);
+      return {
+        ...row,
+        t: t != null ? Math.round(t * 10) / 10 : row.t,
+        t_spread: smnAcc && smnAcc.temp.length >= 2 ? Math.round(sprd(smnAcc.temp) * 10) / 10 : 0,
+        w: w != null ? Math.round(w * 10) / 10 : row.w,
+        c: c != null ? Math.round(c) : row.c,
+        p: Math.round(p * 10) / 10,
+        p_spread: 0,
+        src: "obs",
+      };
+    }
+
+    if (isCurrent || isNext) {
+      // Wenn Beobachtung für die aktuelle Stunde verfügbar ist, sanft Richtung Beobachtung ziehen
+      if (isCurrent && smnAcc) {
+        const tObs = mean(smnAcc.temp);
+        const wObs = mean(smnAcc.wind);
+        const cObs = mean(smnAcc.cloud);
+        const blend = (a: number | null, b: number | null) =>
+          a == null ? b : b == null ? a : Math.round(((a + b) / 2) * 10) / 10;
+        return {
+          ...row,
+          t: blend(row.t, tObs),
+          w: blend(row.w, wObs),
+          c: cObs != null && row.c != null ? Math.round((row.c + cObs) / 2) : row.c,
+          p: radarMm != null ? Math.round(((row.p + radarMm) / 2) * 10) / 10 : row.p,
+          src: "mix",
+        };
+      }
+      return { ...row, src: "mix" };
+    }
+
+    return row;
+  });
+}
+
 // Formatiert das Stundenprofil als kompakte Tabelle für den KI-Prompt.
-// Jede Zeile: "HH | T °C (±s) | P mm (±s) | W km/h | Wolken % | Sonne min".
-function formatHourlyProfileTable(profile: ReturnType<typeof buildHourlyProfile>): string | null {
+// Jede Zeile: "HH | T °C (±s) | P mm (±s) | W km/h | Wolken % | Sonne min | Quelle".
+function formatHourlyProfileTable(profile: HourlyProfileRow[] | null | undefined): string | null {
   if (!profile?.length) return null;
-  const lines = ["Stunde | Temp | Niederschlag | Wind | Wolken | Sonne"];
-  lines.push("------ | ---- | ------------ | ---- | ------ | -----");
+  const hasSrc = profile.some((r) => r.src && r.src !== "mod");
+  const header = hasSrc
+    ? "Stunde | Temp | Niederschlag | Wind | Wolken | Sonne | Quelle"
+    : "Stunde | Temp | Niederschlag | Wind | Wolken | Sonne";
+  const sep = hasSrc
+    ? "------ | ---- | ------------ | ---- | ------ | ----- | ------"
+    : "------ | ---- | ------------ | ---- | ------ | -----";
+  const lines = [header, sep];
   for (const r of profile) {
     const hh = String(r.h).padStart(2, "0") + ":00";
     const t = r.t != null ? `${r.t.toFixed(1)}°` + (r.t_spread > 1 ? ` (±${r.t_spread.toFixed(1)})` : "") : "—";
@@ -1014,7 +1135,8 @@ function formatHourlyProfileTable(profile: ReturnType<typeof buildHourlyProfile>
     const w = r.w != null ? `${Math.round(r.w)} km/h` : "—";
     const c = r.c != null ? `${r.c}%` : "—";
     const s = r.s != null && r.s > 0 ? `${Math.round(r.s)} min` : "0";
-    lines.push(`${hh} | ${t} | ${p} | ${w} | ${c} | ${s}`);
+    const row = `${hh} | ${t} | ${p} | ${w} | ${c} | ${s}`;
+    lines.push(hasSrc ? `${row} | ${r.src ?? "mod"}` : row);
   }
   return lines.join("\n");
 }
@@ -1648,7 +1770,7 @@ export function buildSystemPrompt(settings: any): string {
     "Wenn der Datensatz ein Feld `precip_distribution` enthält, beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Wenn `peak_hour` gesetzt ist, die Stunde im Text grob nennen ('um den Mittag', 'gegen 17 Uhr', 'in den späten Nachmittagsstunden') — nie als exakte Uhrzeit ('um 14:00').\n- `dry_windows` (≥ 3h trocken) explizit als 'längere trockene Phase am Vormittag' o. ä. erwähnen, wenn es zwischen Niederschlagsphasen liegt.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` fehlt: wie bisher, Tagesverlauf frei nach Standardregeln formulieren.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
     "",
     "=== STUNDENPROFIL (TAG 0 + 1) ===",
-    "Wenn im userPrompt ein Block 'STUNDENPROFIL' folgt, ist das die HÖCHSTE Auflösung des Tagesgangs (eine Zeile pro Stunde, Median über alle verfügbaren Modelle, in Klammern die Modell-Streuung). Nutze ihn primär zur Bestimmung wann genau Bewölkung, Niederschlag, Sonne oder Wind wechseln. Übersetze Stundenangaben in Tageszeit-Bezüge ('am Vormittag', 'gegen Mittag', 'am späten Nachmittag', 'in der ersten Nachthälfte') — nie exakte Uhrzeiten nennen. Bei grosser Streuung (±) vorsichtig formulieren ('zeichnet sich ab', 'lokal unterschiedlich'). Wenn das Profil widersprüchlich zu den Tagesaggregaten ist, hat das Profil Vorrang für die Tagesgang-Beschreibung; die Aggregate (tmin/tmax) bleiben für die Temperaturangaben verbindlich.",
+    "Wenn im userPrompt ein Block 'STUNDENPROFIL' folgt, ist das die HÖCHSTE Auflösung des Tagesgangs (eine Zeile pro Stunde, Median über alle verfügbaren Modelle, in Klammern die Modell-Streuung). Nutze ihn primär zur Bestimmung wann genau Bewölkung, Niederschlag, Sonne oder Wind wechseln. Übersetze Stundenangaben in Tageszeit-Bezüge ('am Vormittag', 'gegen Mittag', 'am späten Nachmittag', 'in der ersten Nachthälfte') — nie exakte Uhrzeiten nennen. Bei grosser Streuung (±) vorsichtig formulieren ('zeichnet sich ab', 'lokal unterschiedlich'). Wenn das Profil widersprüchlich zu den Tagesaggregaten ist, hat das Profil Vorrang für die Tagesgang-Beschreibung; die Aggregate (tmin/tmax) bleiben für die Temperaturangaben verbindlich. Spalte 'Quelle' (nur Tag 0): 'obs' = reale Messung (SwissMetNet/Radar) — diese Werte sind verbindlich und im Text als 'gemessen', 'beobachtet' oder im Rückblick beschreiben, nicht als Prognose; 'mix' = Übergang Beobachtung→Modell für die laufende Stunde; 'mod' = Modellprognose. Beobachtete Stunden dürfen den Tagesgang konkret rückblickend beschreiben ('am Morgen wurden 3 °C gemessen').",
     "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
@@ -1796,6 +1918,11 @@ export const generateForecast = createServerFn({ method: "POST" })
           nowcast_obs_horizon_h: settings?.nowcast_obs_horizon_h,
         });
         out = applyNowcastToDay(out, nc);
+        if (out.hourly_profile) {
+          out.hourly_profile = applyObservedOverlay(
+            out.hourly_profile, out.date, nowcastInputs.smn, nowcastInputs.radar,
+          );
+        }
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
@@ -1941,6 +2068,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
           nowcast_obs_horizon_h: settings?.nowcast_obs_horizon_h,
         });
         out = applyNowcastToDay(out, nc);
+        if (out.hourly_profile) {
+          out.hourly_profile = applyObservedOverlay(
+            out.hourly_profile, out.date, nowcastInputs.smn, nowcastInputs.radar,
+          );
+        }
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
