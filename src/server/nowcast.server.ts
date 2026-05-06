@@ -244,7 +244,7 @@ export function computeNowcastResult(
 export function applyNowcastToDay(day: any, nc: NowcastResult): any {
   if (!day) return day;
   const out = { ...day };
-  if (nc.cloud_correction_pct !== 0 && out.cloudcover_source === "model") {
+  if (nc.cloud_correction_pct !== 0 && out.cloudcover_source !== "none") {
     out.cloudcover = adjAgg(out.cloudcover, (v) => clamp(v + nc.cloud_correction_pct, 0, 100));
   }
   if (nc.temp_correction_c !== 0) {
