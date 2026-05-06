@@ -865,7 +865,7 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
       const t = h.time[i] as string;
       if (!t.startsWith(dateStr)) continue;
       const hour = parseInt(t.slice(11, 13), 10);
-      if (!Number.isFinite(hour) || hour < range[0] || hour >= range[1]) continue;
+      if (!Number.isFinite(hour) || hour < range[0] || hour >= range[1] || hour < fromHour) continue;
       // Mittel über Modelle pro Stunde
       const precVals = precArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
       if (!precVals.length) continue;
