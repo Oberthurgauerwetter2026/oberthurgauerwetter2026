@@ -1123,13 +1123,15 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     : startHour < 17 ? `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Nachmittag, Abend und Nacht`
     : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Abend und Nacht`;
 
+  const precip_total_raw = r1(hourlyPrecs.reduce((a, b) => a + b, 0));
   return {
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
     tmin: r1(Math.min(...hourlyTemps)),
     tmax: r1(Math.max(...hourlyTemps)),
-    precip_total: r1(hourlyPrecs.reduce((a, b) => a + b, 0)),
+    precip_total: precip_total_raw,
+    precip_total_raw_om: precip_total_raw,
     wind_max,
     wind_dir_avg,
     wind_dir_compass,
