@@ -1129,14 +1129,46 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
     : `${String(startHour).padStart(2, "0")}:00 bis ${String(endHour).padStart(2, "0")}:00 - Abend und Nacht`;
 
   const precip_total_raw = r1(hourlyPrecs.reduce((a, b) => a + b, 0));
+
+  // Stundenscharfe Veredelung: pro Stunde die beste verfügbare Quelle wählen.
+  // Reihenfolge: Radar-Nowcast (0–2h) > ICON-CH1 radar-assimiliert (2–6h) > Modellmittel.
+  const radarMap = new Map<string, number>();
+  for (const r of radar?.forecast_hours ?? []) radarMap.set(r.time, r.mm);
+  const nowcastMap = new Map<string, number>();
+  for (const r of radar?.forecast_next_2h?.hours ?? []) nowcastMap.set(r.time, r.mm);
+
+  const precip_by_hour: Array<{ time: string; mm: number; source: string }> = [];
+  for (let k = 0; k < slice.length; k++) {
+    const { t } = slice[k];
+    const fallbackMm = hourlyPrecs[k] ?? 0;
+    let mm = fallbackMm;
+    let source = "om_hourly_short_tier";
+    if (nowcastMap.has(t)) {
+      mm = nowcastMap.get(t)!;
+      source = "radar_nowcast";
+    } else if (radarMap.has(t)) {
+      mm = radarMap.get(t)!;
+      source = "icon_ch1_radar";
+    }
+    precip_by_hour.push({ time: t, mm: r1(mm), source });
+  }
+  const precip_total_refined = r1(precip_by_hour.reduce((a, b) => a + b.mm, 0));
+  const sourceCounts: Record<string, number> = {};
+  for (const h of precip_by_hour) sourceCounts[h.source] = (sourceCounts[h.source] ?? 0) + 1;
+  const sourcesSummary = Object.entries(sourceCounts)
+    .map(([s, c]) => `${c}h ${s}`)
+    .join(" · ");
+
   return {
     window_start_hour: startHour,
     window_end_hour: endHour,
     window_label,
     tmin: r1(Math.min(...hourlyTemps)),
     tmax: r1(Math.max(...hourlyTemps)),
-    precip_total: precip_total_raw,
+    precip_total: precip_total_refined,
     precip_total_raw_om: precip_total_raw,
+    precip_by_hour,
+    precip_sources: sourcesSummary,
     wind_max,
     wind_dir_avg,
     wind_dir_compass,
