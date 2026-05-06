@@ -1219,47 +1219,19 @@ function buildFirstEntryContext(
   weather: any,
   withTopo: (i: number) => any,
   today: string,
-  radarSnapshot?: { forecast_next_2h?: { next_2h_mm?: number } } | null,
+  radarSnapshot?: RadarForRefine,
 ) {
   const hour = currentZurichHour();
   const useEvening = hour >= 12;
-  const evening = useEvening ? formatEveningNight(weather) : null;
+  const evening = useEvening ? formatEveningNight(weather, undefined, radarSnapshot) : null;
   let firstData: any;
   let windowHint = "";
   if (useEvening && evening) {
     const base = withTopo(0) ?? {};
-    // Skaliere precip_total mit dem Verhältnis "veredelt / roh OM" am Tag 0,
-    // damit MOSMIX-Mix, Stations-Bias und Radar-Korrektur auch im Restfenster greifen.
-    const refinedDayPrecip: number | null = base?.precip?.avg ?? null;
-    const rawDayPrecip: number | null = (() => {
-      const om = formatDayData(weather, 0);
-      return om?.precip?.avg ?? null;
-    })();
-    let scale_factor = 1;
-    const sources: string[] = ["open-meteo:hourly"];
-    if (refinedDayPrecip != null && rawDayPrecip != null && rawDayPrecip > 0.05) {
-      scale_factor = refinedDayPrecip / rawDayPrecip;
-      scale_factor = Math.max(0.3, Math.min(3.0, scale_factor));
-      if (Math.abs(scale_factor - 1) > 0.01) sources.push("tag0_refined_ratio");
-    }
-    let precip_total_scaled = Math.max(0, Math.round(evening.precip_total * scale_factor * 10) / 10);
-    // Radar-Nowcast als Untergrenze für die nächsten 2h
-    const next2h = radarSnapshot?.forecast_next_2h?.next_2h_mm ?? 0;
-    if (next2h > 0 && next2h > precip_total_scaled) {
-      precip_total_scaled = Math.round(next2h * 10) / 10;
-      sources.push("radar_next_2h_floor");
-    }
     firstData = {
       ...evening,
       date: today,
       topography: base.topography ?? null,
-      precip_total: precip_total_scaled,
-      precip_scale_factor: Math.round(scale_factor * 100) / 100,
-      precip_sources: sources,
-      tag0_refined_precip_mm: refinedDayPrecip,
-      tag0_raw_om_precip_mm: rawDayPrecip,
-      // Radar/Nowcast-Verweis sichtbar machen
-      radar_next_2h_mm: next2h || null,
     };
     windowHint = `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ${evening.window_label}. Beziehe dich nur auf diese Stunden, NICHT auf den schon vergangenen Tagesabschnitt. Beschreibe den Verlauf chronologisch innerhalb dieses Fensters.`;
   } else {
