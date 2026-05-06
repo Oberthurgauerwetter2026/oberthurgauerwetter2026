@@ -1459,42 +1459,32 @@ export const generateForecast = createServerFn({ method: "POST" })
       ? []
       : await getOrSetCache("stations:bias", buildStationBiases);
 
+    const tag0WMosmix = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
+    const tag0WOm = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
     const buildDay = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
-      // Tag 0/1: MOSMIX bevorzugt — überschreibt Roh-Werte, kein Stations-Bias.
-      // Nur Tag 0: MOSMIX überschreibt Roh-Werte (kein Stations-Bias).
-      // Tag 1: Open-Meteo Multi-Modell + Stations-Bias führen, MOSMIX nur als Referenz.
+      // Tag 0: gewichteter Mix Open-Meteo + MOSMIX (Variante C). Stations-Bias greift.
+      // Tag 1: Open-Meteo führt, MOSMIX nur als Referenz. Stations-Bias greift.
+      // Tag 2+: Open-Meteo + Stations-Bias.
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
-      const mosmix = dayIndex === 0 ? mosmixDay : null;
-      let base: any;
-      if (mosmix) {
-        base = enrichMosmixDay({
-          ...mosmix,
-          weathercode: omDay.weathercode,
-          precip_prob: omDay.precip_prob,
-          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
-        });
-      } else {
-        base = omDay;
-        // Tag 1: MOSMIX als Cross-Check anhängen (nicht im Text verwenden)
-        if (dayIndex === 1 && mosmixDay) {
-          base = { ...base, mosmix_reference: {
-            tmin: mosmixDay.tmin?.avg ?? null,
-            tmax: mosmixDay.tmax?.avg ?? null,
-            precip: mosmixDay.precip?.avg ?? null,
-            wind_max: mosmixDay.wind_max?.avg ?? null,
-            cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
-            stations: mosmixDay.mosmix_stations ?? [],
-            per_station: mosmixDay.mosmix_per_station ?? {},
-          } };
-        }
+      let base: any = omDay;
+      if (dayIndex === 0 && mosmixDay) {
+        base = mixOmWithMosmix(omDay, mosmixDay, tag0WMosmix, tag0WOm);
+      } else if (dayIndex === 1 && mosmixDay) {
+        base = { ...base, mosmix_reference: {
+          tmin: mosmixDay.tmin?.avg ?? null,
+          tmax: mosmixDay.tmax?.avg ?? null,
+          precip: mosmixDay.precip?.avg ?? null,
+          wind_max: mosmixDay.wind_max?.avg ?? null,
+          cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+          stations: mosmixDay.mosmix_stations ?? [],
+          per_station: mosmixDay.mosmix_per_station ?? {},
+        } };
       }
       const out: any = { ...base, topography: applyTopography(base, topo) };
-      if (!mosmix) {
-        const st = applyStationBias(base, stationBiases);
-        if (st) out.stations = st;
-      }
+      const st = applyStationBias(base, stationBiases);
+      if (st) out.stations = st;
       return out;
     };
     const radarSnapshot = (settings?.radar_enabled !== false)
