@@ -282,6 +282,35 @@ function SettingsPage() {
               placeholder="10935,10929"
             />
           </div>
+          <div className="space-y-2 pt-2 border-t">
+            <Label>Tag 0 — Gewicht MOSMIX ({form.tag0_weight_mosmix} %)</Label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={form.tag0_weight_mosmix}
+              onChange={(e) => setForm({ ...form, tag0_weight_mosmix: parseInt(e.target.value || "0", 10) })}
+              className="w-full"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Tag 0 — Gewicht Open-Meteo Modelle ({form.tag0_weight_om} %)</Label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={form.tag0_weight_om}
+              onChange={(e) => setForm({ ...form, tag0_weight_om: parseInt(e.target.value || "0", 10) })}
+              className="w-full"
+            />
+            <p className="text-xs text-muted-foreground">
+              Gewichteter Mix für die Tageswerte von heute (tmin, tmax, Niederschlag, Wind, Bewölkung).
+              Default 40 / 60. Niedrigeres MOSMIX-Gewicht = stärkerer Einfluss von ICON-CH1/CH2 & Co. auf den heutigen Tag.
+              Stations-Bias, Nowcast und Radar wirken zusätzlich on top. Summe wird intern normalisiert
+              (aktuell: {Math.round((form.tag0_weight_mosmix / Math.max(1, form.tag0_weight_mosmix + form.tag0_weight_om)) * 100)} % MOSMIX
+              / {Math.round((form.tag0_weight_om / Math.max(1, form.tag0_weight_mosmix + form.tag0_weight_om)) * 100)} % Open-Meteo).
+            </p>
+          </div>
         </CardContent>
       </Card>
 
