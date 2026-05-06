@@ -1943,8 +1943,8 @@ export const generateForecast = createServerFn({ method: "POST" })
       : "";
     const maxDayLoop = degraded ? 1 : 5;
 
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
     {
-      const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
@@ -1960,8 +1960,8 @@ export const generateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const tag1Hint = i === 1
-        ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.`
+      const tag1Hint = i === 1 && firstTitle === "Heute Abend & Nacht"
+        ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.\n\nZUSÄTZLICH: Da die Tiefstwerte der kommenden Nacht bereits im vorherigen Eintrag ("Heute Abend & Nacht") genannt wurden, darf dieser Tag-1-Eintrag KEINEN Tiefstwerte-Satz enthalten (kein "Tiefstwerte ...", keine Bodenfrost-Notiz, kein Senken-Wert). Beginne Absatz 2 direkt mit "Höchstwerte um Z Grad." — oder lasse Absatz 2 weg, wenn keine Höchstwerte-Aussage nötig ist. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln für diesen einen Eintrag.`
         : "";
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
@@ -2094,8 +2094,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       : "";
     const maxDayLoop = degraded ? 1 : 5;
 
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
     {
-      const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
@@ -2111,8 +2111,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const tag1Hint = i === 1
-        ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.`
+      const tag1Hint = i === 1 && firstTitle === "Heute Abend & Nacht"
+        ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.\n\nZUSÄTZLICH: Da die Tiefstwerte der kommenden Nacht bereits im vorherigen Eintrag ("Heute Abend & Nacht") genannt wurden, darf dieser Tag-1-Eintrag KEINEN Tiefstwerte-Satz enthalten (kein "Tiefstwerte ...", keine Bodenfrost-Notiz, kein Senken-Wert). Beginne Absatz 2 direkt mit "Höchstwerte um Z Grad." — oder lasse Absatz 2 weg, wenn keine Höchstwerte-Aussage nötig ist. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln für diesen einen Eintrag.`
         : "";
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
