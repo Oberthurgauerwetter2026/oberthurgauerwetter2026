@@ -1387,6 +1387,46 @@ function enrichMosmixDay(day: any): any {
   };
 }
 
+// Variante C: Tag 0 als gewichteter Mix von Open-Meteo (omDay) und MOSMIX (mosmixDay).
+// Mischt nur die avg-Werte ausgewählter Felder; die Open-Meteo-Struktur (min/max/spread/by_model)
+// bleibt erhalten, damit die Modell-Tabelle in der UI weiterhin funktioniert.
+function mixOmWithMosmix(omDay: any, mosmixDay: any, wMosmixPct: number, wOmPct: number): any {
+  if (!omDay) return omDay;
+  if (!mosmixDay) return omDay;
+  const total = Math.max(1, wMosmixPct + wOmPct);
+  const wM = wMosmixPct / total;
+  const wO = wOmPct / total;
+  const mixField = (omAgg: any, mosVal: number | null | undefined): any => {
+    if (!omAgg || omAgg.avg == null) {
+      if (mosVal == null) return omAgg;
+      return { avg: mosVal, min: mosVal, max: mosVal, spread: 0, by_model: {} };
+    }
+    if (mosVal == null) return omAgg;
+    const mixed = wM * mosVal + wO * omAgg.avg;
+    return { ...omAgg, avg: Math.round(mixed * 10) / 10 };
+  };
+  const out: any = {
+    ...omDay,
+    tmin: mixField(omDay.tmin, mosmixDay.tmin?.avg ?? null),
+    tmax: mixField(omDay.tmax, mosmixDay.tmax?.avg ?? null),
+    precip: mixField(omDay.precip, mosmixDay.precip?.avg ?? null),
+    wind_max: mixField(omDay.wind_max, mosmixDay.wind_max?.avg ?? null),
+    cloudcover: mixField(omDay.cloudcover, mosmixDay.cloudcover?.avg ?? null),
+    source: "mix_om_mosmix",
+    mix_weights: { mosmix_pct: Math.round(wM * 100), om_pct: Math.round(wO * 100) },
+    mosmix_reference: {
+      tmin: mosmixDay.tmin?.avg ?? null,
+      tmax: mosmixDay.tmax?.avg ?? null,
+      precip: mosmixDay.precip?.avg ?? null,
+      wind_max: mosmixDay.wind_max?.avg ?? null,
+      cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+      stations: mosmixDay.mosmix_stations ?? [],
+      per_station: mosmixDay.mosmix_per_station ?? {},
+    },
+  };
+  return out;
+}
+
 // ===== Public server functions =====
 
 export const generateForecast = createServerFn({ method: "POST" })
