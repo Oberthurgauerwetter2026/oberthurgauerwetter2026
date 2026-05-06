@@ -237,10 +237,10 @@ function PrecipDistributionBlock({ dist }: { dist: any }) {
   );
 }
 
-function MosmixReferenceBlock({ data: ref }: { data: any }) {
+function MosmixReferenceBlock({ data: ref, isMixed = false }: { data: any; isMixed?: boolean }) {
   return (
     <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-      <div className="font-medium text-foreground mb-0.5">MOSMIX (Referenz, nicht verwendet)</div>
+      <div className="font-medium text-foreground mb-0.5">MOSMIX (Referenz{isMixed ? ", anteilig im Mix" : ", nicht verwendet"})</div>
       <div className="tabular-nums">
         Tmin {fmt(ref.tmin, 1)}°C · Tmax {fmt(ref.tmax, 1)}°C · Niederschlag {fmt(ref.precip, 1)} mm · Wind max {fmt(ref.wind_max, 1)} km/h
         {ref.cloudcover_avg != null && <> · Bewölkung {ref.cloudcover_avg}%</>}
