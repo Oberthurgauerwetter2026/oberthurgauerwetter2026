@@ -1891,6 +1891,8 @@ export const updateSettings = createServerFn({ method: "POST" })
         bias_strength: z.number().int().min(0).max(100).optional(),
         tag0_weight_mosmix: z.number().int().min(0).max(100).optional(),
         tag0_weight_om: z.number().int().min(0).max(100).optional(),
+        tag1_weight_mosmix: z.number().int().min(0).max(100).optional(),
+        tag1_weight_om: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )
