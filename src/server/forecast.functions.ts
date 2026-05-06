@@ -1510,9 +1510,8 @@ export const generateForecast = createServerFn({ method: "POST" })
     const withTopo = (dayIndex: number) => {
       let out = buildDay(dayIndex);
       if (!out) return null;
-      // Bias nur anwenden wenn MOSMIX nicht schon korrigiert hat (also bei Tag >=2 oder fehlendem MOSMIX)
-      const mosmixApplied = out?.source === "mosmix";
-      if (bias && bias.applied && !mosmixApplied) {
+      // Bias-Korrektur greift jetzt auf allen Tagen (Tag 0 enthält 60 % Open-Meteo).
+      if (bias && bias.applied) {
         out = applyBiasToDay(out, bias);
       }
       // Nowcast nur für Tag 0 (erste 12h)
