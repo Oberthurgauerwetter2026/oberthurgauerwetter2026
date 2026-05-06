@@ -963,6 +963,88 @@ function formatDayData(weather: any, dayIndex: number) {
   };
 }
 
+// Überschreibt für einen Tag die stündlich abgeleiteten Felder (tmin, tmax, precip,
+// precip_prob, wind_max, cloudcover, sunshine_h) so, dass nur Stunden ab `fromHour`
+// einfliessen. Für Tag 1 mit fromHour=6 nutzbar, um Doppelung mit dem
+// "Heute Abend & Nacht"-Eintrag (der die Vornacht abdeckt) zu vermeiden.
+function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: number): any {
+  if (!day) return day;
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return day;
+
+  const collectArrs = (base: string): Record<string, number[]> => {
+    const out: Record<string, number[]> = {};
+    if (Array.isArray(h[base])) out["default"] = h[base];
+    for (const k of Object.keys(h)) {
+      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+    }
+    return out;
+  };
+  const isUsableModel = (m: string) => !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
+
+  const idx: number[] = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const t = h.time[i] as string;
+    if (!t.startsWith(dateStr)) continue;
+    const hr = parseInt(t.slice(11, 13), 10);
+    if (Number.isFinite(hr) && hr >= fromHour) idx.push(i);
+  }
+  if (!idx.length) return day;
+
+  const tArrs = collectArrs("temperature_2m");
+  const pArrs = collectArrs("precipitation");
+  const probArrs = collectArrs("precipitation_probability");
+  const wArrs = collectArrs("windspeed_10m");
+  const cArrs = collectArrs("cloudcover");
+  const sArrs = collectArrs("sunshine_duration");
+
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+
+  // Per-Modell-Aggregat über das Fenster
+  const perModel = (arrs: Record<string, number[]>, op: "min" | "max" | "sum" | "avg"): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [m, arr] of Object.entries(arrs)) {
+      if (m !== "default" && !isUsableModel(m)) continue;
+      const vals = idx.map((i) => arr[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+      if (!vals.length) continue;
+      let v: number;
+      if (op === "min") v = Math.min(...vals);
+      else if (op === "max") v = Math.max(...vals);
+      else if (op === "sum") v = vals.reduce((a, b) => a + b, 0);
+      else v = vals.reduce((a, b) => a + b, 0) / vals.length;
+      out[m] = r1(v);
+    }
+    return out;
+  };
+
+  const tminPerModel = perModel(tArrs, "min");
+  const tmaxPerModel = perModel(tArrs, "max");
+  const precPerModel = perModel(pArrs, "sum");
+  const probPerModel = perModel(probArrs, "max");
+  const windPerModel = perModel(wArrs, "max");
+  const cloudPerModel = perModel(cArrs, "avg");
+  // sunshine: Sekunden → Stunden
+  const sunSecPerModel = perModel(sArrs, "sum");
+  const sunHPerModel: Record<string, number> = {};
+  for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
+
+  const out = { ...day };
+  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel);
+  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel);
+  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel);
+  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel);
+  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel);
+  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel);
+  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
+
+  out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
+  out.window_from_hour = fromHour;
+  out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
+  return out;
+}
+
+
 // Returns the current hour (0-23) in the Europe/Zurich timezone, regardless of host TZ.
 function currentZurichHour(): number {
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Zurich", hour: "2-digit", hour12: false }).formatToParts(new Date());
