@@ -985,7 +985,12 @@ function restOfDayTitle(startHour: number, todayDateStr: string): string {
 // im stündlichen Mittel ausgeschlossen werden (Tier-Filter analog zu Tag 0).
 const HOURLY_LONGRANGE_BLOCKLIST = ["gfs_global", "gfs_seamless", "ecmwf_ifs025"];
 
-function formatEveningNight(weather: any, startHourOverride?: number) {
+type RadarForRefine = {
+  forecast_next_2h?: { hours?: { time: string; mm: number }[] };
+  forecast_hours?: { time: string; mm: number }[];
+} | null;
+
+function formatEveningNight(weather: any, startHourOverride?: number, radar?: RadarForRefine) {
   const h = weather.hourly;
   if (!h?.time) return null;
   const today = weather.daily.time[0];
