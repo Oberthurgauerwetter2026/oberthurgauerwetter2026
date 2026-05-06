@@ -1161,6 +1161,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
+  out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
   out.window_from_hour = fromHour;
   out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
   return out;
