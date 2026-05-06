@@ -889,13 +889,151 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   const allMaxProb = Object.values(result).map((b) => b.max_prob).filter((v): v is number => v != null);
   const overallMaxProb = allMaxProb.length ? Math.max(...allMaxProb) : null;
 
+  // Stundenscharfe Hilfsdaten: peak_hour (Stunde mit höchstem mm-Wert) und dry_windows
+  // (zusammenhängende Phasen mit < 0.2 mm/h, mind. 3h lang).
+  const hoursOfDay: Array<{ hour: number; mm: number }> = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const t = h.time[i] as string;
+    if (!t.startsWith(dateStr)) continue;
+    const hour = parseInt(t.slice(11, 13), 10);
+    if (!Number.isFinite(hour) || hour < fromHour) continue;
+    const precVals = precArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+    if (!precVals.length) continue;
+    hoursOfDay.push({ hour, mm: precVals.reduce((a, b) => a + b, 0) / precVals.length });
+  }
+  let peakHour: number | null = null;
+  let peakHourMm = 0;
+  for (const { hour, mm } of hoursOfDay) {
+    if (mm > peakHourMm) { peakHourMm = mm; peakHour = hour; }
+  }
+  // dry_windows aus aufeinander folgenden trockenen Stunden
+  const dryWindows: Array<{ from: number; to: number; hours: number }> = [];
+  let runStart: number | null = null;
+  for (let k = 0; k <= hoursOfDay.length; k++) {
+    const cur = hoursOfDay[k];
+    const isDry = cur && cur.mm < 0.2;
+    if (isDry && runStart == null) runStart = cur.hour;
+    if ((!isDry || k === hoursOfDay.length) && runStart != null) {
+      const endHour = cur ? cur.hour : (hoursOfDay[k - 1].hour + 1);
+      const len = endHour - runStart;
+      if (len >= 3) dryWindows.push({ from: runStart, to: endHour, hours: len });
+      runStart = null;
+    }
+  }
+
   return {
     blocks: result,
     peak_block: peakSum >= 1 ? peakBlock : null,
     peak_block_precip_mm: peakSum >= 1 ? Math.round(peakSum * 10) / 10 : 0,
     peak_block_prob: peakSum >= 1 ? peakProb : null,
     overall_max_prob: overallMaxProb,
+    peak_hour: peakHour != null && peakHourMm >= 0.5 ? peakHour : null,
+    peak_hour_mm: peakHour != null ? Math.round(peakHourMm * 10) / 10 : null,
+    dry_windows: dryWindows,
   };
+}
+
+// Kompaktes Stundenprofil pro Tag: Median + Spread aus allen verfügbaren Modellen
+// für temperature, precipitation, wind, cloudcover, sunshine. Liefert eine Tabelle
+// mit 24 Zeilen (oder weniger ab fromHour). Wird der KI als Tagesgang-Anker mitgegeben.
+function buildHourlyProfile(
+  weather: any,
+  dayIndex: number,
+  fromHour: number = 0,
+): Array<{ h: number; t: number | null; t_spread: number; p: number; p_spread: number; w: number | null; c: number | null; s: number | null; n_models: number }> | null {
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return null;
+
+  const collectArrs = (base: string): Array<{ model: string; arr: number[] }> => {
+    const out: Array<{ model: string; arr: number[] }> = [];
+    if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
+    for (const k of Object.keys(h)) {
+      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
+    }
+    return out;
+  };
+  const isUsable = (m: string) => m === "default" || !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
+  const filt = (arrs: Array<{ model: string; arr: number[] }>) => arrs.filter(({ model }) => isUsable(model));
+
+  const tArrs = filt(collectArrs("temperature_2m"));
+  const pArrs = filt(collectArrs("precipitation"));
+  const wArrs = filt(collectArrs("windspeed_10m"));
+  const cArrs = filt(collectArrs("cloudcover"));
+  const sArrs = filt(collectArrs("sunshine_duration"));
+
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const median = (vals: number[]) => {
+    const s = [...vals].sort((a, b) => a - b);
+    const n = s.length;
+    if (!n) return null;
+    return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+  };
+  const spread = (vals: number[]) => (vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0);
+  const sample = (arrs: Array<{ model: string; arr: number[] }>, i: number): number[] =>
+    arrs.map(({ arr }) => arr[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+
+  const out: Array<{ h: number; t: number | null; t_spread: number; p: number; p_spread: number; w: number | null; c: number | null; s: number | null; n_models: number }> = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const ts = h.time[i] as string;
+    if (!ts.startsWith(dateStr)) continue;
+    const hr = parseInt(ts.slice(11, 13), 10);
+    if (!Number.isFinite(hr) || hr < fromHour) continue;
+    const tv = sample(tArrs, i);
+    const pv = sample(pArrs, i);
+    const wv = sample(wArrs, i);
+    const cv = sample(cArrs, i);
+    const sv = sample(sArrs, i);
+    const tMed = median(tv);
+    const pMed = median(pv) ?? 0;
+    out.push({
+      h: hr,
+      t: tMed != null ? r1(tMed) : null,
+      t_spread: r1(spread(tv)),
+      p: r1(pMed),
+      p_spread: r1(spread(pv)),
+      w: median(wv) != null ? r1(median(wv)!) : null,
+      c: median(cv) != null ? Math.round(median(cv)!) : null,
+      s: median(sv) != null ? r1(median(sv)! / 60) : null, // Sekunden → Minuten
+      n_models: tv.length,
+    });
+  }
+  return out.length ? out : null;
+}
+
+// Formatiert das Stundenprofil als kompakte Tabelle für den KI-Prompt.
+// Jede Zeile: "HH | T °C (±s) | P mm (±s) | W km/h | Wolken % | Sonne min".
+function formatHourlyProfileTable(profile: ReturnType<typeof buildHourlyProfile>): string | null {
+  if (!profile?.length) return null;
+  const lines = ["Stunde | Temp | Niederschlag | Wind | Wolken | Sonne"];
+  lines.push("------ | ---- | ------------ | ---- | ------ | -----");
+  for (const r of profile) {
+    const hh = String(r.h).padStart(2, "0") + ":00";
+    const t = r.t != null ? `${r.t.toFixed(1)}°` + (r.t_spread > 1 ? ` (±${r.t_spread.toFixed(1)})` : "") : "—";
+    const p = r.p > 0 ? `${r.p.toFixed(1)} mm` + (r.p_spread > 0.5 ? ` (±${r.p_spread.toFixed(1)})` : "") : "trocken";
+    const w = r.w != null ? `${Math.round(r.w)} km/h` : "—";
+    const c = r.c != null ? `${r.c}%` : "—";
+    const s = r.s != null && r.s > 0 ? `${Math.round(r.s)} min` : "0";
+    lines.push(`${hh} | ${t} | ${p} | ${w} | ${c} | ${s}`);
+  }
+  return lines.join("\n");
+}
+
+// Baut den userPrompt für einen Tag und hängt — falls vorhanden — das
+// Stundenprofil als separate Tabelle an (statt es als JSON-Array im Datensatz
+// zu vergraben). `hourly_profile` wird aus dem JSON-Dump entfernt, um Tokens zu sparen.
+function buildDayUserPrompt(intro: string, day: any, extraHint: string = ""): string {
+  const profile = day?.hourly_profile;
+  const dump = { ...day };
+  delete dump.hourly_profile;
+  const json = JSON.stringify(dump, null, 2);
+  let prompt = `${intro}\n${json}`;
+  const table = formatHourlyProfileTable(profile);
+  if (table) {
+    prompt += `\n\nSTUNDENPROFIL (Median über Modelle, ± = Modell-Streuung):\n${table}`;
+  }
+  if (extraHint) prompt += extraHint;
+  return prompt;
 }
 
 function formatDayData(weather: any, dayIndex: number) {
@@ -960,6 +1098,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
+    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
   };
 }
 
@@ -1039,6 +1178,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
+  out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
   out.window_from_hour = fromHour;
   out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
   return out;
@@ -1505,7 +1645,10 @@ export function buildSystemPrompt(settings: any): string {
     "Wenn der Datensatz ein Feld `nowcast` enthält: nutze `observed_now` (aktuelle Stationswerte) und `next_2h.trend` als verlässliche Anker für die ersten Stunden. Wenn `nowcast.confidence` 'niedrig' ist, formuliere vorsichtiger ('zeichnet sich ab', 'deutet sich an', 'unsichere Lage'). Bei `next_2h.trend === 'zunehmend'` Niederschlag explizit erwähnen, bei 'trocken' keine Schauer ankündigen. Bei `night_fog_likely === true` auf mögliches Aufkommen von Nebel hinweisen statt auf besonders kalte Nacht.",
     "",
     "=== NIEDERSCHLAGS-TAGESGANG ===",
-    "Wenn der Datensatz ein Feld `precip_distribution` enthält, beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` fehlt: wie bisher, Tagesverlauf frei nach Standardregeln formulieren.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
+    "Wenn der Datensatz ein Feld `precip_distribution` enthält, beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Wenn `peak_hour` gesetzt ist, die Stunde im Text grob nennen ('um den Mittag', 'gegen 17 Uhr', 'in den späten Nachmittagsstunden') — nie als exakte Uhrzeit ('um 14:00').\n- `dry_windows` (≥ 3h trocken) explizit als 'längere trockene Phase am Vormittag' o. ä. erwähnen, wenn es zwischen Niederschlagsphasen liegt.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` fehlt: wie bisher, Tagesverlauf frei nach Standardregeln formulieren.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
+    "",
+    "=== STUNDENPROFIL (TAG 0 + 1) ===",
+    "Wenn im userPrompt ein Block 'STUNDENPROFIL' folgt, ist das die HÖCHSTE Auflösung des Tagesgangs (eine Zeile pro Stunde, Median über alle verfügbaren Modelle, in Klammern die Modell-Streuung). Nutze ihn primär zur Bestimmung wann genau Bewölkung, Niederschlag, Sonne oder Wind wechseln. Übersetze Stundenangaben in Tageszeit-Bezüge ('am Vormittag', 'gegen Mittag', 'am späten Nachmittag', 'in der ersten Nachthälfte') — nie exakte Uhrzeiten nennen. Bei grosser Streuung (±) vorsichtig formulieren ('zeichnet sich ab', 'lokal unterschiedlich'). Wenn das Profil widersprüchlich zu den Tagesaggregaten ist, hat das Profil Vorrang für die Tagesgang-Beschreibung; die Aggregate (tmin/tmax) bleiben für die Temperaturangaben verbindlich.",
     "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
@@ -1675,7 +1818,7 @@ export const generateForecast = createServerFn({ method: "POST" })
 
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
+      const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1693,7 +1836,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const tag1Hint = i === 1
         ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.`
         : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${tag1Hint}`;
+      const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -1821,7 +1964,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     {
       const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
-      const userPrompt = `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`;
+      const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -1839,7 +1982,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const tag1Hint = i === 1
         ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.`
         : "";
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${tag1Hint}`;
+      const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
@@ -1901,7 +2044,7 @@ export const regenerateEntry = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     if (!entry) throw new Error("Eintrag nicht gefunden (ID ungültig oder keine Berechtigung).");
 
-    const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:\n${JSON.stringify(entry.weather_data, null, 2)}`;
+    const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data);
     const body = enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data);
     const { error: uErr } = await supabase
       .from("forecast_entries")

@@ -1,40 +1,103 @@
-# Tag-1-Eintrag erst ab 06:00 starten
+# Feinere Stunden-Auflösung für Tag 0 + Tag 1
 
-## Problem
+## Ziel
 
-Der Donnerstag-Eintrag enthält die Stunden 00:00–06:00, die schon im „Heute Abend & Nacht"-Eintrag stehen. Folge: doppelte Beschreibung („In der Nacht zeitweise Regen" taucht in beiden Einträgen auf).
+Statt 4 grober Blöcke (night/morning/afternoon/evening) und einem Tages-Aggregat sollen die Stunden 00–24 für Tag 0 und Tag 1 **stundenweise** aus allen verfügbaren Quellen ausgelesen, gegeneinander geprüft und zu einem "best estimate per hour" zusammengeführt werden. Daraus werden anschliessend die Aggregate (tmin/tmax/precip/wind/sun) **abgeleitet** — nicht umgekehrt.
 
-## Lösung
+## Warum das Tag 0 + Tag 1 verbessert
 
-Tag-1-Aggregate (Open-Meteo + MOSMIX) und der `precip_distribution`-Block werden nur über die Stunden **06:00–24:00** berechnet. Der Tag-1-Eintrag startet damit textlich am Vormittag — keine Überschneidung mit dem Vornacht-Eintrag.
+- Die heutigen Schwächen sitzen oft in *einzelnen* Stunden (z. B. Schauer 14–16 Uhr, Föhnabbruch um 22 Uhr, Stratusauflösung 11 Uhr). Eine Block-Mittelung verwischt das.
+- Tag 0: vergangene Stunden sind durch SMN/Radar **gemessen** und können das Modell direkt überschreiben.
+- Tag 1: Modellunterschiede sind stundenweise oft drastisch (CH1 vs. CH2 vs. ECMWF). Erst durch Stunden-Vergleich erkennt man, *wo* die Modelle einig/uneinig sind.
 
-## Was getan wird
+## Pipeline (neu)
 
-### `src/server/forecast.functions.ts`
+```text
+Stunde 00 .. 23
+  ├── Quellen je Stunde:
+  │     - Open-Meteo Multi-Modell (CH1, CH2, AROME, ICON-D2)  → temp, precip, wind, cloud, sun, rh
+  │     - MOSMIX (sofern stündlich verfügbar)
+  │     - SMN-Beobachtung (für vergangene Stunden Tag 0)
+  │     - Radar-Nowcast (precip, 0–6 h)
+  ├── Pro Stunde:
+  │     1) Wenn beobachtet (SMN/Radar) → Beobachtung gewinnt, Modell wird "rebased"
+  │     2) Sonst: gewichtetes Modell-Median + Spread
+  │     3) Stations-Bias (stundenweise) anwenden
+  │     4) Plausibilitätscheck (Sprungfilter, physik. Grenzen)
+  └── Output: hourly_profile[24] mit value + confidence + source
+↓
+Aggregate (tmin/tmax/precip_sum/wind_max/...) aus dem Profil ableiten
+↓
+precip_distribution aus dem Profil neu rechnen (feinere Blöcke + peak_hour)
+↓
+KI-Prompt bekommt: hourly_profile (kompakt) + Aggregate + Konfidenz
+```
 
-1. **Neue Helper-Funktion `formatDayDataFromHour(weather, dayIndex, fromHour)`**
-   - Baut Tag-Aggregate (tmin, tmax, precip_sum, wind_max, cloudcover, sunshine, precip_prob_max) aus den **stündlichen** Werten ab `fromHour`.
-   - Für `dayIndex === 1` mit `fromHour = 6` aufgerufen.
-   - Pro-Modell-Werte und `spread` analog zum bestehenden `formatDayData` aufbauen, damit die UI-Modelltabelle gleich aussieht.
+## Umsetzung in Schritten
 
-2. **`buildDay(dayIndex)` anpassen**
-   - Für `dayIndex === 1`: `omDay = formatDayDataFromHour(weather, 1, 6)` statt `formatDayData(weather, 1)`.
-   - MOSMIX-Mix bleibt unverändert (MOSMIX liefert Tagesaggregate ohne Stundenraster — wir mischen den Tag-1-Wert wie gehabt; akzeptiertes leichtes Inkonsistenzbudget).
-   - Stations-Bias, pressure/snow-line-Regime, Topographie unverändert.
+### Schritt 1 — `buildHourlyProfile(weather, dayIndex, options)` neu in `forecast.functions.ts`
+- Liest aus `weather.hourly` und `weather.byModel.*.hourly` für Tag `dayIndex`.
+- Pro Stunde Median **und** Spread (max−min) je Variable.
+- Rückgabe: `Array<{ hour: number; iso: string; temp: {value, spread, models}; precip: {...}; wind: {...}; cloud, sun, rh, source }>`.
+- Variablen: temperature_2m, precipitation, precipitation_probability, wind_speed_10m, wind_gusts_10m, cloudcover, sunshine_duration, relative_humidity_2m.
 
-3. **`computePrecipDistribution`**
-   - Neuer Parameter `fromHour` (default 0). Für Tag 1 mit 6 aufgerufen → `night`-Block entfällt automatisch (range [0, 6] liegt vor `fromHour`).
+### Schritt 2 — Beobachtungs-Overlay für Tag 0
+- In `nowcast.server.ts` bzw. neuem Helper: Liste aller bereits beobachteten Stunden (SMN + Radar) → in Profil einsetzen mit `source: "observed"` und `confidence: 1`.
+- Für die Stunde *jetzt* zusätzlich: Übergangs-Smoothing (ersten 1–2 zukünftigen Stunden in Richtung Beobachtung verschieben — verhindert Sprünge).
 
-4. **Prompt-Hinweis im Donnerstag-Titel-Block**
-   - Im Loop für `i === 1` einen kurzen Hinweis im userPrompt: „Dieser Eintrag beschreibt Donnerstag ab 06:00 Uhr. Die Vornacht (00–06) wurde bereits im vorherigen Eintrag behandelt und darf NICHT erwähnt werden."
+### Schritt 3 — Stundenweiser Stations-Bias
+- `bias-correction.server.ts` erweitern: Bias zusätzlich pro Stunde-im-Tag (24 Werte) statt nur Tagesmittel; konservativ glätten (gleitendes 3-Stunden-Mittel).
+- Anwendung im Profil pro Stunde, nicht auf das Tages-Aggregat.
 
-### `src/components/WeatherDataView.tsx`
+### Schritt 4 — Plausibilitätsfilter pro Stunde
+- Temperatursprünge > 4 °C/h glätten (ausser bei Föhn/Gewitter-Markern).
+- Niederschlag-Spitzen, die nur ein Modell zeigt und Spread > 5 mm → dämpfen, Spread als Unsicherheit melden.
+- Wind: wenn Gust < Speed → Gust = Speed (Datenfehler).
 
-- Keine Änderung nötig. Tageswerte werden gleich angezeigt, nur dass tmin/precip jetzt das Fenster 06–24 statt 00–24 widerspiegeln. Optional: kleiner Badge „06–24 Uhr" beim Donnerstag-Eintrag.
+### Schritt 5 — Aggregate aus Profil ableiten
+- `formatDayData` / `refineDayFromHour` ersetzen durch `aggregateFromProfile(profile, fromHour)`.
+- tmin/tmax aus Profil-Min/Max der gewünschten Stunden, Niederschlagssumme aus Profil-Summe, Wind-Max aus Profil-Max, Sonnenstunden aus Summe.
+- Tag 0 voll (00–24 mit Beobachtungs-Overlay), Tag 1 ab 06:00 (wie bereits gelöst).
 
-## Erwartetes Verhalten
+### Schritt 6 — Feineres `precip_distribution`
+- Statt 4 Blöcke: weiterhin 4 Blöcke ausgeben *plus* `peak_hour` (Stunde mit dem höchsten Niederschlag) und `dry_windows` (zusammenhängende trockene Phasen ≥ 3 h).
+- KI-Prompt-Hinweis: "Wenn `peak_hour` vorhanden, Stundenangabe nennen ('um den Mittag', 'gegen 17 Uhr')."
 
-- Donnerstag-Eintrag erwähnt **kein** „in der Nacht" mehr.
-- tmin Donnerstag = Tagestiefst Tag (oft 06:00 oder tagsüber bei Föhn), nicht mehr Tiefstwert der Vornacht.
-- Niederschlagssumme Donnerstag enthält nicht mehr den frühen Morgenregen, der schon im Abend/Nacht-Eintrag steht.
-- Tag 2+ unverändert.
+### Schritt 7 — KI bekommt kompaktes Stundenprofil
+- Neuer Prompt-Block: `hourly_profile_compact` als Tabelle (24 Zeilen, nur Schlüsselwerte). Reduziert Halluzinationen über Tagesgang.
+- Klare Regel: bei hoher Spread → vorsichtig formulieren; bei `source: "observed"` → als Beobachtung beschreiben.
+
+## Datenstruktur (Beispiel)
+
+```text
+hourly_profile: [
+  { h: 14, value: { temp: 8.2, precip: 0.4, wind: 18, cloud: 90, sun: 0 },
+    spread: { temp: 0.6, precip: 1.2, wind: 5 },
+    source: "model_median", confidence: 0.8 },
+  { h: 15, value: { temp: 8.0, precip: 2.1, wind: 22, cloud: 95, sun: 0 },
+    spread: { temp: 0.4, precip: 3.5, wind: 7 },
+    source: "radar_nowcast", confidence: 0.95 },
+  ...
+]
+```
+
+## Reihenfolge der Implementierung (vorgeschlagene Iterationen)
+
+1. **Profil-Builder + Aggregat-Ableitung** (Schritte 1, 5) — sofort verwendbar, ersetzt `formatDayData` ohne Verhaltensänderung.
+2. **SMN/Radar-Overlay Tag 0** (Schritt 2) — direkter Qualitätsgewinn für die ersten Stunden.
+3. **Stundenweiser Bias** (Schritt 3) — verbessert tmin/tmax-Treffer.
+4. **Plausibilitätsfilter + KI-Prompt + feineres precip_distribution** (Schritte 4, 6, 7).
+
+Jede Iteration ist eigenständig deploybar; ich schlage vor, mit Schritt 1+2 anzufangen und das Resultat zuerst zu beurteilen.
+
+## Was *nicht* Teil dieses Plans ist
+
+- Dynamische Modellgewichte (Skill-Tracking) — separater Folgeschritt.
+- Wetterlagen-Detektoren (Föhn, Stratus, Bise) — können später auf das Profil aufgesetzt werden.
+- Probabilistische Niederschlagsausgabe (Perzentile / P>1 mm) — explizit zurückgestellt.
+
+## Risiken / offene Punkte
+
+- MOSMIX liefert teils nur tägliche Aggregate; bleibt dann als "Tagesplausibilität" erhalten, nicht als Stundenquelle.
+- Mehr Daten im KI-Prompt = mehr Tokens. Profil daher kompakt formatiert (eine Zeile pro Stunde, gerundete Werte).
+- Datenschemata in `weather_data` (forecast_entries) wachsen — bestehende Einträge bleiben kompatibel, neue Felder sind additiv.
