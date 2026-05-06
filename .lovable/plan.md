@@ -1,27 +1,27 @@
-# Gemessene Werte: nur intern nutzen, nicht im Text erwähnen
+# Tiefstwerte am Folgetag weglassen, wenn die Abendprognose sie schon enthält
 
-## Ziel
+## Ausgangslage
 
-Die SMN-/Radar-Messungen sollen weiterhin das Stundenprofil für Tag 0 schärfen (vergangene Stunden = reale Werte statt Modell-Median), aber **nicht mehr explizit im Prognosetext auftauchen** ("gemessen", "beobachtet", "heute Morgen wurden 4 °C gemessen" etc.).
+Wenn die Prognose nach 17:00 Uhr generiert wird, heisst der erste Eintrag „Heute Abend & Nacht" und enthält bereits die **Tiefstwerte der kommenden Nacht** (denn die Nacht 00–06 des Folgetags gehört noch zu diesem Fenster).
 
-Die Prognose soll wie bisher als zusammenhängender Wetter-Text wirken — egal ob die Zahl aus Messung oder Modell stammt.
+Der Tag-1-Eintrag („Morgen, …") nennt aktuell trotzdem nochmals dieselben Tiefstwerte — weil `DEFAULT_TEMP_RULES` einen Tiefstwerte-Satz für jeden Tag erzwingt. Das ist eine **redundante Doppelnennung**.
 
-## Was sich ändert
+Bereits umgesetzt ist nur, dass Tag 1 die **Vornacht-Beschreibung** (Bewölkung, Schauer 00–06) auslassen muss (`tag1Hint` in Zeile 1964 / 2115). Die Tiefstwerte wurden dabei vergessen.
 
-**Eine Stelle:** Die Prompt-Regel zur Spalte `Quelle` in `forecast.functions.ts` (rund Zeile 1773) wird umformuliert:
+## Änderung
 
-- **Entfernen:** Die Anweisung, `obs`-Stunden als „gemessen", „beobachtet" oder „im Rückblick" zu formulieren.
-- **Entfernen:** Der Beispielsatz „am Morgen wurden 3 °C gemessen".
-- **Behalten:** Der Hinweis, dass Werte mit `Quelle = obs` **verbindlich** sind und Vorrang vor Modellwerten haben (für die Genauigkeit der Stundenangaben).
-- **Neu hinzufügen:** Eine ausdrückliche Regel: *Die Spalte `Quelle` ist nur ein internes Qualitätssignal. Im Text dürfen Begriffe wie „gemessen", „beobachtet", „laut Messung", „Stationsdaten" o. Ä. **nicht** verwendet werden. Die Prognose bleibt durchgehend in der Form einer einheitlichen Wetterbeschreibung — unabhängig von der Datenquelle.*
+**Eine Stelle:** Der `tag1Hint` in `forecast.functions.ts` (Zeilen 1963–1965 und 2114–2116) wird ergänzt um:
 
-## Was *nicht* Teil ist
+> „Da die Tiefstwerte der kommenden Nacht bereits im vorherigen Eintrag genannt wurden, darf der Tag-1-Eintrag **keinen Tiefstwerte-Satz** enthalten. Beginne Absatz 2 direkt mit den Höchstwerten („Höchstwerte um Z Grad.") oder lasse Absatz 2 weg, wenn nur Höchstwerte zu nennen wären."
 
-- Keine Änderung an `applyObservedOverlay`, `buildHourlyProfile` oder der Stundenprofil-Tabelle selbst.
-- Keine UI-Änderung in `WeatherDataView.tsx` (Messungen bleiben im UI nicht sichtbar — gewünscht).
-- Keine Änderung am Datenmodell (`src`-Feld bleibt im `hourly_profile`).
+Diese Ergänzung greift **nur**, wenn der erste Eintrag „Heute Abend & Nacht" ist (also Generierung nach 17:00) — also genau in den Fällen, wo `tag1Hint` heute schon gesetzt wird. Bei Generierung am Morgen oder Nachmittag bleibt alles unverändert: dann nennt der Heute-Eintrag keine kommende Nacht und Tag 1 muss seine Tiefstwerte weiterhin nennen.
+
+## Was nicht geändert wird
+
+- `DEFAULT_TEMP_RULES` bleibt unverändert (gilt weiter als Default für alle anderen Tage).
+- Tag 2–5 nennen ihre Tiefstwerte wie bisher.
+- Keine Änderung an Datenmodell, UI oder Aggregation.
 
 ## Effekt
 
-- Der Tagesgang im Text wird weiterhin präziser durch reale Werte (z. B. korrekter Zeitpunkt eines Schauers).
-- Im Text liest sich die Prognose wieder als reine Wetterbeschreibung ohne Mess-Sprache.
+Im Abend-/Nacht-Generierungslauf liest sich der Übergang vom Heute- zum Morgen-Eintrag flüssig: die Tiefstwerte stehen einmal am Ende von „Heute Abend & Nacht", und der „Morgen, …"-Eintrag startet inhaltlich um 06:00 mit dem Tagesgang und nennt nur noch Höchstwerte.
