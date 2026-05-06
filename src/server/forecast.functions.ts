@@ -827,7 +827,7 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
 
 // Stündlicher Niederschlags-Tagesgang aus Open-Meteo (Tag 0/1).
 // Liefert 4 Blöcke (night/morning/afternoon/evening) mit mm-Summe + max % Wahrscheinlichkeit.
-function computePrecipDistribution(weather: any, dayIndex: number): any | null {
+function computePrecipDistribution(weather: any, dayIndex: number, fromHour: number = 0): any | null {
   const h = weather?.hourly;
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
