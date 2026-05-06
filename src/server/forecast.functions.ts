@@ -936,11 +936,24 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
 // Kompaktes Stundenprofil pro Tag: Median + Spread aus allen verfügbaren Modellen
 // für temperature, precipitation, wind, cloudcover, sunshine. Liefert eine Tabelle
 // mit 24 Zeilen (oder weniger ab fromHour). Wird der KI als Tagesgang-Anker mitgegeben.
+type HourlyProfileRow = {
+  h: number;
+  t: number | null;
+  t_spread: number;
+  p: number;
+  p_spread: number;
+  w: number | null;
+  c: number | null;
+  s: number | null;
+  n_models: number;
+  src?: "obs" | "mix" | "mod"; // obs = SMN/Radar, mix = Übergang, mod = Modell-Median (default)
+};
+
 function buildHourlyProfile(
   weather: any,
   dayIndex: number,
   fromHour: number = 0,
-): Array<{ h: number; t: number | null; t_spread: number; p: number; p_spread: number; w: number | null; c: number | null; s: number | null; n_models: number }> | null {
+): HourlyProfileRow[] | null {
   const h = weather?.hourly;
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
