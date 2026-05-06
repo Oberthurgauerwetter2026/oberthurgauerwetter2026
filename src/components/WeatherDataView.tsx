@@ -194,7 +194,14 @@ function DayTable({ data, title }: { data: Record<string, any>; title?: string }
       {(data as any).topography && <TopographyBlock topo={(data as any).topography} />}
       {(data as any).stations && <StationsBlock stations={(data as any).stations} />}
       {(data as any).precip_distribution && <PrecipDistributionBlock dist={(data as any).precip_distribution} />}
-      {(data as any).mosmix_reference && <MosmixReferenceBlock data={(data as any).mosmix_reference} />}
+      {(data as any).mix_weights && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
+          <span className="font-medium text-foreground">Tag-0-Mix:</span>{" "}
+          <span className="tabular-nums">{(data as any).mix_weights.mosmix_pct}% MOSMIX · {(data as any).mix_weights.om_pct}% Open-Meteo</span>{" "}
+          <span className="text-muted-foreground">+ Stations-Bias + Bias-Korrektur + Nowcast/Radar</span>
+        </div>
+      )}
+      {(data as any).mosmix_reference && <MosmixReferenceBlock data={(data as any).mosmix_reference} isMixed={Boolean((data as any).mix_weights)} />}
     </div>
   );
 }
@@ -230,10 +237,10 @@ function PrecipDistributionBlock({ dist }: { dist: any }) {
   );
 }
 
-function MosmixReferenceBlock({ data: ref }: { data: any }) {
+function MosmixReferenceBlock({ data: ref, isMixed = false }: { data: any; isMixed?: boolean }) {
   return (
     <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-      <div className="font-medium text-foreground mb-0.5">MOSMIX (Referenz, nicht verwendet)</div>
+      <div className="font-medium text-foreground mb-0.5">MOSMIX (Referenz{isMixed ? ", anteilig im Mix" : ", nicht verwendet"})</div>
       <div className="tabular-nums">
         Tmin {fmt(ref.tmin, 1)}°C · Tmax {fmt(ref.tmax, 1)}°C · Niederschlag {fmt(ref.precip, 1)} mm · Wind max {fmt(ref.wind_max, 1)} km/h
         {ref.cloudcover_avg != null && <> · Bewölkung {ref.cloudcover_avg}%</>}

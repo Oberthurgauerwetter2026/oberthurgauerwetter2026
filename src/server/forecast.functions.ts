@@ -1367,7 +1367,7 @@ export function buildSystemPrompt(settings: any): string {
     "Wenn der Datensatz ein Feld `nowcast` enthält: nutze `observed_now` (aktuelle Stationswerte) und `next_2h.trend` als verlässliche Anker für die ersten Stunden. Wenn `nowcast.confidence` 'niedrig' ist, formuliere vorsichtiger ('zeichnet sich ab', 'deutet sich an', 'unsichere Lage'). Bei `next_2h.trend === 'zunehmend'` Niederschlag explizit erwähnen, bei 'trocken' keine Schauer ankündigen. Bei `night_fog_likely === true` auf mögliches Aufkommen von Nebel hinweisen statt auf besonders kalte Nacht.",
     "",
     "=== NIEDERSCHLAGS-TAGESGANG ===",
-    "Wenn der Datensatz ein Feld `precip_distribution` enthält, beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` fehlt: wie bisher, Tagesverlauf frei nach Standardregeln formulieren.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
+    "Wenn der Datensatz ein Feld `precip_distribution` enthält, beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` fehlt: wie bisher, Tagesverlauf frei nach Standardregeln formulieren.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
     "",
     "=== PFLICHT-STRUKTUR & BEISPIELE ===",
     STRUCTURE_AND_EXAMPLES,
@@ -1385,6 +1385,46 @@ function enrichMosmixDay(day: any): any {
     wind_label: buildWindLabel(dirAvg, windMax),
     sky_label: isClearSkyDay(day) ? "Sonnig und wolkenlos" : null,
   };
+}
+
+// Variante C: Tag 0 als gewichteter Mix von Open-Meteo (omDay) und MOSMIX (mosmixDay).
+// Mischt nur die avg-Werte ausgewählter Felder; die Open-Meteo-Struktur (min/max/spread/by_model)
+// bleibt erhalten, damit die Modell-Tabelle in der UI weiterhin funktioniert.
+function mixOmWithMosmix(omDay: any, mosmixDay: any, wMosmixPct: number, wOmPct: number): any {
+  if (!omDay) return omDay;
+  if (!mosmixDay) return omDay;
+  const total = Math.max(1, wMosmixPct + wOmPct);
+  const wM = wMosmixPct / total;
+  const wO = wOmPct / total;
+  const mixField = (omAgg: any, mosVal: number | null | undefined): any => {
+    if (!omAgg || omAgg.avg == null) {
+      if (mosVal == null) return omAgg;
+      return { avg: mosVal, min: mosVal, max: mosVal, spread: 0, by_model: {} };
+    }
+    if (mosVal == null) return omAgg;
+    const mixed = wM * mosVal + wO * omAgg.avg;
+    return { ...omAgg, avg: Math.round(mixed * 10) / 10 };
+  };
+  const out: any = {
+    ...omDay,
+    tmin: mixField(omDay.tmin, mosmixDay.tmin?.avg ?? null),
+    tmax: mixField(omDay.tmax, mosmixDay.tmax?.avg ?? null),
+    precip: mixField(omDay.precip, mosmixDay.precip?.avg ?? null),
+    wind_max: mixField(omDay.wind_max, mosmixDay.wind_max?.avg ?? null),
+    cloudcover: mixField(omDay.cloudcover, mosmixDay.cloudcover?.avg ?? null),
+    source: "mix_om_mosmix",
+    mix_weights: { mosmix_pct: Math.round(wM * 100), om_pct: Math.round(wO * 100) },
+    mosmix_reference: {
+      tmin: mosmixDay.tmin?.avg ?? null,
+      tmax: mosmixDay.tmax?.avg ?? null,
+      precip: mosmixDay.precip?.avg ?? null,
+      wind_max: mosmixDay.wind_max?.avg ?? null,
+      cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+      stations: mosmixDay.mosmix_stations ?? [],
+      per_station: mosmixDay.mosmix_per_station ?? {},
+    },
+  };
+  return out;
 }
 
 // ===== Public server functions =====
@@ -1419,42 +1459,32 @@ export const generateForecast = createServerFn({ method: "POST" })
       ? []
       : await getOrSetCache("stations:bias", buildStationBiases);
 
+    const tag0WMosmix = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
+    const tag0WOm = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
     const buildDay = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
-      // Tag 0/1: MOSMIX bevorzugt — überschreibt Roh-Werte, kein Stations-Bias.
-      // Nur Tag 0: MOSMIX überschreibt Roh-Werte (kein Stations-Bias).
-      // Tag 1: Open-Meteo Multi-Modell + Stations-Bias führen, MOSMIX nur als Referenz.
+      // Tag 0: gewichteter Mix Open-Meteo + MOSMIX (Variante C). Stations-Bias greift.
+      // Tag 1: Open-Meteo führt, MOSMIX nur als Referenz. Stations-Bias greift.
+      // Tag 2+: Open-Meteo + Stations-Bias.
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
-      const mosmix = dayIndex === 0 ? mosmixDay : null;
-      let base: any;
-      if (mosmix) {
-        base = enrichMosmixDay({
-          ...mosmix,
-          weathercode: omDay.weathercode,
-          precip_prob: omDay.precip_prob,
-          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
-        });
-      } else {
-        base = omDay;
-        // Tag 1: MOSMIX als Cross-Check anhängen (nicht im Text verwenden)
-        if (dayIndex === 1 && mosmixDay) {
-          base = { ...base, mosmix_reference: {
-            tmin: mosmixDay.tmin?.avg ?? null,
-            tmax: mosmixDay.tmax?.avg ?? null,
-            precip: mosmixDay.precip?.avg ?? null,
-            wind_max: mosmixDay.wind_max?.avg ?? null,
-            cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
-            stations: mosmixDay.mosmix_stations ?? [],
-            per_station: mosmixDay.mosmix_per_station ?? {},
-          } };
-        }
+      let base: any = omDay;
+      if (dayIndex === 0 && mosmixDay) {
+        base = mixOmWithMosmix(omDay, mosmixDay, tag0WMosmix, tag0WOm);
+      } else if (dayIndex === 1 && mosmixDay) {
+        base = { ...base, mosmix_reference: {
+          tmin: mosmixDay.tmin?.avg ?? null,
+          tmax: mosmixDay.tmax?.avg ?? null,
+          precip: mosmixDay.precip?.avg ?? null,
+          wind_max: mosmixDay.wind_max?.avg ?? null,
+          cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+          stations: mosmixDay.mosmix_stations ?? [],
+          per_station: mosmixDay.mosmix_per_station ?? {},
+        } };
       }
       const out: any = { ...base, topography: applyTopography(base, topo) };
-      if (!mosmix) {
-        const st = applyStationBias(base, stationBiases);
-        if (st) out.stations = st;
-      }
+      const st = applyStationBias(base, stationBiases);
+      if (st) out.stations = st;
       return out;
     };
     const radarSnapshot = (settings?.radar_enabled !== false)
@@ -1480,9 +1510,8 @@ export const generateForecast = createServerFn({ method: "POST" })
     const withTopo = (dayIndex: number) => {
       let out = buildDay(dayIndex);
       if (!out) return null;
-      // Bias nur anwenden wenn MOSMIX nicht schon korrigiert hat (also bei Tag >=2 oder fehlendem MOSMIX)
-      const mosmixApplied = out?.source === "mosmix";
-      if (bias && bias.applied && !mosmixApplied) {
+      // Bias-Korrektur greift jetzt auf allen Tagen (Tag 0 enthält 60 % Open-Meteo).
+      if (bias && bias.applied) {
         out = applyBiasToDay(out, bias);
       }
       // Nowcast nur für Tag 0 (erste 12h)
@@ -1607,39 +1636,30 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
 
+    const tag0WMosmix2 = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
+    const tag0WOm2 = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
-      const mosmix = dayIndex === 0 ? mosmixDay : null;
-      let base: any;
-      if (mosmix) {
-        base = enrichMosmixDay({
-          ...mosmix,
-          weathercode: omDay.weathercode,
-          precip_prob: omDay.precip_prob,
-          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
-        });
-      } else {
-        base = omDay;
-        if (dayIndex === 1 && mosmixDay) {
-          base = { ...base, mosmix_reference: {
-            tmin: mosmixDay.tmin?.avg ?? null,
-            tmax: mosmixDay.tmax?.avg ?? null,
-            precip: mosmixDay.precip?.avg ?? null,
-            wind_max: mosmixDay.wind_max?.avg ?? null,
-            cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
-            stations: mosmixDay.mosmix_stations ?? [],
-            per_station: mosmixDay.mosmix_per_station ?? {},
-          } };
-        }
+      let base: any = omDay;
+      if (dayIndex === 0 && mosmixDay) {
+        base = mixOmWithMosmix(omDay, mosmixDay, tag0WMosmix2, tag0WOm2);
+      } else if (dayIndex === 1 && mosmixDay) {
+        base = { ...base, mosmix_reference: {
+          tmin: mosmixDay.tmin?.avg ?? null,
+          tmax: mosmixDay.tmax?.avg ?? null,
+          precip: mosmixDay.precip?.avg ?? null,
+          wind_max: mosmixDay.wind_max?.avg ?? null,
+          cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+          stations: mosmixDay.mosmix_stations ?? [],
+          per_station: mosmixDay.mosmix_per_station ?? {},
+        } };
       }
       let out: any = { ...base, topography: applyTopography(base, topo) };
-      if (!mosmix) {
-        const st = applyStationBias(base, stationBiases);
-        if (st) out.stations = st;
-      }
-      if (bias && bias.applied && !mosmix) {
+      const st = applyStationBias(base, stationBiases);
+      if (st) out.stations = st;
+      if (bias && bias.applied) {
         out = applyBiasToDay(out, bias);
       }
       if (dayIndex === 0 && nowcastInputs) {
