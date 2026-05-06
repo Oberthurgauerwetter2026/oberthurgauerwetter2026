@@ -1034,6 +1034,7 @@ function buildDayUserPrompt(intro: string, day: any, extraHint: string = ""): st
   }
   if (extraHint) prompt += extraHint;
   return prompt;
+}
 
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
