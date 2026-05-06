@@ -2068,6 +2068,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
           nowcast_obs_horizon_h: settings?.nowcast_obs_horizon_h,
         });
         out = applyNowcastToDay(out, nc);
+        if (out.hourly_profile) {
+          out.hourly_profile = applyObservedOverlay(
+            out.hourly_profile, out.date, nowcastInputs.smn, nowcastInputs.radar,
+          );
+        }
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
