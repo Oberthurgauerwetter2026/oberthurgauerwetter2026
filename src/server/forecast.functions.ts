@@ -1636,39 +1636,30 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
 
+    const tag0WMosmix2 = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
+    const tag0WOm2 = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
     const withTopo = (dayIndex: number) => {
       const omDay = formatDayData(weather, dayIndex);
       if (!omDay) return null;
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
-      const mosmix = dayIndex === 0 ? mosmixDay : null;
-      let base: any;
-      if (mosmix) {
-        base = enrichMosmixDay({
-          ...mosmix,
-          weathercode: omDay.weathercode,
-          precip_prob: omDay.precip_prob,
-          om_reference: { tmin: omDay.tmin, tmax: omDay.tmax, precip: omDay.precip, wind_max: omDay.wind_max },
-        });
-      } else {
-        base = omDay;
-        if (dayIndex === 1 && mosmixDay) {
-          base = { ...base, mosmix_reference: {
-            tmin: mosmixDay.tmin?.avg ?? null,
-            tmax: mosmixDay.tmax?.avg ?? null,
-            precip: mosmixDay.precip?.avg ?? null,
-            wind_max: mosmixDay.wind_max?.avg ?? null,
-            cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
-            stations: mosmixDay.mosmix_stations ?? [],
-            per_station: mosmixDay.mosmix_per_station ?? {},
-          } };
-        }
+      let base: any = omDay;
+      if (dayIndex === 0 && mosmixDay) {
+        base = mixOmWithMosmix(omDay, mosmixDay, tag0WMosmix2, tag0WOm2);
+      } else if (dayIndex === 1 && mosmixDay) {
+        base = { ...base, mosmix_reference: {
+          tmin: mosmixDay.tmin?.avg ?? null,
+          tmax: mosmixDay.tmax?.avg ?? null,
+          precip: mosmixDay.precip?.avg ?? null,
+          wind_max: mosmixDay.wind_max?.avg ?? null,
+          cloudcover_avg: mosmixDay.cloudcover?.avg ?? null,
+          stations: mosmixDay.mosmix_stations ?? [],
+          per_station: mosmixDay.mosmix_per_station ?? {},
+        } };
       }
       let out: any = { ...base, topography: applyTopography(base, topo) };
-      if (!mosmix) {
-        const st = applyStationBias(base, stationBiases);
-        if (st) out.stations = st;
-      }
-      if (bias && bias.applied && !mosmix) {
+      const st = applyStationBias(base, stationBiases);
+      if (st) out.stations = st;
+      if (bias && bias.applied) {
         out = applyBiasToDay(out, bias);
       }
       if (dayIndex === 0 && nowcastInputs) {
