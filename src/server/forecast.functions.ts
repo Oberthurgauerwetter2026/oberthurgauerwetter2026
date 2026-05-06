@@ -1902,6 +1902,8 @@ export const updateSettings = createServerFn({ method: "POST" })
         bias_stations: z.string().max(500).optional(),
         bias_lookback_days: z.number().int().min(2).max(14).optional(),
         bias_strength: z.number().int().min(0).max(100).optional(),
+        tag0_weight_mosmix: z.number().int().min(0).max(100).optional(),
+        tag0_weight_om: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )
