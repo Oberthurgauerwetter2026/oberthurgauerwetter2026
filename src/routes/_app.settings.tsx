@@ -52,6 +52,8 @@ function SettingsPage() {
     bias_stations: "GUT,STG,TAE",
     bias_lookback_days: 7,
     bias_strength: 70,
+    tag0_weight_mosmix: 40,
+    tag0_weight_om: 60,
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
