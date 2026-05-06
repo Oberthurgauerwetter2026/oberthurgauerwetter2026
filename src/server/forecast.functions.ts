@@ -827,7 +827,7 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
 
 // Stündlicher Niederschlags-Tagesgang aus Open-Meteo (Tag 0/1).
 // Liefert 4 Blöcke (night/morning/afternoon/evening) mit mm-Summe + max % Wahrscheinlichkeit.
-function computePrecipDistribution(weather: any, dayIndex: number): any | null {
+function computePrecipDistribution(weather: any, dayIndex: number, fromHour: number = 0): any | null {
   const h = weather?.hourly;
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
@@ -865,7 +865,7 @@ function computePrecipDistribution(weather: any, dayIndex: number): any | null {
       const t = h.time[i] as string;
       if (!t.startsWith(dateStr)) continue;
       const hour = parseInt(t.slice(11, 13), 10);
-      if (!Number.isFinite(hour) || hour < range[0] || hour >= range[1]) continue;
+      if (!Number.isFinite(hour) || hour < range[0] || hour >= range[1] || hour < fromHour) continue;
       // Mittel über Modelle pro Stunde
       const precVals = precArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
       if (!precVals.length) continue;
@@ -962,6 +962,88 @@ function formatDayData(weather: any, dayIndex: number) {
     precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
   };
 }
+
+// Überschreibt für einen Tag die stündlich abgeleiteten Felder (tmin, tmax, precip,
+// precip_prob, wind_max, cloudcover, sunshine_h) so, dass nur Stunden ab `fromHour`
+// einfliessen. Für Tag 1 mit fromHour=6 nutzbar, um Doppelung mit dem
+// "Heute Abend & Nacht"-Eintrag (der die Vornacht abdeckt) zu vermeiden.
+function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: number): any {
+  if (!day) return day;
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return day;
+
+  const collectArrs = (base: string): Record<string, number[]> => {
+    const out: Record<string, number[]> = {};
+    if (Array.isArray(h[base])) out["default"] = h[base];
+    for (const k of Object.keys(h)) {
+      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+    }
+    return out;
+  };
+  const isUsableModel = (m: string) => !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
+
+  const idx: number[] = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const t = h.time[i] as string;
+    if (!t.startsWith(dateStr)) continue;
+    const hr = parseInt(t.slice(11, 13), 10);
+    if (Number.isFinite(hr) && hr >= fromHour) idx.push(i);
+  }
+  if (!idx.length) return day;
+
+  const tArrs = collectArrs("temperature_2m");
+  const pArrs = collectArrs("precipitation");
+  const probArrs = collectArrs("precipitation_probability");
+  const wArrs = collectArrs("windspeed_10m");
+  const cArrs = collectArrs("cloudcover");
+  const sArrs = collectArrs("sunshine_duration");
+
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+
+  // Per-Modell-Aggregat über das Fenster
+  const perModel = (arrs: Record<string, number[]>, op: "min" | "max" | "sum" | "avg"): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [m, arr] of Object.entries(arrs)) {
+      if (m !== "default" && !isUsableModel(m)) continue;
+      const vals = idx.map((i) => arr[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+      if (!vals.length) continue;
+      let v: number;
+      if (op === "min") v = Math.min(...vals);
+      else if (op === "max") v = Math.max(...vals);
+      else if (op === "sum") v = vals.reduce((a, b) => a + b, 0);
+      else v = vals.reduce((a, b) => a + b, 0) / vals.length;
+      out[m] = r1(v);
+    }
+    return out;
+  };
+
+  const tminPerModel = perModel(tArrs, "min");
+  const tmaxPerModel = perModel(tArrs, "max");
+  const precPerModel = perModel(pArrs, "sum");
+  const probPerModel = perModel(probArrs, "max");
+  const windPerModel = perModel(wArrs, "max");
+  const cloudPerModel = perModel(cArrs, "avg");
+  // sunshine: Sekunden → Stunden
+  const sunSecPerModel = perModel(sArrs, "sum");
+  const sunHPerModel: Record<string, number> = {};
+  for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
+
+  const out = { ...day };
+  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel);
+  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel);
+  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel);
+  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel);
+  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel);
+  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel);
+  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
+
+  out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
+  out.window_from_hour = fromHour;
+  out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
+  return out;
+}
+
 
 // Returns the current hour (0-23) in the Europe/Zurich timezone, regardless of host TZ.
 function currentZurichHour(): number {
@@ -1520,7 +1602,8 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tag1WMosmix = Math.max(0, Math.min(100, settings?.tag1_weight_mosmix ?? 50));
     const tag1WOm = Math.max(0, Math.min(100, settings?.tag1_weight_om ?? 50));
     const buildDay = (dayIndex: number) => {
-      const omDay = formatDayData(weather, dayIndex);
+      const omDayBase = formatDayData(weather, dayIndex);
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
       if (!omDay) return null;
       // Tag 0 & Tag 1: gewichteter Mix Open-Meteo + MOSMIX. Stations-Bias greift.
       // Tag 2+: Open-Meteo + Stations-Bias.
@@ -1607,7 +1690,10 @@ export const generateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
+      const tag1Hint = i === 1
+        ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.`
+        : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${tag1Hint}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -1690,7 +1776,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const tag1WMosmix2 = Math.max(0, Math.min(100, settings?.tag1_weight_mosmix ?? 50));
     const tag1WOm2 = Math.max(0, Math.min(100, settings?.tag1_weight_om ?? 50));
     const withTopo = (dayIndex: number) => {
-      const omDay = formatDayData(weather, dayIndex);
+      const omDayBase = formatDayData(weather, dayIndex);
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
       if (!omDay) return null;
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
       let base: any = omDay;
@@ -1749,7 +1836,10 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
+      const tag1Hint = i === 1
+        ? `\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag ("Heute Abend & Nacht") beschrieben und darf hier NICHT erwähnt werden — kein "in der Nacht", keine Beschreibung früher Morgenstunden vor 06:00.`
+        : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${tag1Hint}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
