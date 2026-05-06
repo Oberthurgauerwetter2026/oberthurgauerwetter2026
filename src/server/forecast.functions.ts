@@ -1019,6 +1019,22 @@ function formatHourlyProfileTable(profile: ReturnType<typeof buildHourlyProfile>
   return lines.join("\n");
 }
 
+// Baut den userPrompt für einen Tag und hängt — falls vorhanden — das
+// Stundenprofil als separate Tabelle an (statt es als JSON-Array im Datensatz
+// zu vergraben). `hourly_profile` wird aus dem JSON-Dump entfernt, um Tokens zu sparen.
+function buildDayUserPrompt(intro: string, day: any, extraHint: string = ""): string {
+  const profile = day?.hourly_profile;
+  const dump = { ...day };
+  delete dump.hourly_profile;
+  const json = JSON.stringify(dump, null, 2);
+  let prompt = `${intro}\n${json}`;
+  const table = formatHourlyProfileTable(profile);
+  if (table) {
+    prompt += `\n\nSTUNDENPROFIL (Median über Modelle, ± = Modell-Streuung):\n${table}`;
+  }
+  if (extraHint) prompt += extraHint;
+  return prompt;
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
