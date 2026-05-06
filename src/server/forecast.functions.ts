@@ -889,13 +889,134 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   const allMaxProb = Object.values(result).map((b) => b.max_prob).filter((v): v is number => v != null);
   const overallMaxProb = allMaxProb.length ? Math.max(...allMaxProb) : null;
 
+  // Stundenscharfe Hilfsdaten: peak_hour (Stunde mit höchstem mm-Wert) und dry_windows
+  // (zusammenhängende Phasen mit < 0.2 mm/h, mind. 3h lang).
+  const hoursOfDay: Array<{ hour: number; mm: number }> = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const t = h.time[i] as string;
+    if (!t.startsWith(dateStr)) continue;
+    const hour = parseInt(t.slice(11, 13), 10);
+    if (!Number.isFinite(hour) || hour < fromHour) continue;
+    const precVals = precArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+    if (!precVals.length) continue;
+    hoursOfDay.push({ hour, mm: precVals.reduce((a, b) => a + b, 0) / precVals.length });
+  }
+  let peakHour: number | null = null;
+  let peakHourMm = 0;
+  for (const { hour, mm } of hoursOfDay) {
+    if (mm > peakHourMm) { peakHourMm = mm; peakHour = hour; }
+  }
+  // dry_windows aus aufeinander folgenden trockenen Stunden
+  const dryWindows: Array<{ from: number; to: number; hours: number }> = [];
+  let runStart: number | null = null;
+  for (let k = 0; k <= hoursOfDay.length; k++) {
+    const cur = hoursOfDay[k];
+    const isDry = cur && cur.mm < 0.2;
+    if (isDry && runStart == null) runStart = cur.hour;
+    if ((!isDry || k === hoursOfDay.length) && runStart != null) {
+      const endHour = cur ? cur.hour : (hoursOfDay[k - 1].hour + 1);
+      const len = endHour - runStart;
+      if (len >= 3) dryWindows.push({ from: runStart, to: endHour, hours: len });
+      runStart = null;
+    }
+  }
+
   return {
     blocks: result,
     peak_block: peakSum >= 1 ? peakBlock : null,
     peak_block_precip_mm: peakSum >= 1 ? Math.round(peakSum * 10) / 10 : 0,
     peak_block_prob: peakSum >= 1 ? peakProb : null,
     overall_max_prob: overallMaxProb,
+    peak_hour: peakHour != null && peakHourMm >= 0.5 ? peakHour : null,
+    peak_hour_mm: peakHour != null ? Math.round(peakHourMm * 10) / 10 : null,
+    dry_windows: dryWindows,
   };
+}
+
+// Kompaktes Stundenprofil pro Tag: Median + Spread aus allen verfügbaren Modellen
+// für temperature, precipitation, wind, cloudcover, sunshine. Liefert eine Tabelle
+// mit 24 Zeilen (oder weniger ab fromHour). Wird der KI als Tagesgang-Anker mitgegeben.
+function buildHourlyProfile(
+  weather: any,
+  dayIndex: number,
+  fromHour: number = 0,
+): Array<{ h: number; t: number | null; t_spread: number; p: number; p_spread: number; w: number | null; c: number | null; s: number | null; n_models: number }> | null {
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return null;
+
+  const collectArrs = (base: string): Array<{ model: string; arr: number[] }> => {
+    const out: Array<{ model: string; arr: number[] }> = [];
+    if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
+    for (const k of Object.keys(h)) {
+      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
+    }
+    return out;
+  };
+  const isUsable = (m: string) => m === "default" || !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
+  const filt = (arrs: Array<{ model: string; arr: number[] }>) => arrs.filter(({ model }) => isUsable(model));
+
+  const tArrs = filt(collectArrs("temperature_2m"));
+  const pArrs = filt(collectArrs("precipitation"));
+  const wArrs = filt(collectArrs("windspeed_10m"));
+  const cArrs = filt(collectArrs("cloudcover"));
+  const sArrs = filt(collectArrs("sunshine_duration"));
+
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const median = (vals: number[]) => {
+    const s = [...vals].sort((a, b) => a - b);
+    const n = s.length;
+    if (!n) return null;
+    return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+  };
+  const spread = (vals: number[]) => (vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0);
+  const sample = (arrs: Array<{ model: string; arr: number[] }>, i: number): number[] =>
+    arrs.map(({ arr }) => arr[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+
+  const out: Array<{ h: number; t: number | null; t_spread: number; p: number; p_spread: number; w: number | null; c: number | null; s: number | null; n_models: number }> = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const ts = h.time[i] as string;
+    if (!ts.startsWith(dateStr)) continue;
+    const hr = parseInt(ts.slice(11, 13), 10);
+    if (!Number.isFinite(hr) || hr < fromHour) continue;
+    const tv = sample(tArrs, i);
+    const pv = sample(pArrs, i);
+    const wv = sample(wArrs, i);
+    const cv = sample(cArrs, i);
+    const sv = sample(sArrs, i);
+    const tMed = median(tv);
+    const pMed = median(pv) ?? 0;
+    out.push({
+      h: hr,
+      t: tMed != null ? r1(tMed) : null,
+      t_spread: r1(spread(tv)),
+      p: r1(pMed),
+      p_spread: r1(spread(pv)),
+      w: median(wv) != null ? r1(median(wv)!) : null,
+      c: median(cv) != null ? Math.round(median(cv)!) : null,
+      s: median(sv) != null ? r1(median(sv)! / 60) : null, // Sekunden → Minuten
+      n_models: tv.length,
+    });
+  }
+  return out.length ? out : null;
+}
+
+// Formatiert das Stundenprofil als kompakte Tabelle für den KI-Prompt.
+// Jede Zeile: "HH | T °C (±s) | P mm (±s) | W km/h | Wolken % | Sonne min".
+function formatHourlyProfileTable(profile: ReturnType<typeof buildHourlyProfile>): string | null {
+  if (!profile?.length) return null;
+  const lines = ["Stunde | Temp | Niederschlag | Wind | Wolken | Sonne"];
+  lines.push("------ | ---- | ------------ | ---- | ------ | -----");
+  for (const r of profile) {
+    const hh = String(r.h).padStart(2, "0") + ":00";
+    const t = r.t != null ? `${r.t.toFixed(1)}°` + (r.t_spread > 1 ? ` (±${r.t_spread.toFixed(1)})` : "") : "—";
+    const p = r.p > 0 ? `${r.p.toFixed(1)} mm` + (r.p_spread > 0.5 ? ` (±${r.p_spread.toFixed(1)})` : "") : "trocken";
+    const w = r.w != null ? `${Math.round(r.w)} km/h` : "—";
+    const c = r.c != null ? `${r.c}%` : "—";
+    const s = r.s != null && r.s > 0 ? `${Math.round(r.s)} min` : "0";
+    lines.push(`${hh} | ${t} | ${p} | ${w} | ${c} | ${s}`);
+  }
+  return lines.join("\n");
 }
 
 function formatDayData(weather: any, dayIndex: number) {
