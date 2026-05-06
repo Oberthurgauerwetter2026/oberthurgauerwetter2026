@@ -1690,7 +1690,8 @@ export const generateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
+      const tag1Hint = i === 1 ? "\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag (\"Heute Abend \const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;amp; Nacht\") beschrieben und darf hier NICHT erwähnt werden — kein \"in der Nacht\", keine Beschreibung früher Morgenstunden vor 06:00." : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${tag1Hint}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
@@ -1833,7 +1834,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
       const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
       const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;
+      const tag1Hint = i === 1 ? "\n\nWICHTIG: Dieser Eintrag beschreibt AUSSCHLIESSLICH den Zeitraum ab 06:00 Uhr. Die Vornacht (00:00–06:00) wurde bereits im vorherigen Eintrag (\"Heute Abend \const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}`;amp; Nacht\") beschrieben und darf hier NICHT erwähnt werden — kein \"in der Nacht\", keine Beschreibung früher Morgenstunden vor 06:00." : "";
+      const userPrompt = `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:\n${JSON.stringify(day, null, 2)}${tag1Hint}`;
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
