@@ -1269,6 +1269,12 @@ function formatDayData(weather: any, dayIndex: number) {
     sunshine_h,
     precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
     hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
+    sky_pattern: dayIndex <= 1
+      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
+      : null,
+    fog_dissipation: dayIndex <= 1
+      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+      : null,
   };
 }
 
