@@ -811,10 +811,29 @@ function spread(values: number[]) {
   return Math.round((Math.max(...values) - Math.min(...values)) * 10) / 10;
 }
 
+// Modell-Gewichte für Ensemble-Mittelung. Globale Modelle (GFS) sind im
+// Voralpenraum deutlich gröber als die hochauflösenden europäischen Modelle
+// und bekommen daher weniger Gewicht. Default für unbekannte Modelle = 1.0.
+const MODEL_WEIGHTS: Record<string, number> = {
+  gfs_global: 0.5,
+  gfs_seamless: 0.5,
+};
+function modelWeight(name: string): number {
+  return MODEL_WEIGHTS[name] ?? 1.0;
+}
+
 function aggregate(perModel: Record<string, number>) {
-  const vals = Object.values(perModel);
-  if (!vals.length) return null;
-  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const entries = Object.entries(perModel);
+  if (!entries.length) return null;
+  const vals = entries.map(([, v]) => v);
+  let wSum = 0;
+  let wTot = 0;
+  for (const [name, v] of entries) {
+    const w = modelWeight(name);
+    wSum += v * w;
+    wTot += w;
+  }
+  const avg = wTot > 0 ? wSum / wTot : vals.reduce((a, b) => a + b, 0) / vals.length;
   return {
     avg: Math.round(avg * 10) / 10,
     min: Math.min(...vals),
