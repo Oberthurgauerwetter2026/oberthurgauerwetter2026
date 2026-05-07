@@ -772,17 +772,59 @@ function spread(values: number[]) {
   return Math.round((Math.max(...values) - Math.min(...values)) * 10) / 10;
 }
 
-function aggregate(perModel: Record<string, number>) {
-  const vals = Object.values(perModel);
-  if (!vals.length) return null;
-  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-  return {
+// Modell-Gewichte für die Aggregation. MeteoSchweiz-Modelle haben Vorrang,
+// weil sie für die Region (Bodensee/Alpenrand) am besten kalibriert sind und
+// Hochnebel/Inversionen besser erfassen als globale Modelle. Tuning-Konstanten.
+const MODEL_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 2.0,
+  meteoswiss_icon_ch2: 1.5,
+  icon_d2: 1.0,
+  meteofrance_arome_france_hd: 1.0,
+  icon_eu: 0.7,
+  ecmwf_ifs025: 0.7,
+  gfs_global: 0.5,
+  default: 1.0,
+};
+function weightFor(model: string): number {
+  return MODEL_WEIGHTS[model] ?? MODEL_WEIGHTS.default;
+}
+
+// Einstufung der Modell-Uneinigkeit pro Variable. Schwellen pro Einheit (°C bzw. mm).
+function classifyDisagreement(varKind: "temp" | "precip" | "cloud" | "sun" | "wind" | "deg", spreadVal: number): "low" | "moderate" | "high" {
+  switch (varKind) {
+    case "temp":   return spreadVal >= 5 ? "high" : spreadVal >= 3 ? "moderate" : "low";
+    case "precip": return spreadVal >= 5 ? "high" : spreadVal >= 2 ? "moderate" : "low";
+    case "cloud":  return spreadVal >= 50 ? "high" : spreadVal >= 25 ? "moderate" : "low";
+    case "sun":    return spreadVal >= 5 ? "high" : spreadVal >= 3 ? "moderate" : "low";
+    case "wind":   return spreadVal >= 20 ? "high" : spreadVal >= 10 ? "moderate" : "low";
+    case "deg":    return spreadVal >= 90 ? "high" : spreadVal >= 45 ? "moderate" : "low";
+  }
+}
+
+function aggregate(perModel: Record<string, number>, varKind: "temp" | "precip" | "cloud" | "sun" | "wind" | "deg" | null = null) {
+  const entries = Object.entries(perModel);
+  if (!entries.length) return null;
+  // Gewichteter Mittelwert mit MCH-Vorrang
+  let wsum = 0;
+  let vsum = 0;
+  for (const [m, v] of entries) {
+    const w = weightFor(m);
+    wsum += w;
+    vsum += w * v;
+  }
+  const avg = wsum > 0 ? vsum / wsum : 0;
+  const vals = entries.map(([, v]) => v);
+  const sp = spread(vals);
+  const out: any = {
     avg: Math.round(avg * 10) / 10,
     min: Math.min(...vals),
     max: Math.max(...vals),
-    spread: spread(vals),
+    spread: sp,
     by_model: perModel,
   };
+  if (varKind) out.disagreement = classifyDisagreement(varKind, sp);
+  if (entries.length === 1) out.source_note = "single_model"; // Vorsicht: nur ein Modell hat den Wert geliefert
+  return out;
 }
 
 function pickBestSource(weather: any, dayIndex: number) {
