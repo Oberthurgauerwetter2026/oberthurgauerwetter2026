@@ -1,27 +1,48 @@
-# Tiefstwerte am Folgetag weglassen, wenn die Abendprognose sie schon enthält
+## Problem
 
-## Ausgangslage
+Für Freitag liefern die Modelle:
+- **weathercode**: avg 24, ICON-D2 = **45 (Nebel)**, ICON-CH2 = 3 (bedeckt)
+- **sunshine_h**: avg **9 h** (3.6–12.5), spread 8.9 h
+- **cloudcover**: 75.9 % (nur ICON-D2)
 
-Wenn die Prognose nach 17:00 Uhr generiert wird, heisst der erste Eintrag „Heute Abend & Nacht" und enthält bereits die **Tiefstwerte der kommenden Nacht** (denn die Nacht 00–06 des Folgetags gehört noch zu diesem Fenster).
+Das ist ein klassisches **Morgennebel-/Hochnebel-Auflösungsmuster**: morgens dichter Nebel (cloudcover 100 %, sunshine 0), Auflösung im Vormittag, Nachmittag sonnig. Die KI bekommt aktuell zwar das Stundenprofil, aber:
 
-Der Tag-1-Eintrag („Morgen, …") nennt aktuell trotzdem nochmals dieselben Tiefstwerte — weil `DEFAULT_TEMP_RULES` einen Tiefstwerte-Satz für jeden Tag erzwingt. Das ist eine **redundante Doppelnennung**.
+1. In `DEFAULT_SKY_RULES` heisst es nur knapp: *„weathercode 0-1 = klar, 2 = teils bewölkt, 3 = bedeckt"* — **Code 45/48 (Nebel/Reifnebel) ist nicht abgedeckt**. Die KI behandelt 45 vermutlich wie „bedeckt".
+2. Die Aggregation auf den Tagesmittelwert (avg 24) verwischt den Tagesgang. Die KI fällt auf eine generische „morgens stark bewölkt, später Wolken" Beschreibung zurück, weil sunshine_h 9 h zwar klar nach „ziemlich sonnig" rufen würde, aber das Stundenprofil hohe Wolken am Morgen zeigt.
+3. Es gibt keinen expliziten **Hochnebel-/Nebelauflösungs-Hinweis**, der aus dem Stundenprofil abgeleitet wird.
 
-Bereits umgesetzt ist nur, dass Tag 1 die **Vornacht-Beschreibung** (Bewölkung, Schauer 00–06) auslassen muss (`tag1Hint` in Zeile 1964 / 2115). Die Tiefstwerte wurden dabei vergessen.
+## Lösung — drei kombinierte Massnahmen
 
-## Änderung
+### 1. weathercode 45/48 in die Sky-Regeln aufnehmen
+Erweitere `DEFAULT_SKY_RULES` (Zeile 1676–1681) um eine explizite Regel:
 
-**Eine Stelle:** Der `tag1Hint` in `forecast.functions.ts` (Zeilen 1963–1965 und 2114–2116) wird ergänzt um:
+> Bei weathercode 45 oder 48 (Nebel / Reifnebel): formuliere als „Nebel" oder „Hochnebel", NICHT als „stark bewölkt". Wenn parallel die Sonnenstunden ≥ 5 h sind, beschreibe ein typisches Auflösungsmuster („Nebel- oder Hochnebelfelder am Morgen, im Tagesverlauf Auflösung, am Nachmittag sonnig").
 
-> „Da die Tiefstwerte der kommenden Nacht bereits im vorherigen Eintrag genannt wurden, darf der Tag-1-Eintrag **keinen Tiefstwerte-Satz** enthalten. Beginne Absatz 2 direkt mit den Höchstwerten („Höchstwerte um Z Grad.") oder lasse Absatz 2 weg, wenn nur Höchstwerte zu nennen wären."
+### 2. Automatische Erkennung „Nebel-Auflösung" aus dem Stundenprofil
+Neue Hilfsfunktion `detectFogDissipation(profile)` direkt nach `buildHourlyProfile` (~Zeile 1019). Sie prüft:
+- Frühe Stunden (06–10): cloudcover ≥ 90 % UND sunshine ≈ 0 UND (mind. ein Modell weathercode 45/48 für den Tag)
+- Spätere Stunden (12–17): cloudcover ≤ 50 % ODER sunshine ≥ 30 min/h
 
-Diese Ergänzung greift **nur**, wenn der erste Eintrag „Heute Abend & Nacht" ist (also Generierung nach 17:00) — also genau in den Fällen, wo `tag1Hint` heute schon gesetzt wird. Bei Generierung am Morgen oder Nachmittag bleibt alles unverändert: dann nennt der Heute-Eintrag keine kommende Nacht und Tag 1 muss seine Tiefstwerte weiterhin nennen.
+Wenn beides zutrifft, setze ein neues Feld `sky_pattern: "nebel_aufloesung"` im Tag-Datensatz mit konkreten Stundenangaben (z. B. `dissipation_hour: 11`).
+
+### 3. Pattern-Hint in den Prompt einspeisen
+Im `userPrompt` (in `buildEntryUserPrompt`/`appendHourlyTable`, ~Zeile 1144 ff.) zusätzlich:
+
+> Wenn `sky_pattern === "nebel_aufloesung"` gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: „Nebel-/Hochnebelfelder am Morgen, ab dem späten Vormittag Auflösung, ab Mittag sonnig." Das Tagesmittel (sunshine_h, cloudcover) darf NICHT für eine pauschale „stark bewölkt"-Aussage verwendet werden.
+
+## Resultat für Freitag
+Statt „Am Morgen stark bewölkt … am Nachmittag wieder mehr Wolken" entsteht z. B.:
+
+> „Am Morgen Nebel- oder Hochnebelfelder im Flachland — mit Blick nach Baden-Württemberg und in den Alpstein bereits sonnig. Auflösung der Nebelfelder gegen Mittag, am Nachmittag verbreitet sonnig."
 
 ## Was nicht geändert wird
+- Aggregations-Logik, Bias-Korrektur, Stationsdaten, Radar-Korrektur bleiben unverändert.
+- Andere Tage (ohne Nebelmuster) bleiben unverändert.
+- Keine Datenbank-/UI-Änderungen.
 
-- `DEFAULT_TEMP_RULES` bleibt unverändert (gilt weiter als Default für alle anderen Tage).
-- Tag 2–5 nennen ihre Tiefstwerte wie bisher.
-- Keine Änderung an Datenmodell, UI oder Aggregation.
-
-## Effekt
-
-Im Abend-/Nacht-Generierungslauf liest sich der Übergang vom Heute- zum Morgen-Eintrag flüssig: die Tiefstwerte stehen einmal am Ende von „Heute Abend & Nacht", und der „Morgen, …"-Eintrag startet inhaltlich um 06:00 mit dem Tagesgang und nennt nur noch Höchstwerte.
+## Technische Details (Dateien)
+- `src/server/forecast.functions.ts`:
+  - Zeile 1676–1681: Sky-Regeln um Code 45/48 + Auflösungsmuster ergänzen
+  - Neue Funktion `detectFogDissipation` ~Zeile 1019
+  - In `buildDayContext` (~Zeile 1220): `sky_pattern` setzen wenn erkannt
+  - In `buildEntryUserPrompt` (~Zeile 1146): Pattern-Hint im Prompt-Text ergänzen
