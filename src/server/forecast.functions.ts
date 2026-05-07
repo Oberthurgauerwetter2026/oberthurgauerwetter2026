@@ -1735,7 +1735,9 @@ Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = be
 Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
 WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.
+MODELL-DISKREPANZ ("disagreement"-Feld): Wenn ein Aggregat (z. B. tmax, cloudcover, sunshine_h) "disagreement": "high" trägt, MUSST du zwingend zurückhaltend formulieren — nutze keine konkreten Stundenangaben für Sonne/Aufhellungen und keine präzise Höchsttemperatur. Stattdessen: "verbreitet stark bewölkt, vorübergehende Aufhellungen möglich" o. ä. Bei "moderate" mässig konkret. Bei "low" konkret.
+SINGLE-MODEL-WARNUNG ("source_note": "single_model" oder "cloudcover_source": "single_model"): Der Wert stammt von nur einem Modell — behandle ihn als unsicher und formuliere offener.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
