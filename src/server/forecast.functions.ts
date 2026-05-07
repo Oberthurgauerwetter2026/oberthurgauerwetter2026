@@ -860,7 +860,7 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   if (dayIndex <= 1) {
     tiersByPriority.push({ tier: "short", res: weather.byModel.short, models: weather.modelLists.short });
     tiersByPriority.push({ tier: "mid", res: weather.byModel.mid, models: weather.modelLists.mid });
-  } else if (dayIndex <= 4) {
+  } else if (dayIndex <= 5) {
     tiersByPriority.push({ tier: "mid", res: weather.byModel.mid, models: weather.modelLists.mid });
     tiersByPriority.push({ tier: "short", res: weather.byModel.short, models: weather.modelLists.short });
     tiersByPriority.push({ tier: "long", res: weather.byModel.long, models: weather.modelLists.long });
