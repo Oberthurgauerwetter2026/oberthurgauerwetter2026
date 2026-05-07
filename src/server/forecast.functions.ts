@@ -686,9 +686,11 @@ async function fetchWeather(
   // Short-tier (Tag 0-1) ist immer live; mid/long werden bis Mitternacht gecacht.
   const shortData = await fetchOpenMeteoOptional(lat, lon, shortModels, true);
   await wait(500);
+  // Mid-tier: include hourly so Tag 2-3 can have a Tagesverlauf.
+  // Cache key bumped to v2 to invalidate old hourly-less responses.
   const midData = await getOrSetCache(
-    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
-    () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+    `om:mid:v2:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, midModels, true),
   );
   await wait(500);
   const longData = await getOrSetCache(
@@ -707,10 +709,23 @@ async function fetchWeather(
   }
   return {
     daily,
-    hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
+    hourly: shortData?.hourly, // default hourly = short-tier (CH-models, finest grid)
+    hourlyMid: midData?.hourly, // mid-tier hourly used for Tag 2-3
     byModel: { short: shortData, mid: midData, long: longData },
     modelLists: { short: shortModels, mid: midModels, long: longModels },
   };
+}
+
+// Picks the best hourly source for a given day index.
+// Tag 0-1: short-tier (highest resolution). Tag 2-3: mid-tier (longer range).
+// Tag 4+: returns null — model spread too large for hourly profile.
+function weatherForDay(weather: any, dayIndex: number): any {
+  if (!weather) return weather;
+  if (dayIndex <= 1) return weather;
+  if (dayIndex <= 3 && weather.hourlyMid) {
+    return { ...weather, hourly: weather.hourlyMid };
+  }
+  return { ...weather, hourly: undefined };
 }
 
 // Builds a minimal weather-shaped object from MOSMIX-only data when Open-Meteo is unavailable.
@@ -1323,13 +1338,13 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
-    sky_pattern: dayIndex <= 1
-      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
+    precip_distribution: dayIndex <= 3 ? computePrecipDistribution(weatherForDay(weather, dayIndex), dayIndex) : null,
+    hourly_profile: dayIndex <= 3 ? buildHourlyProfile(weatherForDay(weather, dayIndex), dayIndex) : null,
+    sky_pattern: dayIndex <= 3
+      ? (detectFogDissipation(buildHourlyProfile(weatherForDay(weather, dayIndex), dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
-    fog_dissipation: dayIndex <= 1
-      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+    fog_dissipation: dayIndex <= 3
+      ? detectFogDissipation(buildHourlyProfile(weatherForDay(weather, dayIndex), dayIndex), weathercode?.by_model)
       : null,
   };
 }
