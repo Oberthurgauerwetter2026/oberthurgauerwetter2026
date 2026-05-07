@@ -1338,13 +1338,13 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
-    sky_pattern: dayIndex <= 1
-      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
+    precip_distribution: dayIndex <= 3 ? computePrecipDistribution(weatherForDay(weather, dayIndex), dayIndex) : null,
+    hourly_profile: dayIndex <= 3 ? buildHourlyProfile(weatherForDay(weather, dayIndex), dayIndex) : null,
+    sky_pattern: dayIndex <= 3
+      ? (detectFogDissipation(buildHourlyProfile(weatherForDay(weather, dayIndex), dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
-    fog_dissipation: dayIndex <= 1
-      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+    fog_dissipation: dayIndex <= 3
+      ? detectFogDissipation(buildHourlyProfile(weatherForDay(weather, dayIndex), dayIndex), weathercode?.by_model)
       : null,
   };
 }
