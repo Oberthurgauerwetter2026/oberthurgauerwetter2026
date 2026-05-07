@@ -1,45 +1,66 @@
 ## Ziel
 
-- `arpege_europe` (Météo-France) zum **Mittelfrist-Set** hinzufügen
-- `icon_eu` (DWD) **aus allen drei Sets** (Kurz-, Mittel-, Langfrist) entfernen
+`gfs_global` zum **Mittelfrist-Set** hinzufügen, aber mit **reduziertem Gewicht** (0.5) gegenüber den hochauflösenden europäischen Modellen (Gewicht 1.0). Damit fliesst GFS als unabhängiger US-Gegenpol ins Ensemble ein, dominiert aber nicht die feinen Voralpen-Details, in denen es zu grob auflöst.
 
 ## Neue Modell-Konfiguration
 
 | Set | Vorher | Nachher |
 |---|---|---|
-| `models_shortterm` | meteoswiss_icon_ch1, meteoswiss_icon_ch2, meteofrance_arome_france_hd, icon_d2 | meteoswiss_icon_ch1, meteoswiss_icon_ch2, meteofrance_arome_france_hd, icon_d2 *(unverändert — kein icon_eu drin)* |
-| `models_midterm` | meteoswiss_icon_ch2, icon_d2, **icon_eu**, ecmwf_ifs025 | meteoswiss_icon_ch2, icon_d2, ecmwf_ifs025, **arpege_europe** |
-| `models_longterm` | ecmwf_ifs025, gfs_global | ecmwf_ifs025, gfs_global *(unverändert — kein icon_eu drin)* |
+| `models_shortterm` | meteoswiss_icon_ch1, meteoswiss_icon_ch2, meteofrance_arome_france_hd, icon_d2 | *(unverändert)* |
+| `models_midterm` | meteoswiss_icon_ch2, icon_d2, ecmwf_ifs025, arpege_europe | meteoswiss_icon_ch2, icon_d2, ecmwf_ifs025, arpege_europe, **gfs_global** |
+| `models_longterm` | ecmwf_ifs025, gfs_global | *(unverändert)* |
 
-Hinweis: `icon_eu` ist aktuell nur im Mittelfrist-Set vorhanden — die Entfernung "überall" betrifft also faktisch nur dieses Set, plus eine Code-Prüfung, dass `icon_eu` nirgendwo hartkodiert referenziert wird.
+## Modell-Gewichtung (neu)
+
+Statt einfachem arithmetischem Mittel über alle Ensemble-Mitglieder wird ein **gewichteter Mittelwert** verwendet. Standard-Gewichte:
+
+| Modell | Gewicht | Begründung |
+|---|---|---|
+| meteoswiss_icon_ch1 / ch2 | 1.0 | Lokale Hochauflösung Schweiz |
+| meteofrance_arome_france_hd | 1.0 | Hochauflösung Westalpen |
+| icon_d2 | 1.0 | Hochauflösung DACH |
+| ecmwf_ifs025 | 1.0 | Globaler Goldstandard |
+| arpege_europe | 1.0 | Europäisches Modell |
+| **gfs_global** | **0.5** | Globales US-Modell, grob im Voralpenraum |
+
+Gewichte gelten für `t`, `precip`, `cloud`, `sunshine`, `wind` etc. — überall, wo aktuell `aggregate(perModel)` einfaches Mittel bildet.
 
 ## Änderungen
 
-### 1. Defaults in der DB anpassen
-
-Migration auf `app_settings`: Spalten-Defaults für `models_midterm` aktualisieren auf:
+### 1. DB-Migration
+Default für `app_settings.models_midterm`:
 ```
-meteoswiss_icon_ch2,icon_d2,ecmwf_ifs025,arpege_europe
+meteoswiss_icon_ch2,icon_d2,ecmwf_ifs025,arpege_europe,gfs_global
 ```
 
-### 2. Bestehenden Datensatz aktualisieren
+### 2. Bestehender Datensatz
+Per Update-Tool den aktuellen `models_midterm`-Wert auf den neuen String setzen.
 
-Per Insert/Update-Tool den aktuellen Wert in `app_settings.models_midterm` auf den neuen String setzen, damit die Änderung sofort wirksam wird (nicht nur für neue Settings).
+### 3. Code-Defaults
+In `src/server/forecast.functions.ts`, `src/server/forecast.auto.ts`, `src/routes/_app.settings.tsx` den Mittelfrist-Default auf den neuen 5-Modell-String aktualisieren.
 
-### 3. Code-Prüfung in `forecast.functions.ts`
+### 4. Gewichtete Aggregation
+In `src/server/forecast.functions.ts`:
 
-- Sicherstellen, dass `arpege_europe` als gültiger Open-Meteo-Modellname akzeptiert wird (Whitelist / Mapping prüfen, ggf. ergänzen).
-- Suche nach hartkodierten `icon_eu`-Referenzen (Fallbacks, Debug-Logs, Modell-spezifische Sonderlogik) und entfernen, falls vorhanden.
-- Ensemble-Gewichte (`tag1_weight_*`) bleiben unverändert — das Mittelfrist-Set hat weiterhin 4 Modelle.
+- Konstante `MODEL_WEIGHTS: Record<string, number>` einführen mit GFS = 0.5, alle anderen = 1.0 (Default 1.0 für unbekannte Modelle).
+- Funktion `aggregate(perModel)` (Zeile 814) so erweitern, dass `avg` als gewichtetes Mittel berechnet wird:
+  ```
+  avg = Σ(value_i * weight_i) / Σ(weight_i)
+  ```
+- `min`, `max`, `spread`, `by_model` bleiben unverändert (informativ, kein Gewicht).
+- Optional: gleiche Gewichtung in `aggregateHourly`/Tagesverlaufs-Aggregation (Niederschlag pro Stunde, Wolken pro Stunde) anwenden, damit der Tagesverlauf konsistent bleibt.
 
-### 4. UI in `/settings`
-
-Falls die Modell-Sets als Multi-Select dargestellt werden:
-- `arpege_europe` (Label: "ARPEGE Europe (Météo-France)") zur Auswahl hinzufügen
-- `icon_eu` darf in der Auswahl bleiben (für manuelle Re-Aktivierung), aber Default-State entsprechend neu
+### 5. UI / Labels
+Keine Änderung — `gfs_global` ist im Label-Mapping bereits vorhanden (wird im Langfrist-Set genutzt).
 
 ## Validierung
 
-Nach Deployment einen Mittelfrist-Tag (z.B. Tag 3) neu generieren und in `weather_data` prüfen, dass:
-- `arpege_europe` als beigetragenes Modell auftaucht
-- `icon_eu` nicht mehr im Ensemble vorkommt
+Tag 3–5 neu generieren und prüfen:
+- `by_model` enthält `gfs_global` mit eigenem Wert
+- `avg` liegt erkennbar näher bei den 4 europäischen Modellen als bei einem 5er-Gleichmittel
+- `spread` macht IFS↔GFS-Divergenzen sichtbar (Unsicherheits-Signal)
+- Tagesverlauf (Niederschlag / Bewölkung) bleibt sauber aufgelöst
+
+## Optional / später
+
+Falls gewünscht, lassen sich die Modell-Gewichte später in `app_settings` als JSON-Spalte editierbar machen. Für diesen Plan bleiben sie hartkodiert in `forecast.functions.ts`.
