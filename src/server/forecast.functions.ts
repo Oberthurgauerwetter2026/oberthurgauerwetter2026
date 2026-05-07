@@ -1108,6 +1108,17 @@ function detectFogDissipation(
   };
 }
 
+function normalizeSkyDiagnostics(day: any): any {
+  if (!day) return day;
+  const fog = detectFogDissipation(day.hourly_profile, day.weathercode?.by_model);
+  if (fog) {
+    day.sky_pattern = "nebel_aufloesung";
+    day.fog_dissipation = fog;
+    day.sky_summary = "Morgens Nebel-/Hochnebelfelder oder stark bewölkt, danach rasche Auflockerungen und recht sonnig; später zeitweise dichtere Wolkenfelder, daneben sonnige Abschnitte.";
+  }
+  return day;
+}
+
 // Beobachtungs-Overlay für Tag 0: ersetzt die vergangenen Stunden im Profil
 // durch reale SMN-/Radar-Messwerte. Aktuelle + nächste Stunde werden als
 // Übergang markiert (Werte bleiben Modell, src="mix").
