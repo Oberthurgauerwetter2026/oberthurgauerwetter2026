@@ -1,66 +1,40 @@
-## Ziel
+## Problem
 
-`gfs_global` zum **Mittelfrist-Set** hinzufügen, aber mit **reduziertem Gewicht** (0.5) gegenüber den hochauflösenden europäischen Modellen (Gewicht 1.0). Damit fliesst GFS als unabhängiger US-Gegenpol ins Ensemble ein, dominiert aber nicht die feinen Voralpen-Details, in denen es zu grob auflöst.
+Im aktuellen Forecast (letzter Tag = Tag 5) fehlt `meteoswiss_icon_ch2` in `by_model`. Ursache: In `pickBestSource()` und `collectModelValuesTiered()` (`src/server/forecast.functions.ts` ~Z. 846 / 858) ist die Tier-Grenze auf `dayIndex <= 4` gesetzt. Tag 5 fällt damit in den **long-Tier** (`ecmwf_ifs025, gfs_global`) — und ICON-CH2 ist dort gar nicht abgefragt.
 
-## Neue Modell-Konfiguration
+ICON-CH2 hat aber eine Reichweite von ~5 Tagen und ist im mid-Tier-Set enthalten — die Daten wären verfügbar, sie werden für Tag 5 nur nicht ausgewertet.
 
-| Set | Vorher | Nachher |
-|---|---|---|
-| `models_shortterm` | meteoswiss_icon_ch1, meteoswiss_icon_ch2, meteofrance_arome_france_hd, icon_d2 | *(unverändert)* |
-| `models_midterm` | meteoswiss_icon_ch2, icon_d2, ecmwf_ifs025, arpege_europe | meteoswiss_icon_ch2, icon_d2, ecmwf_ifs025, arpege_europe, **gfs_global** |
-| `models_longterm` | ecmwf_ifs025, gfs_global | *(unverändert)* |
+## Lösung
 
-## Modell-Gewichtung (neu)
+Tier-Grenze für Tag 5 auf **mid** verschieben.
 
-Statt einfachem arithmetischem Mittel über alle Ensemble-Mitglieder wird ein **gewichteter Mittelwert** verwendet. Standard-Gewichte:
+### Änderung in `src/server/forecast.functions.ts`
 
-| Modell | Gewicht | Begründung |
-|---|---|---|
-| meteoswiss_icon_ch1 / ch2 | 1.0 | Lokale Hochauflösung Schweiz |
-| meteofrance_arome_france_hd | 1.0 | Hochauflösung Westalpen |
-| icon_d2 | 1.0 | Hochauflösung DACH |
-| ecmwf_ifs025 | 1.0 | Globaler Goldstandard |
-| arpege_europe | 1.0 | Europäisches Modell |
-| **gfs_global** | **0.5** | Globales US-Modell, grob im Voralpenraum |
-
-Gewichte gelten für `t`, `precip`, `cloud`, `sunshine`, `wind` etc. — überall, wo aktuell `aggregate(perModel)` einfaches Mittel bildet.
-
-## Änderungen
-
-### 1. DB-Migration
-Default für `app_settings.models_midterm`:
+**`pickBestSource()` (Z. 846–852):**
 ```
-meteoswiss_icon_ch2,icon_d2,ecmwf_ifs025,arpege_europe,gfs_global
+if (dayIndex <= 1) → short
+if (dayIndex <= 5) → mid     // statt <= 4
+sonst              → long
 ```
 
-### 2. Bestehender Datensatz
-Per Update-Tool den aktuellen `models_midterm`-Wert auf den neuen String setzen.
+**`collectModelValuesTiered()` (Z. 858–870):**
+Gleiche Anpassung — `dayIndex <= 5` benutzt mid als primären Tier (mit short/long als Fallback). Für `dayIndex > 5` bleibt long primär.
 
-### 3. Code-Defaults
-In `src/server/forecast.functions.ts`, `src/server/forecast.auto.ts`, `src/routes/_app.settings.tsx` den Mittelfrist-Default auf den neuen 5-Modell-String aktualisieren.
+Da der mittelfristige Modell-Lauf ohnehin ICON-CH2, ICON-D2, IFS, ARPEGE und GFS (mit Gewicht 0.5) enthält, bekommt Tag 5 dadurch automatisch ICON-CH2 + ICON-D2 zusätzlich zu IFS/GFS — ohne Mehraufwand bei Open-Meteo (mid-Daten sind bereits gefetched).
 
-### 4. Gewichtete Aggregation
-In `src/server/forecast.functions.ts`:
+### Optional: ICON-CH2-Reichweite absichern
 
-- Konstante `MODEL_WEIGHTS: Record<string, number>` einführen mit GFS = 0.5, alle anderen = 1.0 (Default 1.0 für unbekannte Modelle).
-- Funktion `aggregate(perModel)` (Zeile 814) so erweitern, dass `avg` als gewichtetes Mittel berechnet wird:
-  ```
-  avg = Σ(value_i * weight_i) / Σ(weight_i)
-  ```
-- `min`, `max`, `spread`, `by_model` bleiben unverändert (informativ, kein Gewicht).
-- Optional: gleiche Gewichtung in `aggregateHourly`/Tagesverlaufs-Aggregation (Niederschlag pro Stunde, Wolken pro Stunde) anwenden, damit der Tagesverlauf konsistent bleibt.
-
-### 5. UI / Labels
-Keine Änderung — `gfs_global` ist im Label-Mapping bereits vorhanden (wird im Langfrist-Set genutzt).
+Falls Open-Meteo für Tag 5 in `meteoswiss_icon_ch2_*`-Spalten `null` liefert (jenseits Modell-Horizont), wird das Modell in `collectModelValues()` ohnehin still übersprungen — kein Risiko für leere Mittelwerte, weil ICON-D2/IFS/ARPEGE/GFS weiter beitragen.
 
 ## Validierung
 
-Tag 3–5 neu generieren und prüfen:
-- `by_model` enthält `gfs_global` mit eigenem Wert
-- `avg` liegt erkennbar näher bei den 4 europäischen Modellen als bei einem 5er-Gleichmittel
-- `spread` macht IFS↔GFS-Divergenzen sichtbar (Unsicherheits-Signal)
-- Tagesverlauf (Niederschlag / Bewölkung) bleibt sauber aufgelöst
+Nach Implementierung:
+- Tag 5 (`weather_data.cloudcover.by_model` etc.) enthält `meteoswiss_icon_ch2` (und `icon_d2`).
+- Tag 0/1 unverändert (short).
+- Tag 6–10 (Trend) unverändert (long).
 
-## Optional / später
+## Keine weiteren Änderungen
 
-Falls gewünscht, lassen sich die Modell-Gewichte später in `app_settings` als JSON-Spalte editierbar machen. Für diesen Plan bleiben sie hartkodiert in `forecast.functions.ts`.
+- Kein DB-Migration nötig.
+- Keine UI-Änderung.
+- Modell-Gewichtung (GFS = 0.5) bleibt wie aktuell.

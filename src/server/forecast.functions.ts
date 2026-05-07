@@ -847,7 +847,7 @@ function pickBestSource(weather: any, dayIndex: number) {
   // Use the most detailed model set available for this dayIndex.
   // ICON-CH1 ~33h, ICON-CH2 ~5d, ECMWF/GFS ~10d.
   if (dayIndex <= 1) return { res: weather.byModel.short, models: weather.modelLists.short, tier: "short" as const };
-  if (dayIndex <= 4) return { res: weather.byModel.mid, models: weather.modelLists.mid, tier: "mid" as const };
+  if (dayIndex <= 5) return { res: weather.byModel.mid, models: weather.modelLists.mid, tier: "mid" as const };
   return { res: weather.byModel.long, models: weather.modelLists.long, tier: "long" as const };
 }
 
@@ -860,7 +860,7 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   if (dayIndex <= 1) {
     tiersByPriority.push({ tier: "short", res: weather.byModel.short, models: weather.modelLists.short });
     tiersByPriority.push({ tier: "mid", res: weather.byModel.mid, models: weather.modelLists.mid });
-  } else if (dayIndex <= 4) {
+  } else if (dayIndex <= 5) {
     tiersByPriority.push({ tier: "mid", res: weather.byModel.mid, models: weather.modelLists.mid });
     tiersByPriority.push({ tier: "short", res: weather.byModel.short, models: weather.modelLists.short });
     tiersByPriority.push({ tier: "long", res: weather.byModel.long, models: weather.modelLists.long });
