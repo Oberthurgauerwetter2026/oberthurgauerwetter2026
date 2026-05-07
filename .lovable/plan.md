@@ -1,20 +1,20 @@
-Ich habe den konkreten Freitag-Datensatz geprüft: `sky_pattern` ist weiterhin leer, weil die Nebelerkennung 06–08 Uhr mittelt und die Sonne um 08 Uhr bereits 55 Minuten liefert. Dadurch fällt `morningSun <= 10` durch, obwohl 06/07 Uhr klar Nebel/Hochnebel zeigen und ICON-D2 Code 45 liefert. Zusätzlich überschreibt ein gespeicherter eigener `prompt_sky` die verbesserten Standardregeln, daher greifen die neuen Nebel-Pflichten nicht zuverlässig.
+## Plan
 
-Plan:
+1. **Sky-Erkennung stabilisieren**
+   - Die Nebel-/Hochnebel-Erkennung nicht nur beim ersten Roh-Datensatz berechnen, sondern nach allen Mischungen/Korrekturen nochmals normalisieren.
+   - Sobald 06–07 Uhr sehr dicht bewölkt und ein Modell Code 45/48 liefert, wird `sky_pattern = "nebel_aufloesung"` gesetzt, auch wenn Tagesmittel oder spätere MOSMIX-Mischwerte dagegen wirken.
 
-1. Frühnnebel robuster erkennen
-   - Nebelstart nur über 06/07 Uhr bewerten statt 06–08 Uhr.
-   - Bei Wettercode 45/48 plus 06/07 Uhr kaum Sonne und sehr hohe Bewölkung `sky_pattern = "nebel_aufloesung"` setzen.
-   - Auflösung bereits ab 08 Uhr akzeptieren, wenn die Sonne deutlich einsetzt, auch wenn Cloudcover formal noch hoch bleibt.
+2. **Sonnigen Tagescharakter als eigenes Signal ableiten**
+   - Aus dem Stundenprofil zusätzlich ein Feld wie `sky_summary` erzeugen, z. B.:
+     - morgens: Nebel/Hochnebel bzw. stark bewölkt
+     - ab Vormittag/Mittag: Auflockerungen, recht/ziemlich sonnig
+     - Nachmittag/Abend: mehr Wolken, aber weiterhin sonnige Abschnitte
+   - Bei rund 12 Sonnenstunden darf der Text nicht bei „zeitweise sonnig“ stehen bleiben.
 
-2. Sonnengewicht aus Stundenprofil stärker machen
-   - Zusätzlich ein kompaktes Feld wie `sky_timeline`/`sunny_hours_summary` ableiten: Morgen Nebel/Hochnebel, ab Vormittag sonnig, Nachmittag trotz Wolkenfeldern weiterhin lange sonnige Abschnitte.
-   - Tagesmittel der Bewölkung darf bei 11.9 h Sonne nicht zu „zunehmend bewölkt“ dominieren.
+3. **KI-Ausgabe deterministisch korrigieren**
+   - `enforceSkyConsistency()` erweitern: Wenn `sky_pattern = "nebel_aufloesung"` oder ein sehr sonniges Stundenprofil vorliegt, wird der erste Wetterverlauf-Absatz nach klaren Regeln ersetzt/angepasst.
+   - Für diesen Fall soll der Satz sinngemäss lauten: „Am Morgen Nebel- oder Hochnebelfelder bzw. stark bewölkt, im Tagesverlauf Auflockerungen und danach recht/ziemlich sonnig. Am Nachmittag und Abend zeitweise dichtere Wolkenfelder, daneben weiterhin sonnige Abschnitte.“
 
-3. Prompt-Regeln gegen benutzerdefinierte Überschreibung absichern
-   - Die Pflichtregel für Nebel/Hochnebel-Auflösung als nicht überschreibbare Systemregel nach dem gespeicherten `prompt_sky` ergänzen.
-   - Damit steht bei `sky_pattern = "nebel_aufloesung"` zwingend „Nebel-/Hochnebelfelder“ im Text und bei ≥10 h Sonne zwingend „ziemlich/meist/recht sonnig“ statt nur „sonnige Abschnitte“.
-
-4. Ergebnis nach Änderung prüfen
-   - Die Freitag-Daten erneut auswerten und sicherstellen, dass `sky_pattern` gesetzt wird.
-   - Zieltext sinngemäss: „Am Morgen lokale Nebel- oder Hochnebelfelder, rasch Auflösung. Danach recht/ziemlich sonnig, am Nachmittag zeitweise dichtere Wolkenfelder, daneben weiterhin längere sonnige Abschnitte.“
+4. **Bestehenden Freitag prüfen**
+   - Nach der Änderung den Freitag-Datensatz neu generieren bzw. die Logik gegen das gespeicherte Stundenprofil prüfen.
+   - Ziel: keine pauschale Formulierung „Am Morgen stark bewölkt, im Tagesverlauf Auflockerungen und zeitweise sonnig“ mehr, sondern eine Beschreibung mit Nebel-/Hochnebelbezug und deutlich sonnigerem Tagescharakter.

@@ -165,12 +165,51 @@ function isClearSkyDay(data: any): boolean {
   return typeof cloudAvg === "number" && typeof sunshineAvg === "number" && cloudAvg <= 5 && sunshineAvg >= 10;
 }
 
-function enforceSkyConsistency(text: string, weatherData: any): string {
-  if (!isClearSkyDay(weatherData)) return text;
+function replaceFirstParagraph(text: string, firstParagraph: string): string {
   const paragraphs = text.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
-  if (!paragraphs.length) return "Sonnig und wolkenlos.";
-  paragraphs[0] = "Sonnig und wolkenlos.";
+  if (!paragraphs.length) return firstParagraph;
+  paragraphs[0] = firstParagraph;
   return paragraphs.join("\n\n");
+}
+
+function buildDeterministicSkyParagraph(weatherData: any): string | null {
+  const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null }>;
+  if (!profile.length) return null;
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const early = profile.filter((r) => r.h >= 6 && r.h <= 7);
+  const day = profile.filter((r) => r.h >= 8 && r.h <= 18);
+  const afternoon = profile.filter((r) => r.h >= 15 && r.h <= 20);
+  const earlyCloud = avg(early.map((r) => r.c).filter((v): v is number => v != null));
+  const earlySun = avg(early.map((r) => r.s ?? 0));
+  const sunnyHours = day.filter((r) => (r.s ?? 0) >= 30).length;
+  const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
+  const sunshineAvg = weatherData?.sunshine_h?.avg;
+  const fogByModel = weatherData?.weathercode?.by_model
+    ? Object.values(weatherData.weathercode.by_model).some((v) => v === 45 || v === 48)
+    : false;
+  const fogMorning = weatherData?.sky_pattern === "nebel_aufloesung"
+    || weatherData?.fog_dissipation != null
+    || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 3 || (sunshineAvg ?? 0) >= 5));
+  const verySunny = (sunshineAvg ?? 0) >= 9 || sunnyHours >= 7;
+  if (!fogMorning && !verySunny) return null;
+
+  const start = fogMorning
+    ? "Am Morgen Nebel- oder Hochnebelfelder und sonst stark bewölkt."
+    : "Am Morgen zunächst stark bewölkt.";
+  const middle = verySunny
+    ? "Im weiteren Verlauf des Vormittags rasche Auflockerungen, danach recht sonnig."
+    : "Im Tagesverlauf Auflockerungen und zeitweise sonnige Abschnitte.";
+  const end = (afternoonCloud ?? 0) >= 70
+    ? "Am Nachmittag und Abend zeitweise dichtere Wolkenfelder, daneben weiterhin sonnige Abschnitte."
+    : "Am Nachmittag und Abend weiterhin recht sonnig mit einzelnen Wolkenfeldern.";
+  return [start, middle, end].join(" ");
+}
+
+function enforceSkyConsistency(text: string, weatherData: any): string {
+  const deterministicSky = buildDeterministicSkyParagraph(weatherData);
+  if (deterministicSky) return replaceFirstParagraph(text, deterministicSky);
+  if (!isClearSkyDay(weatherData)) return text;
+  return replaceFirstParagraph(text, "Sonnig und wolkenlos.");
 }
 
 // Erkennt typische Vollverb-/Verbalstil-Phrasen, die im Nominal-/Telegrammstil
@@ -1069,6 +1108,17 @@ function detectFogDissipation(
   };
 }
 
+function normalizeSkyDiagnostics(day: any): any {
+  if (!day) return day;
+  const fog = detectFogDissipation(day.hourly_profile, day.weathercode?.by_model);
+  if (fog) {
+    day.sky_pattern = "nebel_aufloesung";
+    day.fog_dissipation = fog;
+    day.sky_summary = "Morgens Nebel-/Hochnebelfelder oder stark bewölkt, danach rasche Auflockerungen und recht sonnig; später zeitweise dichtere Wolkenfelder, daneben sonnige Abschnitte.";
+  }
+  return day;
+}
+
 // Beobachtungs-Overlay für Tag 0: ersetzt die vergangenen Stunden im Profil
 // durch reale SMN-/Radar-Messwerte. Aktuelle + nächste Stunde werden als
 // Übergang markiert (Werte bleiben Modell, src="mix").
@@ -1363,7 +1413,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
   out.window_from_hour = fromHour;
   out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
-  return out;
+  return normalizeSkyDiagnostics(out);
 }
 
 
@@ -1993,7 +2043,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
-      return out;
+      return normalizeSkyDiagnostics(out);
     };
     const today = weather.daily.time[0];
     const { data: forecast, error: fErr } = await supabase
@@ -2143,7 +2193,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
-      return out;
+      return normalizeSkyDiagnostics(out);
     };
     const today = weather.daily.time[0];
 
