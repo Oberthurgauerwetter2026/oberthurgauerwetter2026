@@ -1054,7 +1054,19 @@ function buildHourlyProfile(
       src: "mod",
     });
   }
-  return out.length ? out : null;
+  if (!out.length) return null;
+  // 3-Stunden-Median-Filter auf Bewölkung, um Mittelungsrauschen zwischen Modell-Grids zu glätten.
+  // Ohne Glättung schwankt c oft 40→100→49 von Stunde zu Stunde, was die KI als realen
+  // Aufklarungs-Verlauf interpretiert.
+  const cVals = out.map((r) => r.c);
+  for (let i = 0; i < out.length; i++) {
+    const window = [cVals[i - 1], cVals[i], cVals[i + 1]].filter((v): v is number => v != null);
+    if (window.length >= 2) {
+      window.sort((a, b) => a - b);
+      out[i].c = Math.round(window[Math.floor(window.length / 2)]);
+    }
+  }
+  return out;
 }
 
 // Beobachtungs-Overlay für Tag 0: ersetzt die vergangenen Stunden im Profil
