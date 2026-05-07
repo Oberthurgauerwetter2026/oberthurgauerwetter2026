@@ -165,12 +165,18 @@ function isClearSkyDay(data: any): boolean {
   return typeof cloudAvg === "number" && typeof sunshineAvg === "number" && cloudAvg <= 5 && sunshineAvg >= 10;
 }
 
-function enforceSkyConsistency(text: string, weatherData: any): string {
-  if (!isClearSkyDay(weatherData)) return text;
+function replaceFirstParagraph(text: string, firstParagraph: string): string {
   const paragraphs = text.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
-  if (!paragraphs.length) return "Sonnig und wolkenlos.";
-  paragraphs[0] = "Sonnig und wolkenlos.";
+  if (!paragraphs.length) return firstParagraph;
+  paragraphs[0] = firstParagraph;
   return paragraphs.join("\n\n");
+}
+
+function enforceSkyConsistency(text: string, weatherData: any): string {
+  const deterministicSky = buildDeterministicSkyParagraph(weatherData);
+  if (deterministicSky) return replaceFirstParagraph(text, deterministicSky);
+  if (!isClearSkyDay(weatherData)) return text;
+  return replaceFirstParagraph(text, "Sonnig und wolkenlos.");
 }
 
 // Erkennt typische Vollverb-/Verbalstil-Phrasen, die im Nominal-/Telegrammstil
