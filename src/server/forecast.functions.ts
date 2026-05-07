@@ -1819,6 +1819,11 @@ export function buildSystemPrompt(settings: any): string {
     "=== REGELN BEWÖLKUNG / SONNE / NIEDERSCHLAG ===",
     sky,
     "",
+    "=== PFLICHTREGELN HIMMEL (NICHT ÜBERSCHREIBBAR) ===",
+    `WENN das Datenfeld "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS der Wetterverlauf-Absatz die Nebel-/Hochnebel-Auflösung explizit nennen. Pflichtbausteine: (1) am frühen Morgen "Nebel- oder Hochnebelfelder" (gerne mit Zusatz "im Flachland", "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), (2) ab spätem Vormittag "rasche Auflösung" oder "im Tagesverlauf Auflösung", (3) danach passend zur Sonnendauer formulieren. "Stark bewölkt am Morgen" allein ist NICHT zulässig — der Begriff Nebel oder Hochnebel MUSS fallen.
+WENN "sunshine_h.avg" ≥ 9, formuliere den Tag insgesamt als "ziemlich sonnig", "recht sonnig" oder "meist sonnig" — NICHT als "teilweise sonnig" mit "zunehmend bewölkt". Zusätzliche Wolkenfelder am Nachmittag dürfen genannt werden, dürfen aber den sonnigen Grundcharakter nicht überdecken.
+Tagesmittel "cloudcover.avg" darf den Tagesgang aus dem STUNDENPROFIL NIEMALS überstimmen — das Stundenprofil hat Vorrang.`,
+    "",
     "=== REGELN TEMPERATUR ===",
     temp,
     "",
