@@ -6,6 +6,8 @@ const MODEL_LABELS: Record<string, string> = {
   meteofrance_arome_france_hd: "AROME HD",
   meteofrance_arome_france: "AROME France",
   icon_eu: "ICON-EU",
+  arpege_europe: "ARPEGE Europe",
+  arpege_world: "ARPEGE World",
   icon_d2: "ICON-D2",
   icon_global: "ICON-Global",
   ecmwf_ifs025: "ECMWF IFS",
