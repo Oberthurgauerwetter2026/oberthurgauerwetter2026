@@ -1336,13 +1336,13 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
 
   const out = { ...day };
-  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel);
-  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel);
-  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel);
-  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel);
-  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel);
-  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel);
-  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
+  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel, "temp");
+  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel, "temp");
+  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel, "precip");
+  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel, "precip");
+  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel, "wind");
+  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel, "cloud");
+  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel, "sun");
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
