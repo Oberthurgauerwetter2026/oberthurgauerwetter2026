@@ -134,7 +134,7 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
 async function fetchWeather(
   lat: number, lon: number,
   shortModels = "meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,icon_d2",
-  midModels = "meteoswiss_icon_ch2,icon_d2,icon_eu,ecmwf_ifs025",
+  midModels = "meteoswiss_icon_ch2,icon_d2,ecmwf_ifs025,arpege_europe",
   longModels = "ecmwf_ifs025,gfs_global"
 ) {
   shortModels = normalizeModels(shortModels);
