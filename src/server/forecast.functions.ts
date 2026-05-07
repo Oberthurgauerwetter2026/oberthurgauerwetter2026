@@ -1024,46 +1024,48 @@ function detectFogDissipation(
   weathercodeByModel: Record<string, number> | null | undefined,
 ): { dissipation_hour: number; morning_cloud_pct: number; afternoon_sunshine_min: number } | null {
   if (!profile?.length) return null;
-  const earlyMorning = profile.filter((r) => r.h >= 6 && r.h <= 8);
-  const afternoon = profile.filter((r) => r.h >= 12 && r.h <= 17);
-  if (earlyMorning.length < 2 || afternoon.length < 3) return null;
+  // Engere Frühnnebel-Stunden (06–07): zählt nur die echte Nebelphase, nicht
+  // schon eine beginnende Auflösung um 08 Uhr.
+  const earlyFog = profile.filter((r) => r.h >= 6 && r.h <= 7);
+  // Restlicher Tagesverlauf 08–17, um Auflösung + Sonne zu erkennen.
+  const dayWindow = profile.filter((r) => r.h >= 8 && r.h <= 17);
+  if (earlyFog.length < 1 || dayWindow.length < 4) return null;
 
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
-  const morningCloud = avg(earlyMorning.map((r) => r.c).filter((v): v is number => v != null));
-  const morningSun = avg(earlyMorning.map((r) => r.s ?? 0));
-  const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
-  const afternoonSun = avg(afternoon.map((r) => r.s ?? 0));
+  const fogCloud = avg(earlyFog.map((r) => r.c).filter((v): v is number => v != null));
+  const fogSun = avg(earlyFog.map((r) => r.s ?? 0));
+  const daySun = avg(dayWindow.map((r) => r.s ?? 0));
+  const dayCloud = avg(dayWindow.map((r) => r.c).filter((v): v is number => v != null));
+  const sunnyHours = dayWindow.filter((r) => (r.s ?? 0) >= 30).length;
 
   const hasFogCode = weathercodeByModel
     ? Object.values(weathercodeByModel).some((v) => v === 45 || v === 48)
     : false;
 
-  // Frühmorgen-Nebel: 06–08 Uhr stark bewölkt, kaum Sonne.
-  const morningOvercast = morningCloud >= 85 && morningSun <= 10;
+  // Nebelphase: 06–07 Uhr sehr bewölkt UND kaum Sonne.
+  const morningOvercast = fogCloud >= 85 && fogSun <= 10;
   if (!morningOvercast) return null;
 
-  // Nachmittagsschwelle: bei Nebel-Code grosszügiger (Hochnebelreste sind ok).
-  const afternoonClearing = hasFogCode
-    ? (afternoonCloud <= 70 || afternoonSun >= 20)
-    : (afternoonCloud <= 55 || afternoonSun >= 30);
-  if (!afternoonClearing) return null;
+  // Auflösung: ENTWEDER Nebel-Code vorhanden (dann reicht morgens dichte
+  // Bewölkung), ODER über den Tag verteilt klar deutliche Sonne.
+  const clearingByCode = hasFogCode && (sunnyHours >= 3 || daySun >= 25);
+  const clearingBySun = sunnyHours >= 5 || daySun >= 35 || dayCloud <= 60;
+  if (!clearingByCode && !clearingBySun) return null;
 
-  // Ohne Nebel-Code zusätzlich verlangen, dass der Kontrast deutlich ist.
-  if (!hasFogCode && morningCloud - afternoonCloud < 25 && afternoonSun - morningSun < 25) return null;
-
-  // Auflösungsstunde: erste Stunde ab 08:00, in der cloudcover < 70 % ODER sunshine ≥ 20 min.
-  let dissipation = 12;
+  // Auflösungsstunde: erste Stunde ab 08:00, in der Sonne ≥ 20 min ODER
+  // Bewölkung < 75 %.
+  let dissipation = 10;
   for (const r of profile) {
     if (r.h < 8 || r.h > 14) continue;
-    const cloudOk = r.c != null && r.c < 70;
     const sunOk = r.s != null && r.s >= 20;
-    if (cloudOk || sunOk) { dissipation = r.h; break; }
+    const cloudOk = r.c != null && r.c < 75;
+    if (sunOk || cloudOk) { dissipation = r.h; break; }
   }
 
   return {
     dissipation_hour: dissipation,
-    morning_cloud_pct: Math.round(morningCloud),
-    afternoon_sunshine_min: Math.round(afternoonSun),
+    morning_cloud_pct: Math.round(fogCloud),
+    afternoon_sunshine_min: Math.round(daySun),
   };
 }
 
@@ -1816,6 +1818,11 @@ export function buildSystemPrompt(settings: any): string {
     "",
     "=== REGELN BEWÖLKUNG / SONNE / NIEDERSCHLAG ===",
     sky,
+    "",
+    "=== PFLICHTREGELN HIMMEL (NICHT ÜBERSCHREIBBAR) ===",
+    `WENN das Datenfeld "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS der Wetterverlauf-Absatz die Nebel-/Hochnebel-Auflösung explizit nennen. Pflichtbausteine: (1) am frühen Morgen "Nebel- oder Hochnebelfelder" (gerne mit Zusatz "im Flachland", "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), (2) ab spätem Vormittag "rasche Auflösung" oder "im Tagesverlauf Auflösung", (3) danach passend zur Sonnendauer formulieren. "Stark bewölkt am Morgen" allein ist NICHT zulässig — der Begriff Nebel oder Hochnebel MUSS fallen.
+WENN "sunshine_h.avg" ≥ 9, formuliere den Tag insgesamt als "ziemlich sonnig", "recht sonnig" oder "meist sonnig" — NICHT als "teilweise sonnig" mit "zunehmend bewölkt". Zusätzliche Wolkenfelder am Nachmittag dürfen genannt werden, dürfen aber den sonnigen Grundcharakter nicht überdecken.
+Tagesmittel "cloudcover.avg" darf den Tagesgang aus dem STUNDENPROFIL NIEMALS überstimmen — das Stundenprofil hat Vorrang.`,
     "",
     "=== REGELN TEMPERATUR ===",
     temp,
