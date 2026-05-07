@@ -772,59 +772,17 @@ function spread(values: number[]) {
   return Math.round((Math.max(...values) - Math.min(...values)) * 10) / 10;
 }
 
-// Modell-Gewichte für die Aggregation. MeteoSchweiz-Modelle haben Vorrang,
-// weil sie für die Region (Bodensee/Alpenrand) am besten kalibriert sind und
-// Hochnebel/Inversionen besser erfassen als globale Modelle. Tuning-Konstanten.
-const MODEL_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 2.0,
-  meteoswiss_icon_ch2: 1.5,
-  icon_d2: 1.0,
-  meteofrance_arome_france_hd: 1.0,
-  icon_eu: 0.7,
-  ecmwf_ifs025: 0.7,
-  gfs_global: 0.5,
-  default: 1.0,
-};
-function weightFor(model: string): number {
-  return MODEL_WEIGHTS[model] ?? MODEL_WEIGHTS.default;
-}
-
-// Einstufung der Modell-Uneinigkeit pro Variable. Schwellen pro Einheit (°C bzw. mm).
-function classifyDisagreement(varKind: "temp" | "precip" | "cloud" | "sun" | "wind" | "deg", spreadVal: number): "low" | "moderate" | "high" {
-  switch (varKind) {
-    case "temp":   return spreadVal >= 5 ? "high" : spreadVal >= 3 ? "moderate" : "low";
-    case "precip": return spreadVal >= 5 ? "high" : spreadVal >= 2 ? "moderate" : "low";
-    case "cloud":  return spreadVal >= 50 ? "high" : spreadVal >= 25 ? "moderate" : "low";
-    case "sun":    return spreadVal >= 5 ? "high" : spreadVal >= 3 ? "moderate" : "low";
-    case "wind":   return spreadVal >= 20 ? "high" : spreadVal >= 10 ? "moderate" : "low";
-    case "deg":    return spreadVal >= 90 ? "high" : spreadVal >= 45 ? "moderate" : "low";
-  }
-}
-
-function aggregate(perModel: Record<string, number>, varKind: "temp" | "precip" | "cloud" | "sun" | "wind" | "deg" | null = null) {
-  const entries = Object.entries(perModel);
-  if (!entries.length) return null;
-  // Gewichteter Mittelwert mit MCH-Vorrang
-  let wsum = 0;
-  let vsum = 0;
-  for (const [m, v] of entries) {
-    const w = weightFor(m);
-    wsum += w;
-    vsum += w * v;
-  }
-  const avg = wsum > 0 ? vsum / wsum : 0;
-  const vals = entries.map(([, v]) => v);
-  const sp = spread(vals);
-  const out: any = {
+function aggregate(perModel: Record<string, number>) {
+  const vals = Object.values(perModel);
+  if (!vals.length) return null;
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return {
     avg: Math.round(avg * 10) / 10,
     min: Math.min(...vals),
     max: Math.max(...vals),
-    spread: sp,
+    spread: spread(vals),
     by_model: perModel,
   };
-  if (varKind) out.disagreement = classifyDisagreement(varKind, sp);
-  if (entries.length === 1) out.source_note = "single_model"; // Vorsicht: nur ein Modell hat den Wert geliefert
-  return out;
 }
 
 function pickBestSource(weather: any, dayIndex: number) {
@@ -1054,19 +1012,7 @@ function buildHourlyProfile(
       src: "mod",
     });
   }
-  if (!out.length) return null;
-  // 3-Stunden-Median-Filter auf Bewölkung, um Mittelungsrauschen zwischen Modell-Grids zu glätten.
-  // Ohne Glättung schwankt c oft 40→100→49 von Stunde zu Stunde, was die KI als realen
-  // Aufklarungs-Verlauf interpretiert.
-  const cVals = out.map((r) => r.c);
-  for (let i = 0; i < out.length; i++) {
-    const window = [cVals[i - 1], cVals[i], cVals[i + 1]].filter((v): v is number => v != null);
-    if (window.length >= 2) {
-      window.sort((a, b) => a - b);
-      out[i].c = Math.round(window[Math.floor(window.length / 2)]);
-    }
-  }
-  return out;
+  return out.length ? out : null;
 }
 
 // Beobachtungs-Overlay für Tag 0: ersetzt die vergangenen Stunden im Profil
@@ -1216,28 +1162,25 @@ function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
-  const cloudcover = aggregate(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex), "cloud");
+  const cloudcover = aggregate(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = aggregate(sunshineHours, "sun");
+  const sunshine_h = aggregate(sunshineHours);
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
-  let cloudcover_source: "model" | "derived_from_sunshine" | "none" | "single_model" = cloudcover ? "model" : "none";
+  let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
   let cloudcoverFinal = cloudcover;
-  if (cloudcover && (cloudcover as any).source_note === "single_model") {
-    cloudcover_source = "single_model";
-  }
   if (!cloudcover && sunshine_h && typeof sunshine_h.avg === "number") {
     const ratio = Math.max(0, Math.min(1, sunshine_h.avg / 12));
     const derived = Math.round((1 - ratio) * 100);
-    cloudcoverFinal = { avg: derived, min: derived, max: derived, spread: 0, by_model: { derived }, disagreement: "low" } as any;
+    cloudcoverFinal = { avg: derived, min: derived, max: derived, spread: 0, by_model: { derived } };
     cloudcover_source = "derived_from_sunshine";
   }
 
-  const wind_max = aggregate(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex), "wind");
+  const wind_max = aggregate(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
   const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
-  const wind_dir = aggregate(windDirPerModel, "deg");
+  const wind_dir = aggregate(windDirPerModel);
   // Use circular mean for the dominant direction (avg of degrees is wrong across 360°)
   const wind_dir_avg = circularMeanDeg(Object.values(windDirPerModel));
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
@@ -1245,10 +1188,10 @@ function formatDayData(weather: any, dayIndex: number) {
 
   const sky_label = isClearSkyDay({ cloudcover: cloudcoverFinal, sunshine_h }) ? "Sonnig und wolkenlos" : null;
 
-  const tmax = aggregate(collectModelValuesTiered(weather, "temperature_2m_max", dayIndex), "temp");
-  const tmin = aggregate(collectModelValuesTiered(weather, "temperature_2m_min", dayIndex), "temp");
-  const precip = aggregate(collectModelValuesTiered(weather, "precipitation_sum", dayIndex), "precip");
-  const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex), "precip");
+  const tmax = aggregate(collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
+  const tmin = aggregate(collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
+  const precip = aggregate(collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
+  const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
   const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
 
   // models actually contributing across all variables (transparency for the UI)
@@ -1348,13 +1291,13 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
 
   const out = { ...day };
-  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel, "temp");
-  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel, "temp");
-  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel, "precip");
-  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel, "precip");
-  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel, "wind");
-  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel, "cloud");
-  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel, "sun");
+  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel);
+  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel);
+  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel);
+  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel);
+  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel);
+  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel);
+  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
@@ -1735,9 +1678,7 @@ Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = be
 Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
 WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.
-MODELL-DISKREPANZ ("disagreement"-Feld): Wenn ein Aggregat (z. B. tmax, cloudcover, sunshine_h) "disagreement": "high" trägt, MUSST du zwingend zurückhaltend formulieren — nutze keine konkreten Stundenangaben für Sonne/Aufhellungen und keine präzise Höchsttemperatur. Stattdessen: "verbreitet stark bewölkt, vorübergehende Aufhellungen möglich" o. ä. Bei "moderate" mässig konkret. Bei "low" konkret.
-SINGLE-MODEL-WARNUNG ("source_note": "single_model" oder "cloudcover_source": "single_model"): Der Wert stammt von nur einem Modell — behandle ihn als unsicher und formuliere offener.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
