@@ -2043,7 +2043,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
-      return out;
+      return normalizeSkyDiagnostics(out);
     };
     const today = weather.daily.time[0];
     const { data: forecast, error: fErr } = await supabase
@@ -2193,7 +2193,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
-      return out;
+      return normalizeSkyDiagnostics(out);
     };
     const today = weather.daily.time[0];
 
