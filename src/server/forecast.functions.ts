@@ -172,6 +172,39 @@ function replaceFirstParagraph(text: string, firstParagraph: string): string {
   return paragraphs.join("\n\n");
 }
 
+function buildDeterministicSkyParagraph(weatherData: any): string | null {
+  const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null }>;
+  if (!profile.length) return null;
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const early = profile.filter((r) => r.h >= 6 && r.h <= 7);
+  const day = profile.filter((r) => r.h >= 8 && r.h <= 18);
+  const afternoon = profile.filter((r) => r.h >= 15 && r.h <= 20);
+  const earlyCloud = avg(early.map((r) => r.c).filter((v): v is number => v != null));
+  const earlySun = avg(early.map((r) => r.s ?? 0));
+  const sunnyHours = day.filter((r) => (r.s ?? 0) >= 30).length;
+  const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
+  const sunshineAvg = weatherData?.sunshine_h?.avg;
+  const fogByModel = weatherData?.weathercode?.by_model
+    ? Object.values(weatherData.weathercode.by_model).some((v) => v === 45 || v === 48)
+    : false;
+  const fogMorning = weatherData?.sky_pattern === "nebel_aufloesung"
+    || weatherData?.fog_dissipation != null
+    || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 3 || (sunshineAvg ?? 0) >= 5));
+  const verySunny = (sunshineAvg ?? 0) >= 9 || sunnyHours >= 7;
+  if (!fogMorning && !verySunny) return null;
+
+  const start = fogMorning
+    ? "Am Morgen Nebel- oder Hochnebelfelder und sonst stark bewölkt."
+    : "Am Morgen zunächst stark bewölkt.";
+  const middle = verySunny
+    ? "Im weiteren Verlauf des Vormittags rasche Auflockerungen, danach recht sonnig."
+    : "Im Tagesverlauf Auflockerungen und zeitweise sonnige Abschnitte.";
+  const end = (afternoonCloud ?? 0) >= 70
+    ? "Am Nachmittag und Abend zeitweise dichtere Wolkenfelder, daneben weiterhin sonnige Abschnitte."
+    : "Am Nachmittag und Abend weiterhin recht sonnig mit einzelnen Wolkenfeldern.";
+  return [start, middle, end].join(" ");
+}
+
 function enforceSkyConsistency(text: string, weatherData: any): string {
   const deterministicSky = buildDeterministicSkyParagraph(weatherData);
   if (deterministicSky) return replaceFirstParagraph(text, deterministicSky);
