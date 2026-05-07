@@ -1,48 +1,48 @@
 ## Problem
 
-Für Freitag liefern die Modelle:
-- **weathercode**: avg 24, ICON-D2 = **45 (Nebel)**, ICON-CH2 = 3 (bedeckt)
-- **sunshine_h**: avg **9 h** (3.6–12.5), spread 8.9 h
-- **cloudcover**: 75.9 % (nur ICON-D2)
+Der Nebel-Auflösungs-Detektor (`detectFogDissipation`) hat den Freitag NICHT erkannt, obwohl alle Indizien vorliegen:
 
-Das ist ein klassisches **Morgennebel-/Hochnebel-Auflösungsmuster**: morgens dichter Nebel (cloudcover 100 %, sunshine 0), Auflösung im Vormittag, Nachmittag sonnig. Die KI bekommt aktuell zwar das Stundenprofil, aber:
+| Stunde | Cloud % | Sonne min | Hinweis |
+|---|---|---|---|
+| 06 | 94 | 0 | Nebel |
+| 07 | 96 | 0 | Nebel |
+| 08 | 86 | 55 | Auflösung beginnt |
+| 09 | 89 | 60 | weiter aufgelöst |
+| 10 | 84 | 60 | |
+| 11 | 54 | 60 | klar |
 
-1. In `DEFAULT_SKY_RULES` heisst es nur knapp: *„weathercode 0-1 = klar, 2 = teils bewölkt, 3 = bedeckt"* — **Code 45/48 (Nebel/Reifnebel) ist nicht abgedeckt**. Die KI behandelt 45 vermutlich wie „bedeckt".
-2. Die Aggregation auf den Tagesmittelwert (avg 24) verwischt den Tagesgang. Die KI fällt auf eine generische „morgens stark bewölkt, später Wolken" Beschreibung zurück, weil sunshine_h 9 h zwar klar nach „ziemlich sonnig" rufen würde, aber das Stundenprofil hohe Wolken am Morgen zeigt.
-3. Es gibt keinen expliziten **Hochnebel-/Nebelauflösungs-Hinweis**, der aus dem Stundenprofil abgeleitet wird.
+Plus: ICON-D2 liefert weathercode **45 (Nebel)**.
 
-## Lösung — drei kombinierte Massnahmen
+**Ursache:** Die aktuelle Bedingung verlangt für das ganze Fenster 06–10 Uhr `morningSun ≤ 10 min` UND `morningCloud ≥ 80 %`. Da die Auflösung schon um 08 Uhr einsetzt, mittelt sich der Sonnenwert auf ~35 min und die Bedingung schlägt fehl.
 
-### 1. weathercode 45/48 in die Sky-Regeln aufnehmen
-Erweitere `DEFAULT_SKY_RULES` (Zeile 1676–1681) um eine explizite Regel:
+Folge: `sky_pattern` bleibt `null`, die KI fällt auf das Tagesmittel (`sunshine_h.avg = 11.9 h`, `cloudcover.avg = 64.5 %`) zurück und erzeugt die generische Aussage „Am Morgen stark bewölkt, im Tagesverlauf Auflockerungen".
 
-> Bei weathercode 45 oder 48 (Nebel / Reifnebel): formuliere als „Nebel" oder „Hochnebel", NICHT als „stark bewölkt". Wenn parallel die Sonnenstunden ≥ 5 h sind, beschreibe ein typisches Auflösungsmuster („Nebel- oder Hochnebelfelder am Morgen, im Tagesverlauf Auflösung, am Nachmittag sonnig").
+## Lösung
 
-### 2. Automatische Erkennung „Nebel-Auflösung" aus dem Stundenprofil
-Neue Hilfsfunktion `detectFogDissipation(profile)` direkt nach `buildHourlyProfile` (~Zeile 1019). Sie prüft:
-- Frühe Stunden (06–10): cloudcover ≥ 90 % UND sunshine ≈ 0 UND (mind. ein Modell weathercode 45/48 für den Tag)
-- Spätere Stunden (12–17): cloudcover ≤ 50 % ODER sunshine ≥ 30 min/h
+Detektor in `detectFogDissipation` (src/server/forecast.functions.ts ~Zeile 1022) lockern und um einen zweiten, schnelleren Trigger ergänzen:
 
-Wenn beides zutrifft, setze ein neues Feld `sky_pattern: "nebel_aufloesung"` im Tag-Datensatz mit konkreten Stundenangaben (z. B. `dissipation_hour: 11`).
+### Anpassung 1 — Frühmorgenfenster verkleinern
+Statt 06–10 Uhr nur **06–08 Uhr** als „Morgen" für den Nebel-Check verwenden. So zählt eine frühe Auflösung um 08 Uhr nicht gegen die Bedingung.
 
-### 3. Pattern-Hint in den Prompt einspeisen
-Im `userPrompt` (in `buildEntryUserPrompt`/`appendHourlyTable`, ~Zeile 1144 ff.) zusätzlich:
+### Anpassung 2 — zusätzlicher „Nebelcode-Trigger"
+Wenn **mindestens ein Modell weathercode 45 oder 48** liefert UND in den ersten zwei Tagstunden (06/07) `cloud ≥ 85 %` mit `sunshine ≤ 10 min` herrscht, gilt das Muster IMMER als erkannt — unabhängig vom Nachmittagswert (denn Nebel löst sich praktisch immer im Tagesverlauf auf, und der Stundenprofil bestätigt das hier ohnehin).
 
-> Wenn `sky_pattern === "nebel_aufloesung"` gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: „Nebel-/Hochnebelfelder am Morgen, ab dem späten Vormittag Auflösung, ab Mittag sonnig." Das Tagesmittel (sunshine_h, cloudcover) darf NICHT für eine pauschale „stark bewölkt"-Aussage verwendet werden.
+### Anpassung 3 — Auflösungsstunde-Suche erweitern
+Auflösungsstunde-Schleife jetzt von **08 bis 14 Uhr** (statt 09–14), da die Auflösung im obigen Fall um 08 Uhr beginnt.
+
+### Anpassung 4 — Schwelle „Nachmittagsklarheit" entschärfen
+Wenn `hasFogCode === true`, reicht `afternoonCloud ≤ 70 %` ODER `afternoonSun ≥ 20 min` (statt 55 % / 30 min). Hochnebelreste am Nachmittag sind realistisch und sollen das Pattern nicht blockieren.
 
 ## Resultat für Freitag
-Statt „Am Morgen stark bewölkt … am Nachmittag wieder mehr Wolken" entsteht z. B.:
 
-> „Am Morgen Nebel- oder Hochnebelfelder im Flachland — mit Blick nach Baden-Württemberg und in den Alpstein bereits sonnig. Auflösung der Nebelfelder gegen Mittag, am Nachmittag verbreitet sonnig."
+`sky_pattern` wird auf `"nebel_aufloesung"` gesetzt → die bereits implementierte Sky-Regel zwingt die KI, den Verlauf „Nebel-/Hochnebelfelder am Morgen, Auflösung im Tagesverlauf, am Nachmittag verbreitet sonnig" zu schreiben.
 
 ## Was nicht geändert wird
-- Aggregations-Logik, Bias-Korrektur, Stationsdaten, Radar-Korrektur bleiben unverändert.
-- Andere Tage (ohne Nebelmuster) bleiben unverändert.
-- Keine Datenbank-/UI-Änderungen.
 
-## Technische Details (Dateien)
-- `src/server/forecast.functions.ts`:
-  - Zeile 1676–1681: Sky-Regeln um Code 45/48 + Auflösungsmuster ergänzen
-  - Neue Funktion `detectFogDissipation` ~Zeile 1019
-  - In `buildDayContext` (~Zeile 1220): `sky_pattern` setzen wenn erkannt
-  - In `buildEntryUserPrompt` (~Zeile 1146): Pattern-Hint im Prompt-Text ergänzen
+- Sky-Regeln im Prompt (bereits korrekt formuliert).
+- Andere Tage ohne Nebelmuster bleiben unbeeinflusst (Trigger benötigt entweder Nebel-Code oder eindeutigen Cloud/Sonnen-Kontrast).
+- Aggregation, Datenbank, UI: unverändert.
+
+## Datei
+
+- `src/server/forecast.functions.ts`, Funktion `detectFogDissipation` (~Z. 1022–1064)

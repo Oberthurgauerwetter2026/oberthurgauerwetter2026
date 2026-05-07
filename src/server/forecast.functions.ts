@@ -1024,13 +1024,13 @@ function detectFogDissipation(
   weathercodeByModel: Record<string, number> | null | undefined,
 ): { dissipation_hour: number; morning_cloud_pct: number; afternoon_sunshine_min: number } | null {
   if (!profile?.length) return null;
-  const morning = profile.filter((r) => r.h >= 6 && r.h <= 10);
+  const earlyMorning = profile.filter((r) => r.h >= 6 && r.h <= 8);
   const afternoon = profile.filter((r) => r.h >= 12 && r.h <= 17);
-  if (morning.length < 3 || afternoon.length < 3) return null;
+  if (earlyMorning.length < 2 || afternoon.length < 3) return null;
 
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
-  const morningCloud = avg(morning.map((r) => r.c).filter((v): v is number => v != null));
-  const morningSun = avg(morning.map((r) => r.s ?? 0));
+  const morningCloud = avg(earlyMorning.map((r) => r.c).filter((v): v is number => v != null));
+  const morningSun = avg(earlyMorning.map((r) => r.s ?? 0));
   const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
   const afternoonSun = avg(afternoon.map((r) => r.s ?? 0));
 
@@ -1038,20 +1038,24 @@ function detectFogDissipation(
     ? Object.values(weathercodeByModel).some((v) => v === 45 || v === 48)
     : false;
 
-  // Bedingung: morgens stark bewölkt + kaum Sonne, nachmittags klar deutlich besser.
-  // Nebel-Code ist starker Verstärker, aber nicht zwingend (Hochnebel zeigt sich
-  // auch ohne Code 45 in den Modellen).
-  const morningOvercast = morningCloud >= 80 && morningSun <= 10;
-  const afternoonClearing = afternoonCloud <= 55 || afternoonSun >= 30;
-  if (!morningOvercast || !afternoonClearing) return null;
+  // Frühmorgen-Nebel: 06–08 Uhr stark bewölkt, kaum Sonne.
+  const morningOvercast = morningCloud >= 85 && morningSun <= 10;
+  if (!morningOvercast) return null;
+
+  // Nachmittagsschwelle: bei Nebel-Code grosszügiger (Hochnebelreste sind ok).
+  const afternoonClearing = hasFogCode
+    ? (afternoonCloud <= 70 || afternoonSun >= 20)
+    : (afternoonCloud <= 55 || afternoonSun >= 30);
+  if (!afternoonClearing) return null;
+
   // Ohne Nebel-Code zusätzlich verlangen, dass der Kontrast deutlich ist.
   if (!hasFogCode && morningCloud - afternoonCloud < 25 && afternoonSun - morningSun < 25) return null;
 
-  // Auflösungsstunde: erste Stunde ab 09:00, in der cloudcover < 60 % ODER sunshine ≥ 20 min.
+  // Auflösungsstunde: erste Stunde ab 08:00, in der cloudcover < 70 % ODER sunshine ≥ 20 min.
   let dissipation = 12;
   for (const r of profile) {
-    if (r.h < 9 || r.h > 14) continue;
-    const cloudOk = r.c != null && r.c < 60;
+    if (r.h < 8 || r.h > 14) continue;
+    const cloudOk = r.c != null && r.c < 70;
     const sunOk = r.s != null && r.s >= 20;
     if (cloudOk || sunOk) { dissipation = r.h; break; }
   }
