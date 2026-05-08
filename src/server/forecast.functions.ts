@@ -2057,7 +2057,28 @@ Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "d
 WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
 WENN "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: morgens Nebel-/Hochnebelfelder im Flachland (gerne mit "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), ab spätem Vormittag Auflösung, am Nachmittag verbreitet sonnig. Tagesmittel von "sunshine_h"/"cloudcover" dürfen in diesem Fall NICHT für eine pauschale "stark bewölkt"-Aussage genutzt werden — der Tagesgang aus dem Stundenprofil hat Vorrang.
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.
+
+GEWITTER (Feld "thunderstorm"):
+Wenn "thunderstorm.class" gesetzt ist, MUSS das Gewitter-/Konvektionsrisiko explizit im Wetterverlauf-Absatz benannt werden:
+- "isolated" → "lokal kurze Gewitter möglich" oder "vereinzelt Gewitterneigung"
+- "scattered" → "verbreitet Schauer und Gewitter"
+- "widespread" → "kräftige Gewitter mit Hagel- und Sturmböenrisiko"
+- "severe" → "schwere Gewitter mit grossem Hagel und Sturmböen — erhöhte Unwettergefahr"
+Wenn "thunderstorm.peak_hour" vorhanden ist, die Tageszeit nennen ("am späten Nachmittag", "gegen Abend").
+Wenn "thunderstorm.class" fehlt: KEIN Gewitter erfinden — auch nicht aus Niederschlag allein.
+
+NIEDERSCHLAGSPHASE (Feld "precip_phase"):
+Wenn "precip_phase.blocks" gesetzt ist, die Phase pro Tagesabschnitt korrekt benennen:
+- "rain" → "Regen" / "Schauer"
+- "sleet" → "Schneeregen" / "Schnee-Regen-Gemisch"
+- "snow" → "Schneefall" / "Schnee bis ins Flachland"
+- "freezing_rain" → "gefrierender Regen — verbreitet Glatteisgefahr" (zwingend mit Glatteis-Hinweis)
+Mehrere Phasen kombinieren wenn unterschiedlich (z. B. "am Morgen Schneefall, am Nachmittag in Regen übergehend").
+
+LUFTFEUCHTE / NEBEL (Feld "humidity"):
+- "humidity.schwüle" = "schwül" oder "drückend" → im Sommer im Wetterverlauf-Absatz "schwüle Luft" / "drückend-schwüle Luftmasse" erwähnen.
+- "humidity.night_fog_likely" = true → in der ersten Nachthälfte oder am frühen Morgen "Nebel- oder Hochnebelfelder am Morgen möglich" einbauen — auch wenn cloudcover am Tag niedrig ist.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
