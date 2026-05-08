@@ -2346,15 +2346,21 @@ export const generateForecast = createServerFn({ method: "POST" })
     const bias: BiasResult | null = biasEnabled && biasStations.length
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
-    const [pressureSeries, snowSeries, nowcastInputs] = await Promise.all([
+    const ensembleEnabled = settings?.ensemble_enabled !== false;
+    const ensembleMinDay = Math.max(0, Math.min(9, settings?.ensemble_min_day ?? 2));
+    const [pressureSeries, snowSeries, nowcastInputs, ensembleSeries] = await Promise.all([
       fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
       fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
       (settings?.nowcast_enabled !== false)
         ? fetchNowcastInputs(lat, lon, biasStations).catch((e) => { console.warn("nowcast inputs failed", e); return null; })
         : Promise.resolve(null),
+      ensembleEnabled
+        ? fetchEnsemble(lat, lon).catch((e) => { console.warn("ensemble failed", e); return [] as EnsembleDay[]; })
+        : Promise.resolve([] as EnsembleDay[]),
     ]);
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
+    const ensembleByDate = new Map(ensembleSeries.map((e) => [e.date, e]));
     const withTopo = (dayIndex: number) => {
       let out = buildDay(dayIndex);
       if (!out) return null;
@@ -2377,6 +2383,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
+      applyEnsembleToDay(out, dayIndex, ensembleByDate, ensembleMinDay);
       if (out.precip_distribution && dayIndex <= 1) {
         const elev = out?.topography?.elev_median ?? 450;
         const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
