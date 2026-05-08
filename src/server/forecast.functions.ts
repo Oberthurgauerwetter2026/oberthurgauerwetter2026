@@ -1631,7 +1631,7 @@ function formatDayData(weather: any, dayIndex: number) {
     if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
   }
 
-  return {
+  const out: any = {
     date: d.time[dayIndex],
     models_configured: models,
     models_used: Array.from(contributing).join(","),
@@ -1663,7 +1663,6 @@ function formatDayData(weather: any, dayIndex: number) {
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
-  // Diagnose: signifikanter Niederschlag, aber kein Tagesgang berechnet → Quelle prüfen.
   if (
     dayIndex <= 4 &&
     (out.precip?.avg ?? 0) >= 1 &&
@@ -1684,8 +1683,6 @@ function formatDayData(weather: any, dayIndex: number) {
   }
   return out;
 }
-
-function formatDayDataInner(weather: any, dayIndex: number): any {
 
 // Überschreibt für einen Tag die stündlich abgeleiteten Felder (tmin, tmax, precip,
 // precip_prob, wind_max, cloudcover, sunshine_h) so, dass nur Stunden ab `fromHour`
