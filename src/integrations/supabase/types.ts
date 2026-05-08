@@ -22,7 +22,11 @@ export type Database = {
           bias_per_hour_enabled: boolean
           bias_stations: string
           bias_strength: number
+          ensemble_enabled: boolean
+          ensemble_min_day: number
           id: string
+          lightning_enabled: boolean
+          lightning_radius_km: number
           location_lat: number | null
           location_lon: number | null
           location_name: string | null
@@ -62,7 +66,11 @@ export type Database = {
           bias_per_hour_enabled?: boolean
           bias_stations?: string
           bias_strength?: number
+          ensemble_enabled?: boolean
+          ensemble_min_day?: number
           id?: string
+          lightning_enabled?: boolean
+          lightning_radius_km?: number
           location_lat?: number | null
           location_lon?: number | null
           location_name?: string | null
@@ -102,7 +110,11 @@ export type Database = {
           bias_per_hour_enabled?: boolean
           bias_stations?: string
           bias_strength?: number
+          ensemble_enabled?: boolean
+          ensemble_min_day?: number
           id?: string
+          lightning_enabled?: boolean
+          lightning_radius_km?: number
           location_lat?: number | null
           location_lon?: number | null
           location_name?: string | null
