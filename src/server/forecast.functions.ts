@@ -172,6 +172,15 @@ function replaceFirstParagraph(text: string, firstParagraph: string): string {
   return paragraphs.join("\n\n");
 }
 
+function isFogMajority(weatherData: any): boolean {
+  const byModel = weatherData?.weathercode?.by_model;
+  if (!byModel) return false;
+  const vals = Object.values(byModel).filter((v) => v != null);
+  if (!vals.length) return false;
+  const fogCount = vals.filter((v) => v === 45 || v === 48).length;
+  return fogCount / vals.length > 0.5;
+}
+
 function buildDeterministicSkyParagraph(weatherData: any): string | null {
   const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null }>;
   if (!profile.length) return null;
@@ -184,6 +193,7 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
   const sunnyHours = day.filter((r) => (r.s ?? 0) >= 30).length;
   const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
   const sunshineAvg = weatherData?.sunshine_h?.avg;
+  const fogMajority = isFogMajority(weatherData);
   const fogByModel = weatherData?.weathercode?.by_model
     ? Object.values(weatherData.weathercode.by_model).some((v) => v === 45 || v === 48)
     : false;
@@ -191,13 +201,18 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
     || weatherData?.fog_dissipation != null
     || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 3 || (sunshineAvg ?? 0) >= 5));
   const verySunny = (sunshineAvg ?? 0) >= 9 || sunnyHours >= 7;
-  if (!fogMorning && !verySunny) return null;
+  if (!fogMorning && !verySunny && !fogMajority) return null;
 
-  const start = fogMorning
-    ? "Am Morgen Nebel- oder Hochnebelfelder und sonst stark bewölkt."
+  // Reiner Nebeltag: Mehrheit 45/48 ohne nennenswerte Auflösung.
+  if (fogMajority && !verySunny && !fogMorning) {
+    return "Verbreitet Nebel- oder Hochnebelfelder, nur zögerliche Aufhellungen.";
+  }
+
+  const start = (fogMorning || fogMajority)
+    ? "Am Morgen verbreitet Nebel- oder Hochnebelfelder."
     : "Am Morgen zunächst stark bewölkt.";
   const middle = verySunny
-    ? "Im weiteren Verlauf des Vormittags rasche Auflockerungen, danach recht sonnig."
+    ? "Im weiteren Verlauf des Vormittags rasche Auflösung, danach recht sonnig."
     : "Im Tagesverlauf Auflockerungen und zeitweise sonnige Abschnitte.";
   const end = (afternoonCloud ?? 0) >= 70
     ? "Am Nachmittag und Abend zeitweise dichtere Wolkenfelder, daneben weiterhin sonnige Abschnitte."
@@ -205,11 +220,22 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
   return [start, middle, end].join(" ");
 }
 
+function enforceFogWording(text: string, weatherData: any): string {
+  if (!isFogMajority(weatherData)) return text;
+  if (/Nebel|Hochnebel/i.test(text)) return text;
+  // Ersten Treffer von "stark bewölkt" / "bedeckt" / "trübe" / "grau in grau" ersetzen
+  return text.replace(
+    /\b(stark bewölkt|bedeckt|trübe|grau in grau)\b/i,
+    "Nebel- oder Hochnebelfelder",
+  );
+}
+
 function enforceSkyConsistency(text: string, weatherData: any): string {
   const deterministicSky = buildDeterministicSkyParagraph(weatherData);
-  if (deterministicSky) return replaceFirstParagraph(text, deterministicSky);
-  if (!isClearSkyDay(weatherData)) return text;
-  return replaceFirstParagraph(text, "Sonnig und wolkenlos.");
+  let out = text;
+  if (deterministicSky) out = replaceFirstParagraph(text, deterministicSky);
+  else if (isClearSkyDay(weatherData)) out = replaceFirstParagraph(text, "Sonnig und wolkenlos.");
+  return enforceFogWording(out, weatherData);
 }
 
 // Erkennt typische Vollverb-/Verbalstil-Phrasen, die im Nominal-/Telegrammstil
