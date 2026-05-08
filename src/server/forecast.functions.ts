@@ -739,9 +739,11 @@ async function fetchWeather(
   // Short-tier (Tag 0-1) ist immer live; mid/long werden bis Mitternacht gecacht.
   const shortData = await fetchOpenMeteoOptional(lat, lon, shortModels, true);
   await wait(500);
+  // Mid-Tier jetzt MIT Hourly: liefert Stundenprofil für Tag 2–4
+  // (CH-Modelle des Short-Tiers reichen typischerweise nur ~3 Tage).
   const midData = await getOrSetCache(
-    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
-    () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}:h`,
+    () => fetchOpenMeteoOptional(lat, lon, midModels, true),
   );
   await wait(500);
   const longData = await getOrSetCache(
@@ -760,10 +762,22 @@ async function fetchWeather(
   }
   return {
     daily,
-    hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
+    hourly: shortData?.hourly, // Short-Tier (CH-Modelle, feinste Auflösung) für Tag 0/1
+    hourly_mid: midData?.hourly, // Mid-Tier (ICON-CH2/D2/ARPEGE/IFS/GFS) für Tag 2–4
     byModel: { short: shortData, mid: midData, long: longData },
     modelLists: { short: shortModels, mid: midModels, long: longModels },
   };
+}
+
+// Liefert ein Weather-Objekt mit der für den jeweiligen Tag passenden Hourly-Quelle.
+// Tag 0/1 → Short-Tier (CH-Modelle), Tag 2–4 → Mid-Tier, sonst → ohne Hourly.
+function weatherForHourly(weather: any, dayIndex: number): any {
+  if (!weather) return weather;
+  if (dayIndex <= 1) return weather;
+  if (dayIndex <= 4 && weather.hourly_mid) {
+    return { ...weather, hourly: weather.hourly_mid };
+  }
+  return { ...weather, hourly: undefined };
 }
 
 // Builds a minimal weather-shaped object from MOSMIX-only data when Open-Meteo is unavailable.
