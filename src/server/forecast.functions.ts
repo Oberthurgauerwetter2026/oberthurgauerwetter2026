@@ -1594,6 +1594,10 @@ function formatDayData(weather: any, dayIndex: number) {
     fog_dissipation: dayIndex <= 1
       ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
       : null,
+    wind_gusts: assessGusts(weather, dayIndex),
+    thunderstorm: assessThunderstormRisk(weather, dayIndex, weathercode?.by_model),
+    humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
+    uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
 }
 
