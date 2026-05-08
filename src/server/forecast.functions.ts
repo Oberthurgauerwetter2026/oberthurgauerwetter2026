@@ -788,18 +788,28 @@ async function fetchWeather(
 // Tag 0/1 → Short-Tier (CH-Modelle), Tag 2–4 → Mid-Tier, sonst → ohne Hourly.
 function weatherForHourly(weather: any, dayIndex: number): any {
   if (!weather) return weather;
-  const hasUsableHourly = (h: any): boolean => {
-    if (!h?.time?.length) return false;
-    // mindestens ein precipitation*-Schlüssel muss vorhanden sein
-    return Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"));
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  const countCoveredHours = (h: any): number => {
+    if (!h?.time || !dateStr) return 0;
+    const hasPrecip = Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"));
+    if (!hasPrecip) return 0;
+    let n = 0;
+    for (const t of h.time as string[]) if (typeof t === "string" && t.startsWith(dateStr)) n++;
+    return n;
   };
+  const shortHours = countCoveredHours(weather.hourly);
+  const midHours = countCoveredHours(weather.hourly_mid);
   if (dayIndex <= 1) {
-    if (hasUsableHourly(weather.hourly)) return weather;
-    if (hasUsableHourly(weather.hourly_mid)) return { ...weather, hourly: weather.hourly_mid };
+    // Short-Tier ist primär; bei Lückenhaftigkeit (< 18 Stunden abgedeckt) Mid-Tier nutzen,
+    // wenn dieses mehr Stunden bietet.
+    if (shortHours >= 18) return weather;
+    if (midHours > shortHours) return { ...weather, hourly: weather.hourly_mid };
     return weather;
   }
-  if (dayIndex <= 4 && hasUsableHourly(weather.hourly_mid)) {
-    return { ...weather, hourly: weather.hourly_mid };
+  if (dayIndex <= 4) {
+    if (midHours > 0) return { ...weather, hourly: weather.hourly_mid };
+    if (shortHours > 0) return weather;
+    return { ...weather, hourly: undefined };
   }
   return { ...weather, hourly: undefined };
 }
