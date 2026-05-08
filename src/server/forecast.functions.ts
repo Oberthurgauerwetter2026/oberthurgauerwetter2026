@@ -134,6 +134,21 @@ const DAILY_VARS = [
 ];
 const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
 
+// Prüft, ob ein Hourly-Key wirklich `<base>_<model>` ist und NICHT ein
+// anderer (längerer) Variablenname mit demselben Prefix wie `precipitation_probability`
+// gegenüber `precipitation`. Verhindert, dass z. B. precipitation_probability_<model>
+// als precipitation_<model> aggregiert wird.
+function isModelKeyForBase(key: string, base: string): boolean {
+  if (!key.startsWith(base + "_")) return false;
+  for (const other of HOURLY_VARS) {
+    if (other === base) continue;
+    if (other.startsWith(base + "_") && (key === other || key.startsWith(other + "_"))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
 function circularMeanDeg(degs: number[]): number | null {
