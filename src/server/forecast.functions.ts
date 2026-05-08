@@ -134,6 +134,21 @@ const DAILY_VARS = [
 ];
 const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
 
+// Prüft, ob ein Hourly-Key wirklich `<base>_<model>` ist und NICHT ein
+// anderer (längerer) Variablenname mit demselben Prefix wie `precipitation_probability`
+// gegenüber `precipitation`. Verhindert, dass z. B. precipitation_probability_<model>
+// als precipitation_<model> aggregiert wird.
+function isModelKeyForBase(key: string, base: string): boolean {
+  if (!key.startsWith(base + "_")) return false;
+  for (const other of HOURLY_VARS) {
+    if (other === base) continue;
+    if (other.startsWith(base + "_") && (key === other || key.startsWith(other + "_"))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
 function circularMeanDeg(degs: number[]): number | null {
@@ -773,8 +788,17 @@ async function fetchWeather(
 // Tag 0/1 → Short-Tier (CH-Modelle), Tag 2–4 → Mid-Tier, sonst → ohne Hourly.
 function weatherForHourly(weather: any, dayIndex: number): any {
   if (!weather) return weather;
-  if (dayIndex <= 1) return weather;
-  if (dayIndex <= 4 && weather.hourly_mid) {
+  const hasUsableHourly = (h: any): boolean => {
+    if (!h?.time?.length) return false;
+    // mindestens ein precipitation*-Schlüssel muss vorhanden sein
+    return Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"));
+  };
+  if (dayIndex <= 1) {
+    if (hasUsableHourly(weather.hourly)) return weather;
+    if (hasUsableHourly(weather.hourly_mid)) return { ...weather, hourly: weather.hourly_mid };
+    return weather;
+  }
+  if (dayIndex <= 4 && hasUsableHourly(weather.hourly_mid)) {
     return { ...weather, hourly: weather.hourly_mid };
   }
   return { ...weather, hourly: undefined };
@@ -959,7 +983,7 @@ function aggregateHourlyForDay(
   const arrs: number[][] = [];
   if (Array.isArray(h[base])) arrs.push(h[base]);
   for (const k of Object.keys(h)) {
-    if (k.startsWith(base + "_") && Array.isArray(h[k])) arrs.push(h[k]);
+    if (isModelKeyForBase(k, base) && Array.isArray(h[k])) arrs.push(h[k]);
   }
   if (!arrs.length) return { value: null, peakHour: null, hourly: [] };
   const hourly: Array<{ h: number; v: number }> = [];
@@ -1178,7 +1202,7 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
     const out: number[][] = [];
     if (Array.isArray(h[base])) out.push(h[base]);
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push(h[k]);
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out.push(h[k]);
     }
     return out;
   };
@@ -1304,7 +1328,7 @@ function buildHourlyProfile(
     const out: Array<{ model: string; arr: number[] }> = [];
     if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
     }
     return out;
   };
@@ -1607,7 +1631,7 @@ function formatDayData(weather: any, dayIndex: number) {
     if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
   }
 
-  return {
+  const out: any = {
     date: d.time[dayIndex],
     models_configured: models,
     models_used: Array.from(contributing).join(","),
@@ -1639,6 +1663,25 @@ function formatDayData(weather: any, dayIndex: number) {
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
+  if (
+    dayIndex <= 4 &&
+    (out.precip?.avg ?? 0) >= 1 &&
+    !out.precip_distribution
+  ) {
+    const w = weatherForHourly(weather, dayIndex);
+    const h = w?.hourly;
+    const reason = !h
+      ? "kein hourly verfügbar"
+      : !h.time?.length
+      ? "hourly.time leer"
+      : !Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"))
+      ? "kein precipitation-Schlüssel"
+      : "Aggregation lieferte 0 Blöcke";
+    console.warn(
+      `[precip_distribution] dayIndex=${dayIndex} date=${out.date} precip.avg=${out.precip?.avg} → null (${reason})`,
+    );
+  }
+  return out;
 }
 
 // Überschreibt für einen Tag die stündlich abgeleiteten Felder (tmin, tmax, precip,
@@ -1655,7 +1698,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
     const out: Record<string, number[]> = {};
     if (Array.isArray(h[base])) out["default"] = h[base];
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
     }
     return out;
   };
@@ -1774,7 +1817,7 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
     const out: Record<string, number[]> = {};
     if (Array.isArray(h[base])) out["default"] = h[base];
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
     }
     return out;
   };
@@ -2232,7 +2275,7 @@ Tagesmittel "cloudcover.avg" darf den Tagesgang aus dem STUNDENPROFIL NIEMALS ü
     "Wenn der Datensatz ein Feld `nowcast` enthält: nutze `observed_now` (aktuelle Stationswerte) und `next_2h.trend` als verlässliche Anker für die ersten Stunden. Wenn `nowcast.confidence` 'niedrig' ist, formuliere vorsichtiger ('zeichnet sich ab', 'deutet sich an', 'unsichere Lage'). Bei `next_2h.trend === 'zunehmend'` Niederschlag explizit erwähnen, bei 'trocken' keine Schauer ankündigen. Bei `night_fog_likely === true` auf mögliches Aufkommen von Nebel hinweisen statt auf besonders kalte Nacht.",
     "",
     "=== NIEDERSCHLAGS-TAGESGANG ===",
-    "Wenn der Datensatz ein Feld `precip_distribution` enthält (verfügbar für Tag 0–4), beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- ABSOLUT VERBOTEN: eine Tageszeit für Niederschlag zu nennen, die NICHT durch `precip_distribution.peak_block` oder `peak_hour` gedeckt ist. Wenn z. B. `peak_block` = 'afternoon' ist, darf NICHT 'am Morgen Regen' geschrieben werden.\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Wenn `peak_hour` gesetzt ist, die Stunde im Text grob nennen ('um den Mittag', 'gegen 17 Uhr', 'in den späten Nachmittagsstunden') — nie als exakte Uhrzeit ('um 14:00').\n- `dry_windows` (≥ 3h trocken) explizit als 'längere trockene Phase am Vormittag' o. ä. erwähnen, wenn es zwischen Niederschlagsphasen liegt.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` FEHLT (ab Tag 5): KEINE konkrete Tageszeit für Niederschlag erfinden — generisch 'im Tagesverlauf zeitweise', 'verbreitet zeitweise' o. ä. verwenden.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
+    "Wenn der Datensatz ein Feld `precip_distribution` enthält (verfügbar für Tag 0–4), beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- ABSOLUT VERBOTEN: eine Tageszeit für Niederschlag zu nennen, die NICHT durch `precip_distribution.peak_block` oder `peak_hour` gedeckt ist. Wenn z. B. `peak_block` = 'afternoon' ist, darf NICHT 'am Morgen Regen' geschrieben werden.\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Wenn `peak_hour` gesetzt ist, die Stunde im Text grob nennen ('um den Mittag', 'gegen 17 Uhr', 'in den späten Nachmittagsstunden') — nie als exakte Uhrzeit ('um 14:00').\n- `dry_windows` (≥ 3h trocken) explizit als 'längere trockene Phase am Vormittag' o. ä. erwähnen, wenn es zwischen Niederschlagsphasen liegt.\n- WETTERBESSERUNG / WETTERVERSCHLECHTERUNG (PFLICHT): Bei asymmetrischer Niederschlagsverteilung MUSS der Verlauf chronologisch benannt werden:\n  • peak_block = 'night' oder 'morning' UND afternoon < 1 mm UND evening < 1 mm → 'am Vormittag noch Regen, im Tagesverlauf Wetterbesserung mit Auflockerungen, am Nachmittag und Abend weitgehend trocken'.\n  • peak_block = 'afternoon' oder 'evening' UND morning < 1 mm → 'am Vormittag trocken, am Nachmittag/Abend aufkommende Schauer/Regen'.\n  • peak_block = 'evening' UND morning + afternoon < 1 mm → 'tagsüber meist trocken, erst am Abend Regen'.\n  Das blosse Paraphrasieren der Tagessumme ('zeitweise Schauer') ist in diesen Fällen NICHT zulässig.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen/sollen als trocken/niederschlagsfrei beschrieben werden, wenn sie zur Tagesgang-Story beitragen.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` FEHLT (ab Tag 5): KEINE konkrete Tageszeit für Niederschlag erfinden — generisch 'im Tagesverlauf zeitweise', 'verbreitet zeitweise' o. ä. verwenden.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
     "",
     "=== STUNDENPROFIL (TAG 0 + 1) ===",
     "Wenn im userPrompt ein Block 'STUNDENPROFIL' folgt, ist das die HÖCHSTE Auflösung des Tagesgangs (eine Zeile pro Stunde, Median über alle verfügbaren Modelle, in Klammern die Modell-Streuung). Nutze ihn primär zur Bestimmung wann genau Bewölkung, Niederschlag, Sonne oder Wind wechseln. Übersetze Stundenangaben in Tageszeit-Bezüge ('am Vormittag', 'gegen Mittag', 'am späten Nachmittag', 'in der ersten Nachthälfte') — nie exakte Uhrzeiten nennen. Bei grosser Streuung (±) vorsichtig formulieren ('zeichnet sich ab', 'lokal unterschiedlich'). Wenn das Profil widersprüchlich zu den Tagesaggregaten ist, hat das Profil Vorrang für die Tagesgang-Beschreibung; die Aggregate (tmin/tmax) bleiben für die Temperaturangaben verbindlich. Spalte 'Quelle' (nur Tag 0) ist ein internes Qualitätssignal: 'obs'-Werte sind verbindlich und haben Vorrang vor Modellwerten, 'mix' = Übergang für die laufende Stunde, 'mod' = Modellprognose. WICHTIG: Die Datenquelle darf im Text NICHT erwähnt werden — Begriffe wie 'gemessen', 'beobachtet', 'laut Messung', 'Stationsdaten', 'im Rückblick' o. Ä. sind verboten. Die Prognose bleibt durchgehend eine einheitliche Wetterbeschreibung, unabhängig davon ob ein Wert aus Messung oder Modell stammt.",

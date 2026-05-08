@@ -1,45 +1,46 @@
-## Problem
+## Befund Dienstag (12.05.)
 
-Im Sonntagseintrag (Tag 2) steht "Am Morgen und Vormittag … zeitweise Regen", obwohl die Modelle den Niederschlag auf Nachmittag/Abend legen.
+`weather_data.precip_distribution` ist im gespeicherten Eintrag **null**, obwohl `precip.avg = 13.6 mm` und Modelle den Schwerpunkt vormittags sehen. Ohne Tagesgang-Anker fällt die KI auf die Tagessumme zurück und schreibt pauschal "zeitweise Regenschauer" — eine Wetterbesserung am Nachmittag wird nicht erkannt, weil die Information schlicht nicht im Prompt ankommt.
 
-Ursache: `precip_distribution` und `hourly_profile` werden in `formatDayData` (`src/server/forecast.functions.ts`, Zeile 1615/1616) **nur für `dayIndex <= 1`** erzeugt. Zusätzlich liefert `fetchWeather` Stundenwerte ausschliesslich aus dem Short-Tier (Zeile 763 — Tag 0/1 CH-Modelle). Ab Tag 2 sieht die KI also nur eine Tagessumme (3.9 mm) und rät die Tageszeit — aktuell falsch.
+Drei zusammenwirkende Ursachen:
 
-## Ziel
-
-Die KI soll für Tag 2 bis Tag 4 wissen, **wann** am Tag der Regen fällt, statt zu raten.
+1. **Prefix-Bug in `computePrecipDistribution`** (`src/server/forecast.functions.ts:1170 ff.`). Der Sammler iteriert `Object.keys(h)` und nimmt jeden Schlüssel mit `startsWith("precipitation_")` als mm-Array — also auch `precipitation_probability_<model>`. Dadurch landen 0–100-%-Werte in der mm-Summe, die Block-Aggregation wird unbrauchbar bzw. degeneriert in Edge-Cases zu null/0.
+2. **Kein Mid-Tier-Fallback für Tag 0/1**. `weatherForHourly` liefert für `dayIndex <= 1` `weather` unverändert. Wenn der Short-Tier (CH-Modelle) leer/limitiert zurückkommt — wie aktuell sichtbar (`models_used` enthält für Tag 0 nur `icon_d2`, kein `meteoswiss_icon_ch1` / `arome`) —, ist `weather.hourly` undefined und `precip_distribution` wird null.
+3. **Prompt fordert keine aktive Wetterbesserung**. Die bestehende Regel sagt nur "andere Blöcke *dürfen* als trocken beschrieben werden". Eine asymmetrische Niederschlagsverteilung (vormittags Regen, nachmittags trocken) wird nicht zwingend als Tagesverlauf benannt.
 
 ## Änderungen (nur `src/server/forecast.functions.ts`)
 
-1. **Mid-Tier Hourly aktivieren**
-   - In `fetchWeather` (Zeile 742–745) den Mid-Tier-Call mit `includeHourly: true` ausführen.
-   - Cache-Key um `:h` ergänzen, damit der bestehende Daily-only-Cache nicht kollidiert.
-   - Result-Mapping: `hourly` aus Short-Tier behalten (feinste Auflösung); zusätzlich `hourly_mid` aus `midData?.hourly` durchreichen.
+### 1. Prefix-Bug fixen
+- Helper für die Modellschlüssel-Sammlung: nur Keys akzeptieren, die NICHT `_probability` enthalten und genau dem Schema `<base>_<modelName>` folgen.
+- Anwenden auf `computePrecipDistribution` (für `precArrs`) und auf alle weiteren Stellen, die denselben Prefix-Trick nutzen (`buildHourlyProfile`, `aggregateHourlyForDay`, `refineDayFromHour`). Diese Funktionen funktionieren heute teilweise nur "zufällig", weil sie kombinierte Werte mitteln.
 
-2. **Hourly-Quelle pro Tag wählen**
-   - Neue Hilfsfunktion `pickHourly(weather, dayIndex)`: Tag 0/1 → `weather.hourly` (Short, CH-Modelle), Tag 2–4 → `weather.hourly_mid` (ICON-CH2/D2/IFS/ARPEGE/GFS), darüber hinaus → null.
-   - `computePrecipDistribution`, `buildHourlyProfile`, `assessThunderstormRisk`, `assessGusts`, `detectFogDissipation` so aufrufen, dass sie das passende `hourly`-Objekt sehen (kleine Wrapper-Variante oder Parameter `hourlySource`).
+### 2. Hourly-Fallback Short → Mid für Tag 0/1
+- `weatherForHourly(weather, dayIndex)` so anpassen, dass für `dayIndex <= 1` zuerst `weather.hourly` geprüft wird; ist die Quelle leer (kein `time`-Array oder kein `precipitation*`-Schlüssel), auf `weather.hourly_mid` zurückfallen.
+- Damit ist auch bei Short-Tier-Ausfall ein Tagesgang vorhanden (gröber, aber existent).
 
-3. **`formatDayData` erweitern (Zeile 1615–1625)**
-   - `precip_distribution` für `dayIndex <= 4` berechnen, sofern die gewählte Hourly-Quelle den Tag abdeckt; sonst null.
-   - `hourly_profile` ebenfalls für `dayIndex <= 4` (cloud/sun-Raster bleibt für Tag 0/1 fein; für 2–4 reicht das Niederschlags-/Wolkenraster aus dem Mid-Tier).
-   - `peak_hour`, `dry_windows`, `wet_hours` pro Block (existieren bereits in `computePrecipDistribution`) werden so automatisch in `weather_data` und in den Prompt mitgegeben.
+### 3. Diagnose-Log
+- In `formatDayData`: wenn `precip.avg >= 1 mm` aber `precip_distribution === null`, `console.warn` mit `dayIndex`, Datum und Grund (kein hourly / kein precipitation-Key / 0 Blöcke). Hilft, künftige Stille-Bugs früh zu sehen.
 
-4. **Prompt-Hinweis schärfen**
-   - Im System-Prompt-Abschnitt zu Niederschlag eine Regel ergänzen: "Wenn `precip_distribution` vorhanden ist, beschreibe den Niederschlag chronologisch nach dem Block mit dem höchsten `precip_mm`/`max_prob`. Erfinde keine Tageszeit, wenn nur die Tagessumme vorliegt — dann 'im Tagesverlauf' / 'zeitweise' verwenden."
+### 4. Prompt: Wetterbesserung verbindlich machen
+Im Block "=== NIEDERSCHLAGS-TAGESGANG ===" (Zeile ~2235) ergänzen:
+- "Wenn `peak_block` = `morning` ODER `night` und sowohl `afternoon` als auch `evening` < 1 mm haben (ggf. zusätzlich `dry_windows` mit `from <= 14`), MUSS der Wetterverlauf-Absatz die Wetterbesserung explizit benennen — z. B. 'am Vormittag noch Regen, am Nachmittag Auflockerungen und teils sonnig', 'Wetterbesserung im Tagesverlauf', 'am Nachmittag und Abend trocken'."
+- Analog für `peak_block` = `afternoon`/`evening` mit trockenem Vormittag: "am Vormittag trocken, am Nachmittag/Abend Schauer".
+- Neue Pflicht: bei Asymmetrie zwischen Blöcken die Begriffe "im Tagesverlauf", "im weiteren Verlauf" oder "Wetterbesserung" verwenden, statt nur Tagesmittel zu paraphrasieren.
 
 ## Was wir nicht anfassen
 
-- UI / `WeatherDataView` bleibt unverändert (das JSON ergänzt sich automatisch).
-- Bias-Correction, Ensemble, Lightning-Off-Logik, Auto-Forecast-Cron unverändert.
-- Long-Tier (Tag 5–10) bleibt ohne Hourly — dort soll die KI weiterhin generisch formulieren.
-- Keine DB-Migration nötig.
+- UI / `WeatherDataView` bleibt unverändert.
+- Bias-Correction, Ensemble, Lightning-Off-Logik unverändert.
+- Keine DB-Migration.
 
 ## Validierung
 
-- Forecast `8ddb31cf-…` neu generieren.
-- In `weather_data` für Tag 2 (Sonntag) bis Tag 4 muss `precip_distribution` mit den vier Blöcken erscheinen; erwartet für Sonntag: `afternoon`/`evening` mit höherem `precip_mm` als `morning`.
-- Sonntags-Body sollte dann z.B. lauten: "Am Vormittag stark bewölkt, weitgehend trocken. Am Nachmittag und Abend zeitweise Regen, vereinzelt Schauer."
+1. Forecast `8ddb31cf-…` neu generieren (komplett, nicht nur einzelne Einträge).
+2. `weather_data` für Tag 0–4 muss `precip_distribution` mit Blöcken liefern (kein null mehr).
+3. Für Dienstag erwartet: `peak_block` ≈ `night`/`morning`, `afternoon`/`evening` < 1 mm.
+4. Body-Text soll dann z. B. lauten: "Am Morgen noch zeitweise Regen, im Tagesverlauf Wetterbesserung mit Auflockerungen, am Nachmittag und Abend weitgehend trocken."
 
 ## Risiken
 
-- Open-Meteo-Quota: Der Mid-Tier-Call wird grösser (Hourly für 5 Modelle × 10 Tage). Mitigation: bestehender Tagescache greift bereits; zusätzlich `forecast_days` für Mid-Tier-Hourly optional auf 5 begrenzen.
+- Mid-Tier-Fallback für Tag 0/1 bringt gröbere Auflösung als CH-Modelle — nur wirksam, wenn Short-Tier leer ist.
+- Schärfere Prompt-Regel kann selten zu früh "Wetterbesserung" diagnostizieren, wenn `peak_block` knapp über 1 mm liegt; mit der bestehenden Intensitätsregel aber abgesichert.
