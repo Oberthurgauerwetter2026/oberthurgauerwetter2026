@@ -9,6 +9,7 @@ import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-c
 import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type NowcastResult } from "./nowcast.server";
 import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
 import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
+import { fetchEnsemble, type EnsembleDay } from "./ensemble.server";
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
@@ -69,6 +70,31 @@ function applyRegimeToDay(
     };
   }
 }
+
+// Hängt Ensemble-Perzentile (P10/P50/P90 aus ECMWF/GFS Multi-Model-Ensemble)
+// an den Tag, sofern der Tag-Index ≥ minDayIndex liegt und für das Datum
+// Ensemble-Daten vorliegen. Tag 0+1 nutzen weiter MOSMIX/Multi-Modell + Bias;
+// für mittel-/langfristige Tage ist die Ensemble-Bandbreite aussagekräftiger.
+function applyEnsembleToDay(
+  out: any,
+  dayIndex: number,
+  ensembleByDate: Map<string, EnsembleDay>,
+  minDayIndex: number,
+) {
+  if (!out?.date) return;
+  if (dayIndex < minDayIndex) return;
+  const ens = ensembleByDate.get(out.date);
+  if (!ens) return;
+  out.ensemble = {
+    member_count: ens.member_count,
+    spread_class: ens.spread_class,
+    t_max: ens.t_max,
+    t_min: ens.t_min,
+    precip_sum: ens.precip_sum,
+    wind_max: ens.wind_max,
+  };
+}
+
 async function ensureStaff(supabase: any, userId: string) {
   const { data, error } = await supabase
     .from("user_roles")
@@ -2057,7 +2083,28 @@ Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "d
 WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
 WENN "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: morgens Nebel-/Hochnebelfelder im Flachland (gerne mit "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), ab spätem Vormittag Auflösung, am Nachmittag verbreitet sonnig. Tagesmittel von "sunshine_h"/"cloudcover" dürfen in diesem Fall NICHT für eine pauschale "stark bewölkt"-Aussage genutzt werden — der Tagesgang aus dem Stundenprofil hat Vorrang.
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.
+
+GEWITTER (Feld "thunderstorm"):
+Wenn "thunderstorm.class" gesetzt ist, MUSS das Gewitter-/Konvektionsrisiko explizit im Wetterverlauf-Absatz benannt werden:
+- "isolated" → "lokal kurze Gewitter möglich" oder "vereinzelt Gewitterneigung"
+- "scattered" → "verbreitet Schauer und Gewitter"
+- "widespread" → "kräftige Gewitter mit Hagel- und Sturmböenrisiko"
+- "severe" → "schwere Gewitter mit grossem Hagel und Sturmböen — erhöhte Unwettergefahr"
+Wenn "thunderstorm.peak_hour" vorhanden ist, die Tageszeit nennen ("am späten Nachmittag", "gegen Abend").
+Wenn "thunderstorm.class" fehlt: KEIN Gewitter erfinden — auch nicht aus Niederschlag allein.
+
+NIEDERSCHLAGSPHASE (Feld "precip_phase"):
+Wenn "precip_phase.blocks" gesetzt ist, die Phase pro Tagesabschnitt korrekt benennen:
+- "rain" → "Regen" / "Schauer"
+- "sleet" → "Schneeregen" / "Schnee-Regen-Gemisch"
+- "snow" → "Schneefall" / "Schnee bis ins Flachland"
+- "freezing_rain" → "gefrierender Regen — verbreitet Glatteisgefahr" (zwingend mit Glatteis-Hinweis)
+Mehrere Phasen kombinieren wenn unterschiedlich (z. B. "am Morgen Schneefall, am Nachmittag in Regen übergehend").
+
+LUFTFEUCHTE / NEBEL (Feld "humidity"):
+- "humidity.schwüle" = "schwül" oder "drückend" → im Sommer im Wetterverlauf-Absatz "schwüle Luft" / "drückend-schwüle Luftmasse" erwähnen.
+- "humidity.night_fog_likely" = true → in der ersten Nachthälfte oder am frühen Morgen "Nebel- oder Hochnebelfelder am Morgen möglich" einbauen — auch wenn cloudcover am Tag niedrig ist.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
@@ -2095,7 +2142,27 @@ Bei "wind_regime.class" = "none": KEINE Erwähnung des Druckgradienten.
 SCHNEEFALLGRENZE:
 Wenn "snow_line.class" = "low" UND im Tag Niederschlag fällt (precip.avg ≥ 1 mm), MUSS ein kurzer Hinweis im Wetterverlauf-Absatz stehen, z. B. "Schneefallgrenze um {snow_line.snow_line_min} m" oder "in höheren Lagen Schneefall ab ca. {snow_line.snow_line_min} m".
 Bei "snow_line.class" = "high_terrain_only": optional "auf den höchsten Hügelzügen evtl. Schneeflocken".
-Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.`;
+Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.
+
+WIND-BÖEN (Feld "wind_gusts"):
+Wenn "wind_gusts.label" gesetzt ist, MUSS dieser Begriff zusätzlich zum wind_label im Wind-Absatz auftauchen — mit km/h-Bereich:
+- class = "moderate" → "kräftige Böen um {max_kmh} km/h"
+- class = "strong" → "stürmische Böen um {max_kmh} km/h"
+- class = "stormy" → "Sturmböen um {max_kmh} km/h"
+- class = "severe" → "schwere Sturmböen über {max_kmh} km/h — Unwettergefahr"
+Bei "wind_gusts.peak_hour" Tageszeit nennen ("am späten Nachmittag"). Bei class = "calm" oder fehlendem wind_gusts: KEINE Böen-Erwähnung.
+
+UNSICHERHEIT (Feld "uncertainty"):
+- "uncertainty.overall" = "high" → globale Formulierung "Prognose noch unsicher" / "Modelle uneinig" zulässig.
+- Pro Feld in "uncertainty.by_field": Bei class = "high" und vorhandenen p10/p90 darf die Bandbreite genannt werden (z. B. "Höchstwerte je nach Modell zwischen 18 und 24 Grad", "Niederschlagsmengen sehr unsicher, 2 bis 15 mm möglich", "Windstärke noch unsicher").
+- Bei class = "moderate": vorsichtig formulieren ("teils", "verbreitet", "lokal unterschiedlich").
+- Bei class = "low": konkret und bestimmt formulieren.
+
+ENSEMBLE-BANDBREITE (Feld "ensemble", nur ab Tag 3):
+Wenn "ensemble.t_max" vorhanden ist, ersetze die Punkt-Höchstwerte-Formulierung durch eine Bandbreite, sobald "ensemble.spread_class" = "high" ist:
+"Höchstwerte je nach Wetterentwicklung zwischen {t_max.p10} und {t_max.p90} Grad."
+Bei spread_class = "moderate" optional erwähnen ("Modelle sehen Höchstwerte zwischen X und Y Grad"). Bei "low" wie gewohnt "Höchstwerte um Z Grad." mit p50.
+Analog für "ensemble.precip_sum" bei spread_class = "high": "Niederschlagsmengen unsicher, je nach Modellauf {p10} bis {p90} mm möglich."`;
 
 const STRUCTURE_AND_EXAMPLES = `PFLICHT-STRUKTUR JEDES TAGES (genau in dieser Reihenfolge, jeweils eigener Absatz):
 Absatz 1: Wetterverlauf - Bewölkung, Niederschlag, Gewitter, Sonne mit Tageszeit-Bezug ("am Morgen", "im Tagesverlauf", "am Abend", "gegen Mittag").
@@ -2279,15 +2346,21 @@ export const generateForecast = createServerFn({ method: "POST" })
     const bias: BiasResult | null = biasEnabled && biasStations.length
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
-    const [pressureSeries, snowSeries, nowcastInputs] = await Promise.all([
+    const ensembleEnabled = settings?.ensemble_enabled !== false;
+    const ensembleMinDay = Math.max(0, Math.min(9, settings?.ensemble_min_day ?? 2));
+    const [pressureSeries, snowSeries, nowcastInputs, ensembleSeries] = await Promise.all([
       fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
       fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
       (settings?.nowcast_enabled !== false)
         ? fetchNowcastInputs(lat, lon, biasStations).catch((e) => { console.warn("nowcast inputs failed", e); return null; })
         : Promise.resolve(null),
+      ensembleEnabled
+        ? fetchEnsemble(lat, lon).catch((e) => { console.warn("ensemble failed", e); return [] as EnsembleDay[]; })
+        : Promise.resolve([] as EnsembleDay[]),
     ]);
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
+    const ensembleByDate = new Map(ensembleSeries.map((e) => [e.date, e]));
     const withTopo = (dayIndex: number) => {
       let out = buildDay(dayIndex);
       if (!out) return null;
@@ -2310,6 +2383,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
+      applyEnsembleToDay(out, dayIndex, ensembleByDate, ensembleMinDay);
       if (out.precip_distribution && dayIndex <= 1) {
         const elev = out?.topography?.elev_median ?? 450;
         const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
@@ -2420,15 +2494,21 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
 
-    const [pressureSeries, snowSeries, nowcastInputs] = await Promise.all([
+    const ensembleEnabled2 = settings?.ensemble_enabled !== false;
+    const ensembleMinDay2 = Math.max(0, Math.min(9, settings?.ensemble_min_day ?? 2));
+    const [pressureSeries, snowSeries, nowcastInputs, ensembleSeries] = await Promise.all([
       fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
       fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
       (settings?.nowcast_enabled !== false)
         ? fetchNowcastInputs(lat, lon, biasStations).catch((e) => { console.warn("nowcast inputs failed", e); return null; })
         : Promise.resolve(null),
+      ensembleEnabled2
+        ? fetchEnsemble(lat, lon).catch((e) => { console.warn("ensemble failed", e); return [] as EnsembleDay[]; })
+        : Promise.resolve([] as EnsembleDay[]),
     ]);
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
+    const ensembleByDate = new Map(ensembleSeries.map((e) => [e.date, e]));
 
     const tag0WMosmix2 = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
     const tag0WOm2 = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
@@ -2465,6 +2545,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
+      applyEnsembleToDay(out, dayIndex, ensembleByDate, ensembleMinDay2);
       if (out.precip_distribution && dayIndex <= 1) {
         const elev = out?.topography?.elev_median ?? 450;
         const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
