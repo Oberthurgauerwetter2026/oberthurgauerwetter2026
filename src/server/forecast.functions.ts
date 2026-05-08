@@ -2116,7 +2116,27 @@ Bei "wind_regime.class" = "none": KEINE Erwähnung des Druckgradienten.
 SCHNEEFALLGRENZE:
 Wenn "snow_line.class" = "low" UND im Tag Niederschlag fällt (precip.avg ≥ 1 mm), MUSS ein kurzer Hinweis im Wetterverlauf-Absatz stehen, z. B. "Schneefallgrenze um {snow_line.snow_line_min} m" oder "in höheren Lagen Schneefall ab ca. {snow_line.snow_line_min} m".
 Bei "snow_line.class" = "high_terrain_only": optional "auf den höchsten Hügelzügen evtl. Schneeflocken".
-Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.`;
+Bei "snow_line.class" = "none" oder fehlend: KEINE Erwähnung der Schneefallgrenze.
+
+WIND-BÖEN (Feld "wind_gusts"):
+Wenn "wind_gusts.label" gesetzt ist, MUSS dieser Begriff zusätzlich zum wind_label im Wind-Absatz auftauchen — mit km/h-Bereich:
+- class = "moderate" → "kräftige Böen um {max_kmh} km/h"
+- class = "strong" → "stürmische Böen um {max_kmh} km/h"
+- class = "stormy" → "Sturmböen um {max_kmh} km/h"
+- class = "severe" → "schwere Sturmböen über {max_kmh} km/h — Unwettergefahr"
+Bei "wind_gusts.peak_hour" Tageszeit nennen ("am späten Nachmittag"). Bei class = "calm" oder fehlendem wind_gusts: KEINE Böen-Erwähnung.
+
+UNSICHERHEIT (Feld "uncertainty"):
+- "uncertainty.overall" = "high" → globale Formulierung "Prognose noch unsicher" / "Modelle uneinig" zulässig.
+- Pro Feld in "uncertainty.by_field": Bei class = "high" und vorhandenen p10/p90 darf die Bandbreite genannt werden (z. B. "Höchstwerte je nach Modell zwischen 18 und 24 Grad", "Niederschlagsmengen sehr unsicher, 2 bis 15 mm möglich", "Windstärke noch unsicher").
+- Bei class = "moderate": vorsichtig formulieren ("teils", "verbreitet", "lokal unterschiedlich").
+- Bei class = "low": konkret und bestimmt formulieren.
+
+ENSEMBLE-BANDBREITE (Feld "ensemble", nur ab Tag 3):
+Wenn "ensemble.t_max" vorhanden ist, ersetze die Punkt-Höchstwerte-Formulierung durch eine Bandbreite, sobald "ensemble.spread_class" = "high" ist:
+"Höchstwerte je nach Wetterentwicklung zwischen {t_max.p10} und {t_max.p90} Grad."
+Bei spread_class = "moderate" optional erwähnen ("Modelle sehen Höchstwerte zwischen X und Y Grad"). Bei "low" wie gewohnt "Höchstwerte um Z Grad." mit p50.
+Analog für "ensemble.precip_sum" bei spread_class = "high": "Niederschlagsmengen unsicher, je nach Modellauf {p10} bis {p90} mm möglich."`;
 
 const STRUCTURE_AND_EXAMPLES = `PFLICHT-STRUKTUR JEDES TAGES (genau in dieser Reihenfolge, jeweils eigener Absatz):
 Absatz 1: Wetterverlauf - Bewölkung, Niederschlag, Gewitter, Sonne mit Tageszeit-Bezug ("am Morgen", "im Tagesverlauf", "am Abend", "gegen Mittag").
