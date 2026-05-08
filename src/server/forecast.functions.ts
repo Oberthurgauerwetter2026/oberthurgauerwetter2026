@@ -100,12 +100,13 @@ const DAILY_VARS = [
   "precipitation_sum",
   "precipitation_probability_max",
   "windspeed_10m_max",
+  "wind_gusts_10m_max",
   "winddirection_10m_dominant",
   "sunshine_duration",
   "weathercode",
   "cloudcover_mean",
 ];
-const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "weathercode", "sunshine_duration"];
+const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
 
 // ===== Wind helpers =====
 // Circular mean over compass degrees (0-360). Returns null for empty input.
