@@ -1663,7 +1663,29 @@ function formatDayData(weather: any, dayIndex: number) {
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
+  // Diagnose: signifikanter Niederschlag, aber kein Tagesgang berechnet → Quelle prüfen.
+  if (
+    dayIndex <= 4 &&
+    (out.precip?.avg ?? 0) >= 1 &&
+    !out.precip_distribution
+  ) {
+    const w = weatherForHourly(weather, dayIndex);
+    const h = w?.hourly;
+    const reason = !h
+      ? "kein hourly verfügbar"
+      : !h.time?.length
+      ? "hourly.time leer"
+      : !Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"))
+      ? "kein precipitation-Schlüssel"
+      : "Aggregation lieferte 0 Blöcke";
+    console.warn(
+      `[precip_distribution] dayIndex=${dayIndex} date=${out.date} precip.avg=${out.precip?.avg} → null (${reason})`,
+    );
+  }
+  return out;
 }
+
+function formatDayDataInner(weather: any, dayIndex: number): any {
 
 // Überschreibt für einen Tag die stündlich abgeleiteten Felder (tmin, tmax, precip,
 // precip_prob, wind_max, cloudcover, sunshine_h) so, dass nur Stunden ab `fromHour`
