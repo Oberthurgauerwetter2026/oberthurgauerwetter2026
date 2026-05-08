@@ -1670,7 +1670,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
     const out: Record<string, number[]> = {};
     if (Array.isArray(h[base])) out["default"] = h[base];
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
     }
     return out;
   };
