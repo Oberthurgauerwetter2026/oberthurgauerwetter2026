@@ -757,12 +757,12 @@ async function fetchWeather(
   // Mid-Tier jetzt MIT Hourly: liefert Stundenprofil für Tag 2–4
   // (CH-Modelle des Short-Tiers reichen typischerweise nur ~3 Tage).
   const midData = await getOrSetCache(
-    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}:h`,
+    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}:h2`,
     () => fetchOpenMeteoOptional(lat, lon, midModels, true),
   );
   await wait(500);
   const longData = await getOrSetCache(
-    `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
+    `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}:v2`,
     () => fetchOpenMeteoOptional(lat, lon, longModels, false),
   );
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
