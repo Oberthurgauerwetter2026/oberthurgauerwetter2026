@@ -1086,6 +1086,8 @@ function buildUncertainty(tmax: any, tmin: any, precip: any, wind_max: any) {
     : items.some((i) => i.class === "moderate") ? "moderate" : "low";
   return { overall, by_field: items };
 }
+
+function pickBestSource(weather: any, dayIndex: number) {
   // Use the most detailed model set available for this dayIndex.
   // ICON-CH1 ~33h, ICON-CH2 ~5d, ECMWF/GFS ~10d.
   if (dayIndex <= 1) return { res: weather.byModel.short, models: weather.modelLists.short, tier: "short" as const };
