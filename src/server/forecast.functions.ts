@@ -70,7 +70,30 @@ function applyRegimeToDay(
     };
   }
 }
-async function ensureStaff(supabase: any, userId: string) {
+
+// Hängt Ensemble-Perzentile (P10/P50/P90 aus ECMWF/GFS Multi-Model-Ensemble)
+// an den Tag, sofern der Tag-Index ≥ minDayIndex liegt und für das Datum
+// Ensemble-Daten vorliegen. Tag 0+1 nutzen weiter MOSMIX/Multi-Modell + Bias;
+// für mittel-/langfristige Tage ist die Ensemble-Bandbreite aussagekräftiger.
+function applyEnsembleToDay(
+  out: any,
+  dayIndex: number,
+  ensembleByDate: Map<string, EnsembleDay>,
+  minDayIndex: number,
+) {
+  if (!out?.date) return;
+  if (dayIndex < minDayIndex) return;
+  const ens = ensembleByDate.get(out.date);
+  if (!ens) return;
+  out.ensemble = {
+    member_count: ens.member_count,
+    spread_class: ens.spread_class,
+    t_max: ens.t_max,
+    t_min: ens.t_min,
+    precip_sum: ens.precip_sum,
+    wind_max: ens.wind_max,
+  };
+}
   const { data, error } = await supabase
     .from("user_roles")
     .select("role")
