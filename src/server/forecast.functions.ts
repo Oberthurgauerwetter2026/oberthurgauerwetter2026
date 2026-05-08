@@ -974,7 +974,7 @@ function aggregateHourlyForDay(
   const arrs: number[][] = [];
   if (Array.isArray(h[base])) arrs.push(h[base]);
   for (const k of Object.keys(h)) {
-    if (k.startsWith(base + "_") && Array.isArray(h[k])) arrs.push(h[k]);
+    if (isModelKeyForBase(k, base) && Array.isArray(h[k])) arrs.push(h[k]);
   }
   if (!arrs.length) return { value: null, peakHour: null, hourly: [] };
   const hourly: Array<{ h: number; v: number }> = [];
