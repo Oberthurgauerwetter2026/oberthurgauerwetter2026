@@ -1858,18 +1858,22 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     precip_distribution: dayIndex <= 4 ? computePrecipDistribution(weatherForHourly(weather, dayIndex), dayIndex) : null,
+    cloud_distribution: dayIndex <= 4 ? computeCloudDistribution(weatherForHourly(weather, dayIndex), dayIndex) : null,
     hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex) : null,
-    sky_pattern: dayIndex <= 1
-      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
+    sky_pattern: dayIndex <= 4
+      ? (detectFogDissipation(buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
-    fog_dissipation: dayIndex <= 1
-      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+    fog_dissipation: dayIndex <= 4
+      ? detectFogDissipation(buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex), weathercode?.by_model)
       : null,
     wind_gusts: assessGusts(weatherForHourly(weather, dayIndex), dayIndex),
     thunderstorm: assessThunderstormRisk(weatherForHourly(weather, dayIndex), dayIndex, weathercode?.by_model),
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
+  // Server-seitige Klartext-Story als verbindlicher Anker für die KI
+  out.day_narrative = dayIndex <= 4 ? buildDayNarrative(out) : null;
+
   if (
     dayIndex <= 4 &&
     (out.precip?.avg ?? 0) >= 1 &&
@@ -1887,6 +1891,17 @@ function formatDayData(weather: any, dayIndex: number) {
     console.warn(
       `[precip_distribution] dayIndex=${dayIndex} date=${out.date} precip.avg=${out.precip?.avg} → null (${reason})`,
     );
+  }
+  // Konsistenz-Checks
+  if (dayIndex <= 4) {
+    const pd = out.precip_distribution;
+    const cd = out.cloud_distribution;
+    if (pd?.trend === "improving" && cd?.pattern === "overcast_all_day") {
+      console.warn(`[consistency] dayIndex=${dayIndex} date=${out.date}: trend=improving aber cloud pattern=overcast_all_day`);
+    }
+    if ((out.sunshine_h?.avg ?? 0) >= 9 && (out.cloudcover?.avg ?? 0) >= 70) {
+      console.warn(`[consistency] dayIndex=${dayIndex} date=${out.date}: sunshine_h=${out.sunshine_h?.avg}h aber cloudcover=${out.cloudcover?.avg}%`);
+    }
   }
   return out;
 }
