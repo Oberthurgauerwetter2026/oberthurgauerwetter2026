@@ -1319,7 +1319,7 @@ function buildHourlyProfile(
     const out: Array<{ model: string; arr: number[] }> = [];
     if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
     }
     return out;
   };
