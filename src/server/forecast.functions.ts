@@ -901,7 +901,191 @@ function aggregate(perModel: Record<string, number>) {
   };
 }
 
-function pickBestSource(weather: any, dayIndex: number) {
+// ===== Hourly variable helpers (CAPE, gusts, dewpoint, RH) =====
+// Iteriert die stündlichen Arrays für einen Tag, mittelt über alle Modelle pro Stunde
+// und liefert einen Aggregator (max | avg | sum) über das gesamte Tagesfenster
+// optional begrenzt auf Stunden [hourStart, hourEnd).
+function aggregateHourlyForDay(
+  weather: any,
+  dayIndex: number,
+  base: string,
+  op: "max" | "avg" | "min" | "sum",
+  hourStart: number = 0,
+  hourEnd: number = 24,
+): { value: number | null; peakHour: number | null; hourly: Array<{ h: number; v: number }> } {
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return { value: null, peakHour: null, hourly: [] };
+  const arrs: number[][] = [];
+  if (Array.isArray(h[base])) arrs.push(h[base]);
+  for (const k of Object.keys(h)) {
+    if (k.startsWith(base + "_") && Array.isArray(h[k])) arrs.push(h[k]);
+  }
+  if (!arrs.length) return { value: null, peakHour: null, hourly: [] };
+  const hourly: Array<{ h: number; v: number }> = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const t = h.time[i] as string;
+    if (!t.startsWith(dateStr)) continue;
+    const hr = parseInt(t.slice(11, 13), 10);
+    if (!Number.isFinite(hr) || hr < hourStart || hr >= hourEnd) continue;
+    const vals = arrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+    if (!vals.length) continue;
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    hourly.push({ h: hr, v: mean });
+  }
+  if (!hourly.length) return { value: null, peakHour: null, hourly: [] };
+  let value: number;
+  let peakHour: number | null = null;
+  if (op === "max") {
+    value = -Infinity;
+    for (const r of hourly) {
+      if (r.v > value) { value = r.v; peakHour = r.h; }
+    }
+  } else if (op === "min") {
+    value = Infinity;
+    for (const r of hourly) if (r.v < value) value = r.v;
+  } else if (op === "sum") {
+    value = hourly.reduce((a, b) => a + b.v, 0);
+  } else {
+    value = hourly.reduce((a, b) => a + b.v, 0) / hourly.length;
+  }
+  return { value: Math.round(value * 10) / 10, peakHour, hourly };
+}
+
+// ===== Wind-Böen Klassifizierung =====
+function classifyGusts(maxKmh: number): { class: "calm" | "moderate" | "strong" | "stormy" | "severe"; label: string } {
+  if (maxKmh < 40) return { class: "calm", label: "" };
+  if (maxKmh < 60) return { class: "moderate", label: "kräftige Böen" };
+  if (maxKmh < 80) return { class: "strong", label: "stürmische Böen" };
+  if (maxKmh < 100) return { class: "stormy", label: "Sturmböen" };
+  return { class: "severe", label: "schwere Sturmböen" };
+}
+
+function assessGusts(weather: any, dayIndex: number) {
+  // Bevorzugt das stündliche Maximum aus wind_gusts_10m; ergänzend daily wind_gusts_10m_max.
+  const fromHourly = aggregateHourlyForDay(weather, dayIndex, "wind_gusts_10m", "max");
+  let maxKmh = fromHourly.value;
+  let peakHour = fromHourly.peakHour;
+  if (maxKmh == null) {
+    const dailyAgg = aggregate(collectModelValuesTiered(weather, "wind_gusts_10m_max", dayIndex));
+    maxKmh = dailyAgg?.max ?? null;
+  }
+  if (maxKmh == null) return null;
+  const cls = classifyGusts(maxKmh);
+  if (cls.class === "calm") return { max_kmh: Math.round(maxKmh), class: cls.class, label: null, peak_hour: peakHour };
+  return { max_kmh: Math.round(maxKmh), class: cls.class, label: cls.label, peak_hour: peakHour };
+}
+
+// ===== Gewitter / Konvektion =====
+function assessThunderstormRisk(weather: any, dayIndex: number, weathercodeByModel: Record<string, number> | null | undefined) {
+  const cape = aggregateHourlyForDay(weather, dayIndex, "cape", "max", 8, 22);
+  const li = aggregateHourlyForDay(weather, dayIndex, "lifted_index", "min", 8, 22);
+  const codes = weathercodeByModel ? Object.values(weathercodeByModel) : [];
+  const tsCount = codes.filter((v) => v === 95 || v === 96 || v === 99).length;
+  const tsMajority = codes.length > 0 && tsCount / codes.length > 0.4;
+  const capeMax = cape.value ?? 0;
+  const liMin = li.value ?? 0;
+  let cls: "none" | "isolated" | "scattered" | "widespread" | "severe" = "none";
+  if (capeMax >= 2500 && liMin <= -6) cls = "severe";
+  else if (capeMax >= 1500 && liMin <= -4) cls = "widespread";
+  else if (capeMax >= 500 && liMin <= -2) cls = "scattered";
+  else if (tsMajority || (capeMax >= 200 && liMin <= 0)) cls = "isolated";
+  if (cls === "none") return null;
+  const labels: Record<string, string> = {
+    isolated: "lokal Gewitterneigung",
+    scattered: "verbreitet Gewitterneigung",
+    widespread: "kräftige Gewitter mit Hagel- und Sturmböenrisiko",
+    severe: "schwere Gewitter mit Hagel und Sturmböen",
+  };
+  return {
+    class: cls,
+    label: labels[cls],
+    cape_max: Math.round(capeMax),
+    lifted_index_min: Math.round(liMin * 10) / 10,
+    peak_hour: cape.peakHour,
+    weathercode_majority: tsMajority,
+  };
+}
+
+// ===== Taupunkt / rel. Feuchte =====
+function assessHumidity(weather: any, dayIndex: number, hourlyProfile: HourlyProfileRow[] | null | undefined) {
+  const tdMax = aggregateHourlyForDay(weather, dayIndex, "dewpoint_2m", "max", 11, 20);
+  const rhNight = aggregateHourlyForDay(weather, dayIndex, "relativehumidity_2m", "max", 22, 24);
+  const rhEarly = aggregateHourlyForDay(weather, dayIndex, "relativehumidity_2m", "max", 0, 6);
+  const td = tdMax.value;
+  let schwüle: "none" | "schwül" | "drückend" = "none";
+  if (td != null) {
+    if (td >= 18) schwüle = "drückend";
+    else if (td >= 16) schwüle = "schwül";
+  }
+  // Nebelpotenzial: hohe RH + windstill + klar laut Profil
+  const rhPeak = Math.max(rhNight.value ?? 0, rhEarly.value ?? 0);
+  const calmClear = (hourlyProfile ?? []).filter((r) => r.h <= 6 || r.h >= 22)
+    .some((r) => (r.w ?? 99) <= 5 && (r.c ?? 100) <= 30);
+  const fogLikely = rhPeak >= 95 && calmClear;
+  if (schwüle === "none" && !fogLikely && td == null) return null;
+  return {
+    dewpoint_max_c: td,
+    schwüle,
+    rh_max_pct: Math.round(rhPeak),
+    night_fog_likely: fogLikely,
+  };
+}
+
+// ===== Niederschlagsphase (Regen / Schneeregen / Schnee / gefrierender Regen) =====
+function derivePhaseForBlock(t: number | null, td: number | null, snowLineMin: number | null, elevM: number): "rain" | "sleet" | "snow" | "freezing_rain" | null {
+  if (t == null) return null;
+  if (t < 0) return "freezing_rain";
+  if (t <= 1.5 && (td == null || td <= 0)) return "snow";
+  if (t <= 3) return "sleet";
+  // Wenn Standorthöhe nahe Schneefallgrenze
+  if (snowLineMin != null && elevM >= snowLineMin - 50) return "snow";
+  return "rain";
+}
+
+function assessPrecipPhase(weather: any, dayIndex: number, snowLine: any, elevM: number, precipDistribution: any) {
+  if (!precipDistribution) return null;
+  // Nur sinnvoll wenn überhaupt nennenswert Niederschlag im Tag
+  const total = Object.values(precipDistribution.blocks ?? {}).reduce((a: number, b: any) => a + (b?.precip_mm ?? 0), 0) as number;
+  if (total < 0.5) return null;
+  const tHourly = aggregateHourlyForDay(weather, dayIndex, "temperature_2m", "avg");
+  const tdHourly = aggregateHourlyForDay(weather, dayIndex, "dewpoint_2m", "avg");
+  const blocks = [
+    { name: "morning", from: 6, to: 12 },
+    { name: "afternoon", from: 12, to: 18 },
+    { name: "evening", from: 18, to: 24 },
+  ];
+  const snowMin = snowLine?.snow_line_min ?? null;
+  const out: Record<string, { phase: string; t_avg: number | null; td_avg: number | null }> = {};
+  let anyNonRain = false;
+  for (const blk of blocks) {
+    const tBlock = tHourly.hourly.filter((r) => r.h >= blk.from && r.h < blk.to);
+    const tdBlock = tdHourly.hourly.filter((r) => r.h >= blk.from && r.h < blk.to);
+    if (!tBlock.length) continue;
+    const tAvg = tBlock.reduce((a, b) => a + b.v, 0) / tBlock.length;
+    const tdAvg = tdBlock.length ? tdBlock.reduce((a, b) => a + b.v, 0) / tdBlock.length : null;
+    const phase = derivePhaseForBlock(Math.round(tAvg * 10) / 10, tdAvg, snowMin, elevM);
+    if (!phase) continue;
+    if (phase !== "rain") anyNonRain = true;
+    out[blk.name] = { phase, t_avg: Math.round(tAvg * 10) / 10, td_avg: tdAvg != null ? Math.round(tdAvg * 10) / 10 : null };
+  }
+  if (!Object.keys(out).length || !anyNonRain) return null;
+  return { blocks: out, snow_line_m: snowMin };
+}
+
+// ===== Modell-Spread / Unsicherheit =====
+function buildUncertainty(tmax: any, tmin: any, precip: any, wind_max: any) {
+  const items: Array<{ key: string; class: "low" | "moderate" | "high"; spread: number; p10: number; p90: number }> = [];
+  if (tmax) items.push({ key: "tmax", class: classifyUncertainty(tmax.spread, "temp"), spread: tmax.spread, p10: tmax.p10, p90: tmax.p90 });
+  if (tmin) items.push({ key: "tmin", class: classifyUncertainty(tmin.spread, "temp"), spread: tmin.spread, p10: tmin.p10, p90: tmin.p90 });
+  if (precip) items.push({ key: "precip", class: classifyUncertainty(precip.spread, "precip"), spread: precip.spread, p10: precip.p10, p90: precip.p90 });
+  if (wind_max) items.push({ key: "wind_max", class: classifyUncertainty(wind_max.spread, "wind"), spread: wind_max.spread, p10: wind_max.p10, p90: wind_max.p90 });
+  if (!items.length) return null;
+  const overall: "low" | "moderate" | "high" = items.some((i) => i.class === "high")
+    ? "high"
+    : items.some((i) => i.class === "moderate") ? "moderate" : "low";
+  return { overall, by_field: items };
+}
   // Use the most detailed model set available for this dayIndex.
   // ICON-CH1 ~33h, ICON-CH2 ~5d, ECMWF/GFS ~10d.
   if (dayIndex <= 1) return { res: weather.byModel.short, models: weather.modelLists.short, tier: "short" as const };
