@@ -739,9 +739,11 @@ async function fetchWeather(
   // Short-tier (Tag 0-1) ist immer live; mid/long werden bis Mitternacht gecacht.
   const shortData = await fetchOpenMeteoOptional(lat, lon, shortModels, true);
   await wait(500);
+  // Mid-Tier jetzt MIT Hourly: liefert Stundenprofil für Tag 2–4
+  // (CH-Modelle des Short-Tiers reichen typischerweise nur ~3 Tage).
   const midData = await getOrSetCache(
-    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
-    () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}:h`,
+    () => fetchOpenMeteoOptional(lat, lon, midModels, true),
   );
   await wait(500);
   const longData = await getOrSetCache(
@@ -760,10 +762,22 @@ async function fetchWeather(
   }
   return {
     daily,
-    hourly: shortData?.hourly, // hourly only from short-term (CH-models, finest grid)
+    hourly: shortData?.hourly, // Short-Tier (CH-Modelle, feinste Auflösung) für Tag 0/1
+    hourly_mid: midData?.hourly, // Mid-Tier (ICON-CH2/D2/ARPEGE/IFS/GFS) für Tag 2–4
     byModel: { short: shortData, mid: midData, long: longData },
     modelLists: { short: shortModels, mid: midModels, long: longModels },
   };
+}
+
+// Liefert ein Weather-Objekt mit der für den jeweiligen Tag passenden Hourly-Quelle.
+// Tag 0/1 → Short-Tier (CH-Modelle), Tag 2–4 → Mid-Tier, sonst → ohne Hourly.
+function weatherForHourly(weather: any, dayIndex: number): any {
+  if (!weather) return weather;
+  if (dayIndex <= 1) return weather;
+  if (dayIndex <= 4 && weather.hourly_mid) {
+    return { ...weather, hourly: weather.hourly_mid };
+  }
+  return { ...weather, hourly: undefined };
 }
 
 // Builds a minimal weather-shaped object from MOSMIX-only data when Open-Meteo is unavailable.
@@ -1612,16 +1626,16 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
+    precip_distribution: dayIndex <= 4 ? computePrecipDistribution(weatherForHourly(weather, dayIndex), dayIndex) : null,
+    hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex) : null,
     sky_pattern: dayIndex <= 1
       ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
     fog_dissipation: dayIndex <= 1
       ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
       : null,
-    wind_gusts: assessGusts(weather, dayIndex),
-    thunderstorm: assessThunderstormRisk(weather, dayIndex, weathercode?.by_model),
+    wind_gusts: assessGusts(weatherForHourly(weather, dayIndex), dayIndex),
+    thunderstorm: assessThunderstormRisk(weatherForHourly(weather, dayIndex), dayIndex, weathercode?.by_model),
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
@@ -2218,7 +2232,7 @@ Tagesmittel "cloudcover.avg" darf den Tagesgang aus dem STUNDENPROFIL NIEMALS ü
     "Wenn der Datensatz ein Feld `nowcast` enthält: nutze `observed_now` (aktuelle Stationswerte) und `next_2h.trend` als verlässliche Anker für die ersten Stunden. Wenn `nowcast.confidence` 'niedrig' ist, formuliere vorsichtiger ('zeichnet sich ab', 'deutet sich an', 'unsichere Lage'). Bei `next_2h.trend === 'zunehmend'` Niederschlag explizit erwähnen, bei 'trocken' keine Schauer ankündigen. Bei `night_fog_likely === true` auf mögliches Aufkommen von Nebel hinweisen statt auf besonders kalte Nacht.",
     "",
     "=== NIEDERSCHLAGS-TAGESGANG ===",
-    "Wenn der Datensatz ein Feld `precip_distribution` enthält, beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Wenn `peak_hour` gesetzt ist, die Stunde im Text grob nennen ('um den Mittag', 'gegen 17 Uhr', 'in den späten Nachmittagsstunden') — nie als exakte Uhrzeit ('um 14:00').\n- `dry_windows` (≥ 3h trocken) explizit als 'längere trockene Phase am Vormittag' o. ä. erwähnen, wenn es zwischen Niederschlagsphasen liegt.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` fehlt: wie bisher, Tagesverlauf frei nach Standardregeln formulieren.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
+    "Wenn der Datensatz ein Feld `precip_distribution` enthält (verfügbar für Tag 0–4), beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- ABSOLUT VERBOTEN: eine Tageszeit für Niederschlag zu nennen, die NICHT durch `precip_distribution.peak_block` oder `peak_hour` gedeckt ist. Wenn z. B. `peak_block` = 'afternoon' ist, darf NICHT 'am Morgen Regen' geschrieben werden.\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Wenn `peak_hour` gesetzt ist, die Stunde im Text grob nennen ('um den Mittag', 'gegen 17 Uhr', 'in den späten Nachmittagsstunden') — nie als exakte Uhrzeit ('um 14:00').\n- `dry_windows` (≥ 3h trocken) explizit als 'längere trockene Phase am Vormittag' o. ä. erwähnen, wenn es zwischen Niederschlagsphasen liegt.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen als trocken/niederschlagsfrei beschrieben werden.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` FEHLT (ab Tag 5): KEINE konkrete Tageszeit für Niederschlag erfinden — generisch 'im Tagesverlauf zeitweise', 'verbreitet zeitweise' o. ä. verwenden.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
     "",
     "=== STUNDENPROFIL (TAG 0 + 1) ===",
     "Wenn im userPrompt ein Block 'STUNDENPROFIL' folgt, ist das die HÖCHSTE Auflösung des Tagesgangs (eine Zeile pro Stunde, Median über alle verfügbaren Modelle, in Klammern die Modell-Streuung). Nutze ihn primär zur Bestimmung wann genau Bewölkung, Niederschlag, Sonne oder Wind wechseln. Übersetze Stundenangaben in Tageszeit-Bezüge ('am Vormittag', 'gegen Mittag', 'am späten Nachmittag', 'in der ersten Nachthälfte') — nie exakte Uhrzeiten nennen. Bei grosser Streuung (±) vorsichtig formulieren ('zeichnet sich ab', 'lokal unterschiedlich'). Wenn das Profil widersprüchlich zu den Tagesaggregaten ist, hat das Profil Vorrang für die Tagesgang-Beschreibung; die Aggregate (tmin/tmax) bleiben für die Temperaturangaben verbindlich. Spalte 'Quelle' (nur Tag 0) ist ein internes Qualitätssignal: 'obs'-Werte sind verbindlich und haben Vorrang vor Modellwerten, 'mix' = Übergang für die laufende Stunde, 'mod' = Modellprognose. WICHTIG: Die Datenquelle darf im Text NICHT erwähnt werden — Begriffe wie 'gemessen', 'beobachtet', 'laut Messung', 'Stationsdaten', 'im Rückblick' o. Ä. sind verboten. Die Prognose bleibt durchgehend eine einheitliche Wetterbeschreibung, unabhängig davon ob ein Wert aus Messung oder Modell stammt.",
@@ -2384,9 +2398,9 @@ export const generateForecast = createServerFn({ method: "POST" })
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
       applyEnsembleToDay(out, dayIndex, ensembleByDate, ensembleMinDay);
-      if (out.precip_distribution && dayIndex <= 1) {
+      if (out.precip_distribution && dayIndex <= 4) {
         const elev = out?.topography?.elev_median ?? 450;
-        const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
+        const phase = assessPrecipPhase(weatherForHourly(weather, dayIndex), dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
         if (phase) out.precip_phase = phase;
       }
       return normalizeSkyDiagnostics(out);
@@ -2546,9 +2560,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
       applyEnsembleToDay(out, dayIndex, ensembleByDate, ensembleMinDay2);
-      if (out.precip_distribution && dayIndex <= 1) {
+      if (out.precip_distribution && dayIndex <= 4) {
         const elev = out?.topography?.elev_median ?? 450;
-        const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
+        const phase = assessPrecipPhase(weatherForHourly(weather, dayIndex), dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
         if (phase) out.precip_phase = phase;
       }
       return normalizeSkyDiagnostics(out);
