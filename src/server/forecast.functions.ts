@@ -94,6 +94,8 @@ function applyEnsembleToDay(
     wind_max: ens.wind_max,
   };
 }
+
+async function ensureStaff(supabase: any, userId: string) {
   const { data, error } = await supabase
     .from("user_roles")
     .select("role")
