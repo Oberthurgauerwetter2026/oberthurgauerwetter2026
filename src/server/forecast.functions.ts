@@ -1193,7 +1193,7 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
     const out: number[][] = [];
     if (Array.isArray(h[base])) out.push(h[base]);
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push(h[k]);
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out.push(h[k]);
     }
     return out;
   };
