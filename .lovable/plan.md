@@ -1,104 +1,75 @@
-# Erweiterung Wetterpipeline – 7 neue Features
+## Weiterführung: Prompt-Integration + Lightning + Ensemble
 
-Ziel: Punkte 1, 2, 7, 9, 10, 11, 12 aus der Lückenliste umsetzen. Alles greift in `src/server/forecast.functions.ts` ein, plus neue Server-Module und eine Mini-Migration für `app_settings`.
+### 1. Prompt-Integration (forecast.functions.ts)
 
-## Übersicht
+Die neuen Felder aus `formatDayData` (gusts, thunderstorm, humidity, precip_phase, uncertainty) sind aktuell im `weather_data` JSON, aber das AI-Modell weiß nicht, wie es sie verwenden soll. Ergänzungen in `DEFAULT_SKY_RULES` und `DEFAULT_WIND_RULES`:
 
-| # | Feature | Quelle | Aufwand |
-|---|---------|--------|---------|
-| 1 | Wind-Böen | Open-Meteo `wind_gusts_10m` | XS |
-| 2 | Gewitter (CAPE + Lifted Index) | Open-Meteo `cape`, `lifted_index` | S |
-| 7 | Taupunkt + rel. Feuchte | Open-Meteo `dewpoint_2m`, `relativehumidity_2m` | S |
-| 9 | Niederschlagsphase | Ableitung aus T + Td + Schneefallgrenze | S |
-| 10 | Blitzdaten | Blitzortung.org-Feed (Bounding-Box JSON) | M |
-| 11 | Modell-Spread / Unsicherheit | Aus bestehenden `byModel`-Werten | S |
-| 12 | Ensemble (P10/P50/P90) | Open-Meteo `/ensemble` (ECMWF + GEFS) | M |
+**SKY_RULES erweitern um:**
+- `thunderstorm.label` → bei `scattered`/`widespread`/`severe` explizit "Gewitter" / "teils kräftige Gewitter" / "schwere Gewitter mit Hagelgefahr" einbauen
+- `precip_phase` → "Regen" / "Schneeregen" / "Schnee" / "gefrierender Regen (Glatteisgefahr)" sauber benennen
+- `humidity.fog_potential` → bei klaren Nächten mit hoher Feuchte "Nebel-/Hochnebelfelder am Morgen" erwähnen
+- `humidity.muggy` → im Sommer bei Schwüle-Hinweis "schwül" verwenden
 
----
+**WIND_RULES erweitern um:**
+- `wind_gusts.label` → bei `kräftige Böen` / `stürmische Böen` / `Sturmböen` zwingend benennen mit km/h-Bereich
+- `uncertainty.wind` → bei `high` Formulierung "Windstärke noch unsicher" zulassen
 
-## 1. Wind-Böen (XS)
+**Globale Regel ergänzen:**
+- `uncertainty.temperature` = `high` → "Temperaturprognose noch unsicher, mögliche Bandbreite X–Y°C"
+- Bei Tag ≥3: Ensemble-Spannweite (sobald #12 fertig) als Bandbreite nutzen
 
-- `HOURLY_VARS` um `wind_gusts_10m` erweitern.
-- Aggregation: Tagesmaximum + Zeitfenster der stärksten Böen.
-- Klassen: `<40` ignorieren · `40–60` „kräftige Böen" · `60–80` „stürmische Böen" · `>80` „Sturmböen".
-- Deterministischer Satz im Wind-Absatz, Pflicht-Hinweis im `DEFAULT_WIND_RULES`-Prompt.
+### 2. `src/server/lightning.server.ts` (neu)
 
-## 2. Konvektion / Gewitter (S)
+Blitzortung.org-Integration:
 
-- `HOURLY_VARS` um `cape, lifted_index`.
-- Helfer `assessThunderstormRisk(hourly)` → `none / isolated / scattered / widespread / severe`:
-  - CAPE > 500 + LI < -2 → scattered
-  - CAPE > 1500 + LI < -4 → widespread
-  - CAPE > 2500 + LI < -6 → severe
-- Verknüpfung mit Mehrheit Weathercode 95/96/99 (analog `isFogMajority`).
-- Prompt-Pflicht ab `widespread`: „kräftige Gewitter mit Hagel-/Sturmböenrisiko".
-
-## 7. Taupunkt + Feuchte (S)
-
-- `HOURLY_VARS` um `dewpoint_2m, relativehumidity_2m`.
-- Zwei Auswertungen:
-  - **Schwüle (Sommer):** Td ≥ 16 → „schwül", ≥ 18 → „drückend schwül".
-  - **Nebelpotenzial (Nacht):** RH > 95 % + Wind < 5 km/h + klarer Himmel → Hinweis „lokale Nebelfelder in der Frühe".
-- Wird im Sky-/Temperatur-Absatz integriert.
-
-## 9. Niederschlagsphase (S)
-
-- Funktion `derivePhase(tempC, dewpointC, snowLineM, elevM)` → `rain | sleet | snow | freezing_rain`.
-- Regeln: T < 0 + Niederschlag → freezing_rain; T 0–2 + Td < 0 → snow; T 1–3 → sleet; sonst rain.
-- Pro Tagesabschnitt (Morgen/Mittag/Abend) berechnen, Übergänge im Text erwähnen
-  („zunächst Schneeregen, am Nachmittag Übergang zu Regen ab 800 m").
-
-## 10. Blitzdaten (M)
-
-- Neuer Server: `src/server/lightning.server.ts`.
-- Quelle: Blitzortung.org Bounding-Box-Feed (kostenlos). Fallback Open-Meteo `lightning_potential` falls Feed nicht erreichbar.
-- 5-min-Cache (analog Radar). Liefert Blitzanzahl letzte 1h / 3h innerhalb Radius.
-- Integration: aktive Blitze → Gewitter-Sätze priorisieren, Nowcast-Block erwähnt Lage.
-- Settings: `lightning_enabled boolean`, `lightning_radius_km int default 25` in `app_settings` (Migration).
-
-## 11. Modell-Spread / Unsicherheit (S)
-
-- Helfer `computeSpread(values)` → `{ min, max, p10, p90, stddev }`.
-- In `aggregate()` zusätzlich neben `avg` mitspeichern (heute nur Mittelwert).
-- Klassifizierung `low | moderate | high` für Tmax, Tmin, Niederschlag.
-- Bei `high`: Prompt-Pflicht „Prognoseunsicherheit" + Bandbreite („Tmax 12–18 °C je nach Modell").
-- Im `forecast_entries.weather_data`-Debug-Block sichtbar.
-
-## 12. Ensemble (M)
-
-- Neuer Server: `src/server/ensemble.server.ts`.
-- Open-Meteo `/v1/ensemble` mit `ecmwf_ifs025` + `gfs_global` (50 + 30 Member).
-- Nur Tag 2–7 (Tag 0/1 weiter aus deterministischen CH-Modellen).
-- Aggregation: P10/P50/P90 für `temperature_2m_max`, `precipitation_sum`, `windspeed_10m_max`.
-- Daraus Wahrscheinlichkeiten: „>5 mm Regen", „>25 °C", „Frost".
-- Speist Spread-Logik (#11) automatisch mit zusätzlichen Members.
-- Settings: `ensemble_enabled boolean`, `ensemble_min_day int default 2` in `app_settings` (Migration).
-
----
-
-## Migration
-
-```sql
-ALTER TABLE app_settings
-  ADD COLUMN lightning_enabled boolean NOT NULL DEFAULT true,
-  ADD COLUMN lightning_radius_km int NOT NULL DEFAULT 25,
-  ADD COLUMN ensemble_enabled boolean NOT NULL DEFAULT true,
-  ADD COLUMN ensemble_min_day int NOT NULL DEFAULT 2;
+```text
+fetchLightning(lat, lon, radiusKm) → {
+  count_last_1h, count_last_3h, count_last_6h,
+  closest_strike_km, last_strike_at,
+  active_now: boolean
+}
 ```
 
-## Empfohlene Reihenfolge
+- Quelle: Blitzortung WebSocket-Archiv ist nicht öffentlich; nutze stattdessen den **kostenlosen JSON-Feed** von `https://api.blitzortung.org/v2/strikes/...` (BBox um lat/lon ± radiusKm umgerechnet in Grad).
+- Falls Blitzortung-API nicht direkt erreichbar (CORS/Auth): Fallback auf **Open-Meteo `lightning_potential` Variable** (CAPE-basiert) oder **MetOffice DataHub** — wir prüfen zur Implementierung welcher Endpoint stabil ohne Key liefert.
+- Cache 5 Minuten in `weather_cache` (`cache_key = lightning:{lat}:{lon}:{radius}`).
+- Setting-Gates: nur ausführen wenn `app_settings.lightning_enabled = true`, BBox aus `lightning_radius_km`.
+- Aufruf in `forecast.functions.ts`: Ergebnis nur dem **heutigen** Tag (Tag 0) anhängen als `lightning: {...}`, weil Live-Daten nur kurzfristig relevant sind.
+- Prompt-Hinweis ergänzen: bei `active_now` oder `count_last_1h > 5` → "Aktuell Gewitteraktivität im Raum Amriswil".
 
-1. **#1 + #11** (Quick-Wins ohne neuen Endpoint)
-2. **#2, #7, #9** (alle nur HOURLY_VARS-Erweiterung + Logik)
-3. **#12 Ensemble** (neuer Endpoint, größere Aggregation)
-4. **#10 Blitz** (externe Quelle, eigener Cache + Settings)
+### 3. `src/server/ensemble.server.ts` (neu)
 
-## Validierung
+Open-Meteo Ensemble:
 
-- Forecast für aktuellen Tag generieren, prüfen dass alle neuen Felder im `weather_data`-JSON erscheinen.
-- Manuelles Review der Texte für: Gewittertag, schwüler Sommertag, ruhige Hochdrucklage.
-- Server-Logs mit `server-function-logs` checken auf neue API-Fehler.
+```text
+fetchEnsemble(lat, lon) → per day:
+  t_max: { p10, p50, p90 },
+  t_min: { p10, p50, p90 },
+  precip_sum: { p10, p50, p90 },
+  wind_max: { p10, p50, p90 }
+```
 
-## Nicht enthalten
+- Endpoint: `https://ensemble-api.open-meteo.com/v1/ensemble`
+- Modelle: `icon_seamless` (40 Member) + `gfs_seamless` (31 Member) — kombiniert zu einem Multi-Model-Ensemble.
+- Variablen: `temperature_2m`, `precipitation`, `wind_speed_10m` stündlich; lokal zu Tagesaggregaten + Perzentilen reduzieren.
+- Cache: 2h in `weather_cache` (`cache_key = ensemble:{lat}:{lon}`).
+- Setting-Gates: nur wenn `app_settings.ensemble_enabled = true` und `dayIndex >= ensemble_min_day` (Default 2).
+- Integration in `formatDayData`: pro Tag ab Index 2 ein `ensemble: { t_max_p10, t_max_p50, t_max_p90, ... }` Block mit Spread → `ensemble_spread_class` (low/moderate/high) basierend auf `(p90-p10)`.
+- Prompt-Hinweis: ab Tag 3 die p10/p90-Spanne als Unsicherheitsbandbreite nutzen ("Modelle sehen 18–24°C möglich").
 
-Punkte 3 (Schneemenge), 4 (Föhn-Detektor), 5 (UV), 6 (Sicht), 8 (Hitze-Schwellen), 13 (Bergwetter).
+### 4. Reihenfolge der Implementierung
+
+1. **Prompt-Regeln erweitern** (DEFAULT_SKY_RULES + DEFAULT_WIND_RULES in `forecast.functions.ts`) — XS, sofort sichtbarer Effekt.
+2. **Ensemble-Modul** (`ensemble.server.ts`) + Integration in `formatDayData` für Tag ≥2.
+3. **Lightning-Modul** (`lightning.server.ts`) + Integration für Tag 0.
+4. Ein Testlauf mit `invoke-server-function` auf eine bestehende Forecast-ID, um zu prüfen dass `weather_data` die neuen Blöcke enthält und der AI-Output sie sinnvoll verwendet.
+
+### Offene Frage zur Bestätigung
+
+Bei Lightning-Daten: Blitzortung.org bietet keinen offiziellen offenen REST-Feed mehr (nur WebSocket mit Registrierung). Drei realistische Optionen:
+
+- **A) Open-Meteo `lightning_potential`** — bereits in unserer API verfügbar, modellbasiert (kein echter Live-Strike). Zuverlässig, kein Key.
+- **B) Blitzortung WebSocket** mit eigenem Account/Token — echte Live-Strikes, aber Setup-Aufwand und User muss Token besorgen.
+- **C) Lightning-Feature streichen** und stattdessen die CAPE-/LI-basierte Gewitterklassifikation (bereits in #2 implementiert) als ausreichend betrachten.
+
+Bitte wähle A, B oder C bevor ich Lightning baue. Punkt 1 (Prompts) und Punkt 2 (Ensemble) starte ich unabhängig.
