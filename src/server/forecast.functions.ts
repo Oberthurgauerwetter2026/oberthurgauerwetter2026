@@ -1626,16 +1626,16 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
+    precip_distribution: dayIndex <= 4 ? computePrecipDistribution(weatherForHourly(weather, dayIndex), dayIndex) : null,
+    hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex) : null,
     sky_pattern: dayIndex <= 1
       ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
     fog_dissipation: dayIndex <= 1
       ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
       : null,
-    wind_gusts: assessGusts(weather, dayIndex),
-    thunderstorm: assessThunderstormRisk(weather, dayIndex, weathercode?.by_model),
+    wind_gusts: assessGusts(weatherForHourly(weather, dayIndex), dayIndex),
+    thunderstorm: assessThunderstormRisk(weatherForHourly(weather, dayIndex), dayIndex, weathercode?.by_model),
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
