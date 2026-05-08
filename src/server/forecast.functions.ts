@@ -68,14 +68,6 @@ function applyRegimeToDay(
       snow_line_min: sn.snow_line_min,
     };
   }
-  // Niederschlagsphase aus Tagesgang + Schneefallgrenze (Tag 0/1)
-  const elev = out?.topography?.elev_median ?? 450;
-  if (out?.precip_distribution && out?.__weather && typeof out?.__dayIndex === "number") {
-    const phase = assessPrecipPhase(out.__weather, out.__dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
-    if (phase) out.precip_phase = phase;
-    delete out.__weather;
-    delete out.__dayIndex;
-  }
 }
 async function ensureStaff(supabase: any, userId: string) {
   const { data, error } = await supabase
