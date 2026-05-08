@@ -1287,6 +1287,72 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
     }
   }
 
+  // === Trend (Wetterbesserung / Wetterverschlechterung / intermittent / steady / dry) ===
+  // basiert auf wet/dry-Sequenzen im Stundenverlauf (>= 0.2 mm/h ist nass).
+  const totalMm = hoursOfDay.reduce((a, b) => a + b.mm, 0);
+  let trend: "improving" | "deteriorating" | "intermittent" | "steady" | "dry" = "steady";
+  let transitionHour: number | null = null;
+  let dryAfterHour: number | null = null;
+  let wetAfterHour: number | null = null;
+
+  if (totalMm < 1) {
+    trend = "dry";
+  } else {
+    // wet/dry hour map (begrenzt auf den tatsächlich abgedeckten Bereich)
+    const hourMap = new Map<number, number>();
+    for (const { hour, mm } of hoursOfDay) hourMap.set(hour, mm);
+    const minH = Math.min(...hoursOfDay.map((x) => x.hour));
+    const maxH = Math.max(...hoursOfDay.map((x) => x.hour));
+    let wetSegments: Array<{ from: number; to: number; mm: number }> = [];
+    let segStart: number | null = null;
+    let segMm = 0;
+    for (let hh = minH; hh <= maxH + 1; hh++) {
+      const mm = hourMap.get(hh) ?? 0;
+      const isWet = mm >= 0.2;
+      if (isWet && segStart == null) { segStart = hh; segMm = 0; }
+      if (isWet) segMm += mm;
+      if ((!isWet || hh === maxH + 1) && segStart != null) {
+        wetSegments.push({ from: segStart, to: hh, mm: segMm });
+        segStart = null; segMm = 0;
+      }
+    }
+    // mehrere getrennte nasse Phasen (>= 3h Pause dazwischen)?
+    let hasGap = false;
+    for (let i = 1; i < wetSegments.length; i++) {
+      if (wetSegments[i].from - wetSegments[i - 1].to >= 3) { hasGap = true; break; }
+    }
+    const significantSegs = wetSegments.filter((s) => s.mm >= 0.5);
+    if (significantSegs.length >= 2 && hasGap) {
+      trend = "intermittent";
+    } else if (significantSegs.length === 0) {
+      trend = "dry";
+    } else {
+      // Eine Hauptnass-Phase: bestimme, ob sie eher früh oder spät liegt
+      // und ob ein längerer trockener Block davor/danach kommt (>= 4h, < 0.5 mm/h).
+      const main = significantSegs[significantSegs.length - 1].mm > significantSegs[0].mm
+        ? significantSegs[significantSegs.length - 1]
+        : significantSegs[0];
+      const dryBeforeLen = main.from - minH;
+      const dryAfterLen = (maxH + 1) - main.to;
+      const dryBeforeTotal = Array.from(hourMap.entries())
+        .filter(([h]) => h >= minH && h < main.from).reduce((a, [, mm]) => a + mm, 0);
+      const dryAfterTotal = Array.from(hourMap.entries())
+        .filter(([h]) => h >= main.to && h <= maxH).reduce((a, [, mm]) => a + mm, 0);
+
+      if (dryAfterLen >= 4 && dryAfterTotal < 0.5 && main.from <= 14) {
+        trend = "improving";
+        transitionHour = main.to; // Stunde, ab der es trocken wird
+        dryAfterHour = main.to;
+      } else if (dryBeforeLen >= 4 && dryBeforeTotal < 0.5 && main.from >= 10) {
+        trend = "deteriorating";
+        transitionHour = main.from; // Stunde, ab der Niederschlag einsetzt
+        wetAfterHour = main.from;
+      } else {
+        trend = "steady";
+      }
+    }
+  }
+
   return {
     blocks: result,
     peak_block: peakSum >= 1 ? peakBlock : null,
@@ -1296,6 +1362,11 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
     peak_hour: peakHour != null && peakHourMm >= 0.5 ? peakHour : null,
     peak_hour_mm: peakHour != null ? Math.round(peakHourMm * 10) / 10 : null,
     dry_windows: dryWindows,
+    trend,
+    transition_hour: transitionHour,
+    dry_after_hour: dryAfterHour,
+    wet_after_hour: wetAfterHour,
+    total_mm: Math.round(totalMm * 10) / 10,
   };
 }
 
