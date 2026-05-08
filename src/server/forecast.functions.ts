@@ -2560,9 +2560,9 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
       applyEnsembleToDay(out, dayIndex, ensembleByDate, ensembleMinDay2);
-      if (out.precip_distribution && dayIndex <= 1) {
+      if (out.precip_distribution && dayIndex <= 4) {
         const elev = out?.topography?.elev_median ?? 450;
-        const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
+        const phase = assessPrecipPhase(weatherForHourly(weather, dayIndex), dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
         if (phase) out.precip_phase = phase;
       }
       return normalizeSkyDiagnostics(out);
