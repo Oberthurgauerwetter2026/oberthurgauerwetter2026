@@ -1370,6 +1370,142 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   };
 }
 
+// ===== Bewölkungs-Tagesgang (Tag 0–4) =====
+function computeCloudDistribution(weather: any, dayIndex: number): any | null {
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return null;
+
+  const collectArrs = (base: string): number[][] => {
+    const out: number[][] = [];
+    if (Array.isArray(h[base])) out.push(h[base]);
+    for (const k of Object.keys(h)) {
+      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out.push(h[k]);
+    }
+    return out;
+  };
+  const cloudArrs = collectArrs("cloudcover");
+  const sunArrs = collectArrs("sunshine_duration");
+  if (!cloudArrs.length && !sunArrs.length) return null;
+
+  type BlockAgg = { cloud_pct: number | null; sunshine_min: number | null; hours: number };
+  const blocks: Record<string, { range: [number, number]; agg: BlockAgg }> = {
+    morning: { range: [6, 12], agg: { cloud_pct: null, sunshine_min: null, hours: 0 } },
+    afternoon: { range: [12, 18], agg: { cloud_pct: null, sunshine_min: null, hours: 0 } },
+    evening: { range: [18, 24], agg: { cloud_pct: null, sunshine_min: null, hours: 0 } },
+  };
+
+  const hourly: Array<{ hour: number; cloud: number | null; sun: number | null }> = [];
+  for (let i = 0; i < (h.time as string[]).length; i++) {
+    const t = h.time[i] as string;
+    if (!t.startsWith(dateStr)) continue;
+    const hour = parseInt(t.slice(11, 13), 10);
+    if (!Number.isFinite(hour)) continue;
+    const cVals = cloudArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+    const sVals = sunArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
+    const cloud = cVals.length ? cVals.reduce((a, b) => a + b, 0) / cVals.length : null;
+    const sun = sVals.length ? sVals.reduce((a, b) => a + b, 0) / sVals.length : null;
+    hourly.push({ hour, cloud, sun });
+  }
+
+  for (const [, { range, agg }] of Object.entries(blocks)) {
+    const inBlock = hourly.filter((r) => r.hour >= range[0] && r.hour < range[1]);
+    const cv = inBlock.map((r) => r.cloud).filter((v): v is number => v != null);
+    const sv = inBlock.map((r) => r.sun).filter((v): v is number => v != null);
+    agg.cloud_pct = cv.length ? Math.round(cv.reduce((a, b) => a + b, 0) / cv.length) : null;
+    agg.sunshine_min = sv.length ? Math.round(sv.reduce((a, b) => a + b, 0) / 60) : null;
+    agg.hours = inBlock.length;
+  }
+
+  const categorize = (cloud: number | null, sunMin: number | null, blockHours: number): string => {
+    const sunRatio = blockHours > 0 && sunMin != null ? sunMin / (blockHours * 60) : null;
+    if (sunRatio != null && sunRatio >= 0.7) return "klar";
+    if (sunRatio != null && sunRatio >= 0.4) return "heiter";
+    if (cloud != null && cloud >= 80) return "bedeckt";
+    if (cloud != null && cloud >= 50) return "wolkig";
+    if (sunRatio != null && sunRatio >= 0.15) return "wechselnd";
+    return "wolkig";
+  };
+
+  const blockOut: Record<string, BlockAgg & { category: string }> = {};
+  for (const [key, { agg }] of Object.entries(blocks)) {
+    blockOut[key] = { ...agg, category: categorize(agg.cloud_pct, agg.sunshine_min, agg.hours || 1) };
+  }
+
+  const m = blockOut.morning;
+  const a = blockOut.afternoon;
+  const e = blockOut.evening;
+  const isClear = (b: typeof m) => b.category === "klar" || b.category === "heiter";
+  const isOvercast = (b: typeof m) => b.category === "bedeckt";
+  const isCloudy = (b: typeof m) => b.category === "wolkig" || b.category === "bedeckt";
+
+  let pattern:
+    | "clear_all_day"
+    | "morning_clouds_clearing"
+    | "afternoon_buildup"
+    | "evening_clearing"
+    | "overcast_all_day"
+    | "variable" = "variable";
+
+  if (isClear(m) && isClear(a) && (isClear(e) || e.hours === 0)) pattern = "clear_all_day";
+  else if (isOvercast(m) && isOvercast(a) && isOvercast(e)) pattern = "overcast_all_day";
+  else if (isCloudy(m) && isClear(a)) pattern = "morning_clouds_clearing";
+  else if (isClear(m) && isCloudy(a) && (a.cloud_pct ?? 0) > (m.cloud_pct ?? 0) + 15) pattern = "afternoon_buildup";
+  else if (isCloudy(a) && isClear(e)) pattern = "evening_clearing";
+  else pattern = "variable";
+
+  return { blocks: blockOut, pattern };
+}
+
+// ===== Server-seitige Klartext-Story (Anker für die KI) =====
+function buildDayNarrative(day: any): string | null {
+  const pd = day?.precip_distribution;
+  const cd = day?.cloud_distribution;
+  const fog = day?.fog_dissipation;
+  const sentences: string[] = [];
+
+  if (fog) {
+    sentences.push("Am Morgen verbreitet Nebel- oder Hochnebelfelder im Flachland.");
+  } else if (cd?.blocks?.morning) {
+    const cat = cd.blocks.morning.category;
+    if (cat === "klar" || cat === "heiter") sentences.push("Am Vormittag überwiegend sonnig.");
+    else if (cat === "bedeckt") sentences.push("Am Vormittag stark bewölkt.");
+    else if (cat === "wolkig") sentences.push("Am Vormittag wolkig.");
+    else sentences.push("Am Vormittag wechselnd bewölkt.");
+  }
+
+  if (pd) {
+    if (pd.trend === "improving") {
+      sentences.push("Am Vormittag noch zeitweise Niederschlag, im Tagesverlauf Wetterbesserung, am Nachmittag und Abend weitgehend trocken.");
+    } else if (pd.trend === "deteriorating") {
+      sentences.push("Tagsüber zunächst trocken, am Nachmittag/Abend aufkommender Niederschlag.");
+    } else if (pd.trend === "intermittent") {
+      sentences.push("Im Tagesverlauf wiederholt Schauer mit trockenen Phasen dazwischen.");
+    } else if (pd.trend === "steady" && pd.peak_block) {
+      const blockName: Record<string, string> = {
+        night: "in der Nacht", morning: "am Vormittag",
+        afternoon: "am Nachmittag", evening: "am Abend",
+      };
+      sentences.push(`Schwerpunkt der Niederschläge ${blockName[pd.peak_block] ?? ""}.`.trim());
+    }
+  }
+
+  if (cd && (!pd || pd.trend === "dry" || pd.trend === "steady")) {
+    if (cd.pattern === "afternoon_buildup") sentences.push("Am Nachmittag zunehmend Quellbewölkung.");
+    else if (cd.pattern === "evening_clearing") sentences.push("Gegen Abend Aufhellungen.");
+    else if (cd.pattern === "morning_clouds_clearing" && !fog) sentences.push("Im Tagesverlauf Auflockerungen.");
+    else if (cd.pattern === "clear_all_day") sentences.push("Den ganzen Tag über sonnig.");
+    else if (cd.pattern === "overcast_all_day") sentences.push("Ganztägig stark bewölkt.");
+  }
+
+  if (day?.thunderstorm?.peak_hour != null) {
+    sentences.push("Im späten Tagesverlauf lokale Gewitter möglich.");
+  }
+
+  if (!sentences.length) return null;
+  return sentences.join(" ");
+}
+
 // Kompaktes Stundenprofil pro Tag: Median + Spread aus allen verfügbaren Modellen
 // für temperature, precipitation, wind, cloudcover, sunshine. Liefert eine Tabelle
 // mit 24 Zeilen (oder weniger ab fromHour). Wird der KI als Tagesgang-Anker mitgegeben.
