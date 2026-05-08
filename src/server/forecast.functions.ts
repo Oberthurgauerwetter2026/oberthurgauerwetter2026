@@ -849,6 +849,32 @@ function modelWeight(name: string): number {
   return MODEL_WEIGHTS[name] ?? 1.0;
 }
 
+function percentile(sorted: number[], p: number): number {
+  if (!sorted.length) return 0;
+  if (sorted.length === 1) return sorted[0];
+  const idx = (sorted.length - 1) * p;
+  const lo = Math.floor(idx), hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
+function classifyUncertainty(spreadVal: number, scale: "temp" | "precip" | "wind"): "low" | "moderate" | "high" {
+  if (scale === "temp") {
+    if (spreadVal >= 5) return "high";
+    if (spreadVal >= 2.5) return "moderate";
+    return "low";
+  }
+  if (scale === "precip") {
+    if (spreadVal >= 8) return "high";
+    if (spreadVal >= 3) return "moderate";
+    return "low";
+  }
+  // wind
+  if (spreadVal >= 25) return "high";
+  if (spreadVal >= 12) return "moderate";
+  return "low";
+}
+
 function aggregate(perModel: Record<string, number>) {
   const entries = Object.entries(perModel);
   if (!entries.length) return null;
@@ -861,11 +887,16 @@ function aggregate(perModel: Record<string, number>) {
     wTot += w;
   }
   const avg = wTot > 0 ? wSum / wTot : vals.reduce((a, b) => a + b, 0) / vals.length;
+  const sorted = [...vals].sort((a, b) => a - b);
+  const r1 = (n: number) => Math.round(n * 10) / 10;
   return {
     avg: Math.round(avg * 10) / 10,
     min: Math.min(...vals),
     max: Math.max(...vals),
     spread: spread(vals),
+    p10: r1(percentile(sorted, 0.1)),
+    p50: r1(percentile(sorted, 0.5)),
+    p90: r1(percentile(sorted, 0.9)),
     by_model: perModel,
   };
 }
