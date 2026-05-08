@@ -788,8 +788,17 @@ async function fetchWeather(
 // Tag 0/1 → Short-Tier (CH-Modelle), Tag 2–4 → Mid-Tier, sonst → ohne Hourly.
 function weatherForHourly(weather: any, dayIndex: number): any {
   if (!weather) return weather;
-  if (dayIndex <= 1) return weather;
-  if (dayIndex <= 4 && weather.hourly_mid) {
+  const hasUsableHourly = (h: any): boolean => {
+    if (!h?.time?.length) return false;
+    // mindestens ein precipitation*-Schlüssel muss vorhanden sein
+    return Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"));
+  };
+  if (dayIndex <= 1) {
+    if (hasUsableHourly(weather.hourly)) return weather;
+    if (hasUsableHourly(weather.hourly_mid)) return { ...weather, hourly: weather.hourly_mid };
+    return weather;
+  }
+  if (dayIndex <= 4 && hasUsableHourly(weather.hourly_mid)) {
     return { ...weather, hourly: weather.hourly_mid };
   }
   return { ...weather, hourly: undefined };
