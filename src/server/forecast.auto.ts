@@ -405,7 +405,16 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
 
   const hourlyTemps = slice.map(({ i }) => hourAvg(tArrs, i)).filter((v): v is number => v != null);
   const hourlyPrecs = slice.map(({ i }) => hourAvg(pArrs, i) ?? 0);
-  const hourlyWinds = slice.map(({ i }) => hourAvg(wArrs, i)).filter((v): v is number => v != null);
+  const hourWeightedWind = (i: number): number | null => {
+    const per: Record<string, number> = {};
+    for (const [m, arr] of Object.entries(wArrs)) {
+      const v = arr?.[i];
+      if (v != null && Number.isFinite(v) && m in WIND_WEIGHTS) per[m] = v;
+    }
+    const w = weightedWindAvg(per);
+    return w ? w.avg : hourAvg(wArrs, i);
+  };
+  const hourlyWinds = slice.map(({ i }) => hourWeightedWind(i)).filter((v): v is number => v != null);
   const hourlyClouds = slice.map(({ i }) => hourAvg(cArrs, i)).filter((v): v is number => v != null);
   const hourlySuns = slice.map(({ i }) => hourAvg(sArrs, i)).filter((v): v is number => v != null);
 
