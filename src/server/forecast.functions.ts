@@ -2559,20 +2559,21 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
 
-    const tag0WMosmix2 = Math.max(0, Math.min(100, settings?.tag0_weight_mosmix ?? 40));
-    const tag0WOm2 = Math.max(0, Math.min(100, settings?.tag0_weight_om ?? 60));
-    const tag1WMosmix2 = Math.max(0, Math.min(100, settings?.tag1_weight_mosmix ?? 50));
-    const tag1WOm2 = Math.max(0, Math.min(100, settings?.tag1_weight_om ?? 50));
+    const tag2WM2 = Math.max(0, Math.min(100, settings?.tag2_weight_mosmix ?? 25));
+    const tag2WO2 = Math.max(0, Math.min(100, settings?.tag2_weight_om ?? 75));
+    const tag3WM2 = Math.max(0, Math.min(100, settings?.tag3plus_weight_mosmix ?? 45));
+    const tag3WO2 = Math.max(0, Math.min(100, settings?.tag3plus_weight_om ?? 55));
     const withTopo = (dayIndex: number) => {
       const omDayBase = formatDayData(weather, dayIndex);
       const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
       if (!omDay) return null;
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
       let base: any = omDay;
-      if (dayIndex === 0 && mosmixDay) {
-        base = mixOmWithMosmix(omDay, mosmixDay, tag0WMosmix2, tag0WOm2);
-      } else if (dayIndex === 1 && mosmixDay) {
-        base = mixOmWithMosmix(omDay, mosmixDay, tag1WMosmix2, tag1WOm2);
+      // MOSMIX nur ab Tag 2: Tag 0/1 laufen rein über Open-Meteo + Radar + SMN-Bias
+      if (dayIndex === 2 && mosmixDay) {
+        base = mixOmWithMosmix(omDay, mosmixDay, tag2WM2, tag2WO2);
+      } else if (dayIndex >= 3 && mosmixDay) {
+        base = mixOmWithMosmix(omDay, mosmixDay, tag3WM2, tag3WO2);
       }
       let out: any = { ...base, topography: applyTopography(base, topo) };
       const st = applyStationBias(base, stationBiases);
