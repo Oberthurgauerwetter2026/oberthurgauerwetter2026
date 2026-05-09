@@ -1,117 +1,101 @@
 ## Ziel
 
-Beim Wind (Geschwindigkeit + Richtung) sollen die vier hochauflösenden Modelle nicht mehr gleichgewichtet, sondern nach Zuverlässigkeit für den Oberthurgau gewichtet kombiniert werden:
+Niederschlag, Niederschlagswahrscheinlichkeit, Bewölkung und Sonnenscheindauer sollen — analog zum Wind — aus den hochauflösenden Modellen **gewichtet** kombiniert werden, mit MeteoSwiss-Schwerpunkt. Globale Modelle (ECMWF/GFS/ICON-D2) dürfen nur einspringen, wenn **keines** der vier hochauflösenden Modelle für die Variable Daten liefert.
 
-| Modell (Open-Meteo-Key)              | Gewicht |
-|--------------------------------------|---------|
-| `meteoswiss_icon_ch1`                | 0.40    |
-| `meteoswiss_icon_ch2`                | 0.30    |
-| `meteofrance_arome_france_hd`        | 0.20    |
-| `arpege_europe`                      | 0.10    |
+## Gewichte (für Niederschlag, Prob, Bewölkung, Sonne)
 
-Andere Modelle (z. B. `icon_d2`, `gfs_global`, `ecmwf_ifs025`) fliessen **nicht** in den Wind ein. Für Temperatur, Niederschlag etc. bleibt die bestehende Mittelung unverändert.
+| Modell                          | Gewicht |
+|---------------------------------|---------|
+| `meteoswiss_icon_ch1`           | 0.45    |
+| `meteoswiss_icon_ch2`           | 0.35    |
+| `meteofrance_arome_france_hd`   | 0.15    |
+| `arpege_europe`                 | 0.05    |
 
-## Fallback
+Fehlende Modelle → vorhandene Gewichte werden renormalisiert.
 
-- Fehlt eines der vier Modelle (z. B. AROME nur 2 Tage, CH1 nur ~33 h), werden die **vorhandenen** Gewichte renormalisiert (Summe wieder = 1).
-- Ist **keines** der vier Modelle für den Tag/Stunde verfügbar → Rückfall auf das bisherige ungewichtete Mittel über alle Tier-Modelle (heutiges Verhalten).
+## Beispiel: Dienstag 12. Mai (heute defekt)
 
-## Änderungen
+- **Niederschlag**: ARPEGE 25.8 mm vs CH2 5.7 mm → bisher 15.2 mm (Mittel). Neu: CH2 (renorm 0.875) + ARPEGE (0.125) → **8.2 mm**.
+- **Bewölkung**: CH2 hat keinen Wert → bisher Fallback ARPEGE/ECMWF/GFS = 58 %. Neu: nur ARPEGE (renorm 1.0) = **44 %**. Wenn AROME Daten hat, wird AROME mitgewichtet.
+- **Niederschlagswahrscheinlichkeit**: bisher ECMWF/GFS/CH2 = 89 %. Neu: nur CH2 (renorm 1.0) = **81 %**.
+- **Sonne**: ARPEGE 11 + CH2 9.6 → bisher 10.4 h. Neu: CH2 (0.875) + ARPEGE (0.125) → **9.8 h**.
 
-### 1. `src/server/forecast.auto.ts`
+## Änderungen im Code
 
-Neue Helper am Dateianfang (bei den Wind-Helpern, ~Z. 40):
+### 1. Fallback-Logik korrigieren — `collectModelValuesTiered`
+
+Aktuell (`forecast.functions.ts` & `forecast.auto.ts`) mischt der Tier-Collector globale Modelle ein, sobald < 2 Modelle Daten liefern. Das ist die Ursache für den ECMWF/GFS-Einfluss auf Niederschlag/Bewölkung an Tag 3.
+
+Neue Variante `collectPriorityModelValues(weather, varName, dayIndex)`:
+
+1. Sammle Werte ausschliesslich aus den vier priorisierten Modellen (`WIND_WEIGHTS`-Keys → für Klarheit umbenennen in `PRIORITY_MODELS`) über alle Tiers (short → mid → long).
+2. Wenn **mindestens eines** davon Werte liefert → diese Map zurückgeben.
+3. Sonst: Fallback auf die bestehende `collectModelValuesTiered`-Logik (alle Tier-Modelle).
+
+Die alte Funktion bleibt für Variablen, die nicht gewichtet werden (Temperatur, Weathercode), erhalten.
+
+### 2. Gewichteter Aggregator für skalare Variablen
+
+Neuer Helper in beiden Dateien:
 
 ```ts
-const WIND_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 0.40,
-  meteoswiss_icon_ch2: 0.30,
-  meteofrance_arome_france_hd: 0.20,
-  arpege_europe: 0.10,
+const PRECIP_CLOUD_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.45,
+  meteoswiss_icon_ch2: 0.35,
+  meteofrance_arome_france_hd: 0.15,
+  arpege_europe: 0.05,
 };
-
-function weightedWind(perModel: Record<string, number>) {
-  const entries = Object.entries(perModel).filter(([k]) => k in WIND_WEIGHTS);
-  if (entries.length === 0) return null; // → Caller fällt auf aggregate() zurück
-  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
-  const avg = entries.reduce((s, [k, v]) => s + v * (WIND_WEIGHTS[k] / totalW), 0);
-  const vals = entries.map(([, v]) => v);
-  return {
-    avg: Math.round(avg * 10) / 10,
-    min: Math.min(...vals),
-    max: Math.max(...vals),
-    spread: vals.length < 2 ? 0 : Math.round((Math.max(...vals) - Math.min(...vals)) * 10) / 10,
-    by_model: Object.fromEntries(entries),
-    weights_used: Object.fromEntries(entries.map(([k]) => [k, WIND_WEIGHTS[k] / totalW])),
-  };
-}
-
-// zirkulärer gewichteter Mittelwert (für Richtung)
-function weightedCircularMeanDeg(perModel: Record<string, number>): number | null {
-  const entries = Object.entries(perModel).filter(([k]) => k in WIND_WEIGHTS);
-  if (entries.length === 0) return null;
-  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
-  let x = 0, y = 0;
-  for (const [k, deg] of entries) {
-    const w = WIND_WEIGHTS[k] / totalW;
-    const r = (deg * Math.PI) / 180;
-    x += w * Math.cos(r); y += w * Math.sin(r);
-  }
-  if (x === 0 && y === 0) return null;
-  let d = (Math.atan2(y, x) * 180) / Math.PI;
-  if (d < 0) d += 360;
-  return Math.round(d);
+function weightedAvg(perModel: Record<string, number>, weights: Record<string, number>) {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in weights && Number.isFinite(v));
+  if (!entries.length) return null;
+  const total = entries.reduce((s, [k]) => s + weights[k], 0);
+  if (total <= 0) return null;
+  const avg = entries.reduce((s, [k, v]) => s + v * (weights[k] / total), 0);
+  const used: Record<string, number> = {};
+  for (const [k] of entries) used[k] = Math.round((weights[k] / total) * 100) / 100;
+  return { avg: Math.round(avg * 10) / 10, weights_used: used };
 }
 ```
 
-#### a) Tageswerte — `formatDayData` (~Z. 237–242)
+(`weightedWindAvg` wird auf `weightedAvg(perModel, WIND_WEIGHTS)` reduziert — keine Funktionsänderung.)
+
+### 3. Tageswert-Aggregation umstellen
+
+In `formatDayData` (beide Dateien):
 
 ```ts
-const windPerModel = collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex);
-const wind_max = weightedWind(windPerModel) ?? aggregate(windPerModel);
+// Niederschlag
+const precipPerModel = collectPriorityModelValues(weather, "precipitation_sum", dayIndex);
+const precip_raw = aggregate(precipPerModel); // weiterhin avg/min/max/by_model
+const wP = weightedAvg(precipPerModel, PRECIP_CLOUD_WEIGHTS);
+const precip = precip_raw && wP ? { ...precip_raw, avg: wP.avg, weights_used: wP.weights_used } : precip_raw;
 
-const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
-const wind_dir = aggregate(windDirPerModel); // unverändert (für by_model/spread Anzeige)
-const wind_dir_avg =
-  weightedCircularMeanDeg(windDirPerModel) ??
-  circularMeanDeg(Object.values(windDirPerModel));
-const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
-const wind_label = buildWindLabel(wind_dir_avg, wind_max?.avg ?? null);
+// Analog für: precipitation_probability_max, cloudcover_mean, sunshine_duration
 ```
 
-#### b) Stunden-/Zeitfenster (~Z. 322–408)
+Wichtig: `agg(...)`/`aggregate(...)` weiterhin auf den **gleichen** `perModel` aufrufen, damit `p10/p50/p90/spread/by_model` die Streuung der priorisierten Modelle widerspiegeln (sonst wäre die Unsicherheits-Anzeige inkonsistent).
 
-Die Funktion `hourAvg` mittelt aktuell stündlich gleichgewichtet über alle Modelle. Stattdessen pro Stunde:
+Die abgeleitete Bewölkung-aus-Sonne-Heuristik (`derived_from_sunshine`) bleibt als zweiter Fallback bestehen, nur wenn `cloudcover` ganz fehlt.
 
-```ts
-function hourWeightedWind(arrs: Record<string, number[]>, i: number): number | null {
-  const per: Record<string, number> = {};
-  for (const [m, arr] of Object.entries(arrs)) {
-    const v = arr?.[i];
-    if (v != null && Number.isFinite(v) && m in WIND_WEIGHTS) per[m] = v;
-  }
-  const w = weightedWind(per);
-  if (w) return w.avg;
-  // Fallback: ungewichtetes Mittel über alle vorhandenen Modelle
-  return hourAvg(arrs, i);
-}
-```
+### 4. Stunden-/Zeitfenster-Aggregation (`forecast.functions.ts` ~Z. 1952 ff., `forecast.auto.ts` Stunden-Block)
 
-Im Fenster-Code (~Z. 368, 399–408):
-- `hourlyWinds` über `hourWeightedWind(wArrs, i)` statt `hourAvg(wArrs, i)`.
-- `windDirSamples` nur aus den vier WIND_WEIGHTS-Modellen sammeln und am Ende `weightedCircularMeanDeg` über das Stundenmittel verwenden (alternativ: pro Stunde gewichtetes Richtungsmittel berechnen, dann zirkulär über die Stunden mitteln — bevorzugt, sauberer).
-- `wind_max` im Fenster bleibt das **Maximum** dieser stündlich gewichteten Werte.
+Spiegelbildlich umstellen:
+- `precPerModel`, `probPerModel`, `cloudPerModel`, `sunHPerModel` werden bei der Aggregation zusätzlich gewichtet (gleiche Override-Methode wie für Wind).
+- Pro Stunde im Window-Build: gewichtetes Modell-Mittel statt `hourAvg`. Fallback wieder auf `hourAvg` (alle Modelle) wenn keines der vier Daten hat.
 
-### 2. `src/server/forecast.functions.ts`
+### 5. Konsequenz fürs Bias-/MOSMIX-Blending
 
-Spiegelt die gleiche Logik (gleiche Aggregations-Helfer existieren dort, vgl. Z. 234, 288). Identische `WIND_WEIGHTS` + `weightedWind` + `weightedCircularMeanDeg` einführen und die Tages-/Stunden-Wind-Aggregationen analog umstellen, damit beide Pfade (manuelle Forecast-Generation und Auto-Generation) konsistent sind.
-
-### 3. Transparenz im Output
-
-`wind_max` (und falls sinnvoll `wind_dir`) erhalten zusätzlich `weights_used`, sodass im Prompt/Log nachvollziehbar ist, welche Modelle mit welchem Anteil eingeflossen sind. Keine UI-Änderung nötig — die Settings-/Forecast-Ansicht zeigt weiterhin `avg`/`min`/`max`/`by_model`.
+- **Bias-Korrektur** (Stationen) wirkt unverändert auf den neuen `precip.avg` → korrekt.
+- **MOSMIX-Blend** (Tag 2/3 25 %, ab Tag 4 45 %) verwendet `omDay.precip` → bekommt jetzt den gewichteten Wert. Keine Codeänderung nötig, aber das senkt für Dienstag den Endwert spürbar (statt Mittelung mit MOSMIX über aufgeblähten OM-Wert).
 
 ## Nicht geändert
 
-- Modell-Listen (`shortModels`/`midModels`/`longModels`), Tier-Auswahl, Caching, Bias-Correction.
-- Aggregation für Temperatur, Niederschlag, Bewölkung, Sonnenscheindauer, Weathercode.
-- MOSMIX-Pfad (`mosmix.server.ts`) — dort gibt es kein Multi-Modell-Wind, sondern Stations-Maxima.
+- **Temperatur**, **Weathercode**, **Wind-Richtung**: bleiben wie heute (Wind hat eigene Gewichtung). Bei Temperatur ist die Modell-Streuung gering und ECMWF/GFS sind hier unkritisch.
+- **Modell-Listen** in `app_settings`, Tier-Auswahl, Caching, Radar-Korrektur, Lightning, Bias.
+- **MOSMIX-Pfad** (`mosmix.server.ts`), **Pressure-Map**.
+
+## Verifikation nach Implementierung
+
+1. Aktuellen Forecast `72853bed-…` neu generieren.
+2. Dienstag-Eintrag prüfen: `precip.avg` sollte ≈ 8 mm, `cloudcover.avg` ≈ 44 %, `precip_prob.avg` ≈ 81 %, `sunshine_h.avg` ≈ 9.8 h zeigen.
+3. `weights_used` in den jeweiligen Aggregat-Objekten kontrolliert ausgeben (Log/JSON), um Renormalisierung nachvollziehbar zu machen.
