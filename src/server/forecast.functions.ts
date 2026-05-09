@@ -189,7 +189,77 @@ function buildWindLabel(dirDeg: number | null, maxKmh: number | null): string | 
 function isClearSkyDay(data: any): boolean {
   const cloudAvg = data?.cloudcover?.avg;
   const sunshineAvg = data?.sunshine_h?.avg;
+  if (isPrecipDominant(data)) return false;
   return typeof cloudAvg === "number" && typeof sunshineAvg === "number" && cloudAvg <= 5 && sunshineAvg >= 10;
+}
+
+// Klassifiziert die Niederschlagsintensität eines Tages aus Tagessumme + max. Wahrscheinlichkeit.
+function derivePrecipClass(weatherData: any): "dry" | "showers" | "rain" | "heavy" | null {
+  const p = weatherData?.precip?.avg;
+  const prob = weatherData?.precip_prob?.avg;
+  const pa = typeof p === "number" ? p : null;
+  const pp = typeof prob === "number" ? prob : null;
+  if (pa == null && pp == null) return null;
+  const paV = pa ?? 0;
+  const ppV = pp ?? 0;
+  if (paV >= 15) return "heavy";
+  if (paV >= 5 || ppV >= 80) return "rain";
+  if (paV >= 0.5 || ppV >= 50) return "showers";
+  if (paV <= 0.2 && ppV < 30) return "dry";
+  return "showers";
+}
+
+// Mehrheit der Modelle meldet einen Regen-/Schauer-/Gewitter-Code (>= 60).
+function isPrecipWeathercodeMajority(weatherData: any): boolean {
+  const byModel = weatherData?.weathercode?.by_model;
+  if (!byModel) return false;
+  const vals = Object.values(byModel).filter((v): v is number => typeof v === "number");
+  if (!vals.length) return false;
+  const rainy = vals.filter((v) => v >= 60).length;
+  return rainy / vals.length > 0.5;
+}
+
+// Niederschlag dominiert: precip_class >= showers ODER Mehrheit der weathercodes >= 60.
+function isPrecipDominant(weatherData: any): boolean {
+  const cls = weatherData?.precip_class ?? derivePrecipClass(weatherData);
+  if (cls === "showers" || cls === "rain" || cls === "heavy") return true;
+  if (isPrecipWeathercodeMajority(weatherData)) return true;
+  return false;
+}
+
+// Server-seitige Sky-Direktive: harte Vorgabe für den ersten Absatz, wenn Niederschlag dominiert.
+// Dadurch hängt der Sky-Satz nicht mehr von widersprüchlichen sunshine_h-Werten ab.
+function buildSkyDirective(weatherData: any): string | null {
+  const cls = weatherData?.precip_class ?? derivePrecipClass(weatherData);
+  if (!cls || cls === "dry") return null;
+  const cc = weatherData?.cloudcover?.avg;
+  const ccTxt = typeof cc !== "number"
+    ? "wechselnd bewölkt"
+    : cc >= 80 ? "stark bewölkt"
+    : cc >= 55 ? "wechselnd bewölkt"
+    : "teils sonnig, teils bewölkt";
+  // Tageszeit-Hinweis aus precip_distribution, falls vorhanden
+  let timeHint = "";
+  const dist = weatherData?.precip_distribution;
+  const blocks = dist?.blocks ?? null;
+  if (blocks && typeof blocks === "object") {
+    const order: Array<[string, string]> = [
+      ["morning", "am Vormittag"],
+      ["afternoon", "am Nachmittag"],
+      ["evening", "am Abend"],
+      ["night", "in der Nacht"],
+    ];
+    let bestKey = "";
+    let bestMm = -1;
+    for (const [k] of order) {
+      const mm = blocks[k]?.precip_mm ?? blocks[k]?.mm ?? null;
+      if (typeof mm === "number" && mm > bestMm) { bestMm = mm; bestKey = k; }
+    }
+    if (bestMm >= 1) timeHint = " " + (order.find((o) => o[0] === bestKey)?.[1] ?? "");
+  }
+  if (cls === "heavy") return `${ccTxt}, anhaltender Regen${timeHint}.`;
+  if (cls === "rain") return `${ccTxt}, zeitweise Regen${timeHint}.`;
+  return `${ccTxt}, Schauer${timeHint}.`;
 }
 
 function replaceFirstParagraph(text: string, firstParagraph: string): string {
@@ -209,6 +279,10 @@ function isFogMajority(weatherData: any): boolean {
 }
 
 function buildDeterministicSkyParagraph(weatherData: any): string | null {
+  // Niederschlag dominiert: harte Sky-Direktive zurückgeben (keine "sonnig"-Konstrukte).
+  if (isPrecipDominant(weatherData)) {
+    return weatherData?.sky_directive ?? buildSkyDirective(weatherData);
+  }
   const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null }>;
   if (!profile.length) return null;
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -220,6 +294,7 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
   const sunnyHours = day.filter((r) => (r.s ?? 0) >= 30).length;
   const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
   const sunshineAvg = weatherData?.sunshine_h?.avg;
+  const sunshineReliable = weatherData?.sunshine_h_reliable !== false;
   const fogMajority = isFogMajority(weatherData);
   const fogByModel = weatherData?.weathercode?.by_model
     ? Object.values(weatherData.weathercode.by_model).some((v) => v === 45 || v === 48)
@@ -227,7 +302,7 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
   const fogMorning = weatherData?.sky_pattern === "nebel_aufloesung"
     || weatherData?.fog_dissipation != null
     || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 3 || (sunshineAvg ?? 0) >= 5));
-  const verySunny = (sunshineAvg ?? 0) >= 9 || sunnyHours >= 7;
+  const verySunny = sunshineReliable && ((sunshineAvg ?? 0) >= 9 || sunnyHours >= 7);
   if (!fogMorning && !verySunny && !fogMajority) return null;
 
   // Reiner Nebeltag: Mehrheit 45/48 ohne nennenswerte Auflösung.
@@ -1562,7 +1637,7 @@ function formatDayData(weather: any, dayIndex: number) {
   const sunshine_h = aggregate(sunshineHours);
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
-  let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
+  let cloudcover_source: "model" | "derived_from_sunshine" | "none" | "model_clamped_precip" | "derived_from_precip" = cloudcover ? "model" : "none";
   let cloudcoverFinal = cloudcover;
   if (!cloudcover && sunshine_h && typeof sunshine_h.avg === "number") {
     const ratio = Math.max(0, Math.min(1, sunshine_h.avg / 12));
@@ -1593,6 +1668,36 @@ function formatDayData(weather: any, dayIndex: number) {
     if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
   }
 
+  // Niederschlags-Klassifikation + Konsistenz-Patches.
+  // Open-Meteo liefert auf mittel- und langfristigen Modellen oft unrealistisch
+  // hohe sunshine_duration-Werte gleichzeitig mit hoher Niederschlagswahrscheinlichkeit.
+  // Wir markieren sunshine_h dann als unzuverlässig und heben cloudcover an.
+  const precipDistEarly = dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null;
+  const hourlyProfileEarly = dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null;
+  const tmpForClass = { precip, precip_prob, weathercode };
+  const precip_class = derivePrecipClass(tmpForClass);
+  const precipDominant = precip_class === "showers" || precip_class === "rain" || precip_class === "heavy"
+    || isPrecipWeathercodeMajority({ weathercode });
+  let sunshine_h_reliable = true;
+  let cloudcoverPatched: any = cloudcoverFinal;
+  let cloudcoverSourcePatched: string = cloudcover_source;
+  if (precipDominant) {
+    const probAvg = precip_prob?.avg;
+    if (typeof probAvg === "number" && probAvg >= 60) sunshine_h_reliable = false;
+    if (sunshine_h && (sunshine_h.avg ?? 0) >= 9 && precip_class !== "dry") sunshine_h_reliable = false;
+    // Cloudcover mindestens auf 70 % anheben, falls Modellwert tiefer ist.
+    const cc = cloudcoverPatched?.avg;
+    if (typeof cc === "number" && cc < 70) {
+      cloudcoverPatched = { ...cloudcoverPatched, avg: 70 };
+      cloudcoverSourcePatched = "model_clamped_precip";
+    } else if (!cloudcoverPatched) {
+      cloudcoverPatched = { avg: 80, min: 80, max: 80, spread: 0, p10: 80, p50: 80, p90: 80, by_model: { derived: 80 } };
+      cloudcoverSourcePatched = "derived_from_precip";
+    }
+  }
+  const baseForDirective = { precip_class, cloudcover: cloudcoverPatched, precip_distribution: precipDistEarly };
+  const sky_directive = buildSkyDirective(baseForDirective);
+
   return {
     date: d.time[dayIndex],
     models_configured: models,
@@ -1602,27 +1707,30 @@ function formatDayData(weather: any, dayIndex: number) {
     tmin,
     precip,
     precip_prob,
+    precip_class,
     wind_max,
     wind_dir,
     wind_dir_avg,
     wind_dir_compass,
     wind_label,
     sky_label,
-    cloudcover: cloudcoverFinal,
-    cloudcover_source,
+    sky_directive,
+    cloudcover: cloudcoverPatched,
+    cloudcover_source: cloudcoverSourcePatched,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
+    sunshine_h_reliable,
+    precip_distribution: precipDistEarly,
+    hourly_profile: hourlyProfileEarly,
     sky_pattern: dayIndex <= 1
-      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
+      ? (detectFogDissipation(hourlyProfileEarly, weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
     fog_dissipation: dayIndex <= 1
-      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+      ? detectFogDissipation(hourlyProfileEarly, weathercode?.by_model)
       : null,
     wind_gusts: assessGusts(weather, dayIndex),
     thunderstorm: assessThunderstormRisk(weather, dayIndex, weathercode?.by_model),
-    humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
+    humidity: assessHumidity(weather, dayIndex, hourlyProfileEarly),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
 }
@@ -2076,7 +2184,12 @@ PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebel
 
 VERBOTEN: "Es wird", "Wir erwarten", "Insgesamt", "Bitte beachten", "zeigt sich", "präsentiert sich", "gestaltet sich", "der Himmel ist …", "das Wetter wird …", Wettercodes, Prozentangaben, exakte Uhrzeiten, Aufzählungen mit "-" am Zeilenanfang. Vollverb-Konstruktionen wie "die Sonne scheint", "Wolken ziehen auf", "es regnet", "der Wind weht" sind STRIKT zugunsten von Nominalphrasen zu vermeiden. KEINE poetischen, dramatischen oder erfundenen Begriffe wie "grössenwahnsinnige Wolken", "unsichtbare Wolken", "schützende Wolkenschicht", "die Sonnenstrahlen erreichen die Erde", "der Himmel öffnet sich", o.ä. NUR sachliche meteorologische Standardbegriffe aus dem Pflicht-Vokabular. Wenn unsicher: knapp und nüchtern bleiben.`;
 
-export const DEFAULT_SKY_RULES = `Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt".
+export const DEFAULT_SKY_RULES = `NIEDERSCHLAG DOMINIERT IMMER (höchste Priorität): Wenn das Feld "precip_class" einen der Werte "showers", "rain" oder "heavy" hat ODER "precip_prob.avg" ≥ 60 ODER die Mehrheit der "weathercode.by_model"-Werte ≥ 60 ist, MUSS der Sky-Satz Niederschlag explizit nennen ("Schauer", "zeitweise Regen", "anhaltender Regen", ggf. mit Tageszeit). Ein "sonnig"/"recht sonnig"/"meist sonnig"/"klar"-Hauptsatz ist in diesem Fall ABSOLUT VERBOTEN — auch wenn "sunshine_h" hohe Werte zeigt. "Sonnig" ist nur erlaubt, wenn "precip_class" = "dry" UND keine Mehrheit der weathercodes ≥ 60.
+Wenn das Feld "sky_directive" gesetzt ist, übernimm diese Vorgabe sinngemäss als ersten Sky-Satz (Wortlaut darf leicht variieren, Inhalt MUSS gleich bleiben).
+Wenn "sunshine_h_reliable" = false, IGNORIERE "sunshine_h" vollständig — der Wert ist durch Open-Meteo-Tagesaggregation verzerrt.
+Bei zwei aufeinanderfolgenden Tagen mit unterschiedlicher "precip_class" (z. B. Di = "rain", Mi = "dry") MUSS die Sky-Beschreibung deutlich unterschiedlich ausfallen — kein wortgleicher oder fast identischer erster Absatz.
+
+Leite die Bewölkung primär aus "sunshine_h" ab (NUR wenn sunshine_h_reliable ≠ false): ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt".
 Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt, 45/48 = Nebel bzw. Hochnebel).
 Bei weathercode 45 oder 48 bei der MEHRHEIT der Modelle (in "weathercode.by_model"): Du MUSST "Nebel" oder "Hochnebel" verwenden. Die Begriffe "stark bewölkt", "bedeckt", "trübe" oder "grau in grau" sind in diesem Fall ABSOLUT VERBOTEN — auch wenn sunshine_h niedrig ist. Bei Auflösung im Tagesverlauf (sunshine_h ≥ 5h ODER Stundenprofil zeigt nachmittags Aufhellung): "Nebel-/Hochnebelfelder am Morgen, im Tagesverlauf Auflösung, am Nachmittag sonnig". Ohne Auflösung: "Verbreitet Nebel- oder Hochnebelfelder, nur zögerliche Aufhellungen".
 Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
