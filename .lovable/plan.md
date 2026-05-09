@@ -1,63 +1,45 @@
-## Befund
+## Problem
 
-`enforceSkyConsistency` ersetzt aktuell den ersten Absatz der KI-Ausgabe immer dann, wenn `buildDeterministicSkyParagraph` einen Text liefert. Diese Funktion baut einen reinen Sky-Text **ohne jeden Niederschlagsbezug** und triggert auch auf Tagen mit signifikantem Regen, sobald entweder
+Im Sonntagseintrag (Tag 2) steht "Am Morgen und Vormittag … zeitweise Regen", obwohl die Modelle den Niederschlag auf Nachmittag/Abend legen.
 
-- `sunshine_h.avg ≥ 9` ODER
-- 7+ Stunden mit `s ≥ 30` im stündlichen Profil ODER
-- Nebelmehrheit / Nebelauflösung erkannt wird.
+Ursache: `precip_distribution` und `hourly_profile` werden in `formatDayData` (`src/server/forecast.functions.ts`, Zeile 1615/1616) **nur für `dayIndex <= 1`** erzeugt. Zusätzlich liefert `fetchWeather` Stundenwerte ausschliesslich aus dem Short-Tier (Zeile 763 — Tag 0/1 CH-Modelle). Ab Tag 2 sieht die KI also nur eine Tagessumme (3.9 mm) und rät die Tageszeit — aktuell falsch.
 
-Folge: Auf Tagen wie Montag (16 mm Niederschlag, aber laut Profil 5 sonnige Stunden am Nachmittag) oder Dienstag (8 mm in Nacht/Vormittag) überschreibt die Vorlage den korrekten KI-Text durch das immer gleiche „Am Morgen zunächst stark bewölkt … rasche Auflösung, danach recht sonnig …" — der Niederschlag verschwindet komplett aus dem Body.
+## Ziel
 
-Verstärkt wurde das Problem durch den vorherigen Prefix-Bug-Fix: das stündliche Profil ist jetzt sauberer, dadurch zählen mehr Tage als „verySunny" oder „fogMorning" und triggern den Override.
+Die KI soll für Tag 2 bis Tag 4 wissen, **wann** am Tag der Regen fällt, statt zu raten.
 
-## Änderung (nur `src/server/forecast.functions.ts`)
+## Änderungen (nur `src/server/forecast.functions.ts`)
 
-### 1. Sky-Override an Niederschlag knüpfen
+1. **Mid-Tier Hourly aktivieren**
+   - In `fetchWeather` (Zeile 742–745) den Mid-Tier-Call mit `includeHourly: true` ausführen.
+   - Cache-Key um `:h` ergänzen, damit der bestehende Daily-only-Cache nicht kollidiert.
+   - Result-Mapping: `hourly` aus Short-Tier behalten (feinste Auflösung); zusätzlich `hourly_mid` aus `midData?.hourly` durchreichen.
 
-In `enforceSkyConsistency` (Z. 275) eine Vorabprüfung einbauen: wenn der Tag nennenswerten Niederschlag hat, KEINE Überschreibung des ersten Absatzes mehr vornehmen.
+2. **Hourly-Quelle pro Tag wählen**
+   - Neue Hilfsfunktion `pickHourly(weather, dayIndex)`: Tag 0/1 → `weather.hourly` (Short, CH-Modelle), Tag 2–4 → `weather.hourly_mid` (ICON-CH2/D2/IFS/ARPEGE/GFS), darüber hinaus → null.
+   - `computePrecipDistribution`, `buildHourlyProfile`, `assessThunderstormRisk`, `assessGusts`, `detectFogDissipation` so aufrufen, dass sie das passende `hourly`-Objekt sehen (kleine Wrapper-Variante oder Parameter `hourlySource`).
 
-Kriterium „Regentag" (eines genügt):
-- `weatherData.precip?.avg ≥ 1` mm, ODER
-- `weatherData.precip_distribution?.peak_block` ist gesetzt (≥ 1 mm in einem Block), ODER
-- `precip_distribution.overall_max_prob ≥ 60` UND irgendein Block hat `precip_mm ≥ 0.5`.
+3. **`formatDayData` erweitern (Zeile 1615–1625)**
+   - `precip_distribution` für `dayIndex <= 4` berechnen, sofern die gewählte Hourly-Quelle den Tag abdeckt; sonst null.
+   - `hourly_profile` ebenfalls für `dayIndex <= 4` (cloud/sun-Raster bleibt für Tag 0/1 fein; für 2–4 reicht das Niederschlags-/Wolkenraster aus dem Mid-Tier).
+   - `peak_hour`, `dry_windows`, `wet_hours` pro Block (existieren bereits in `computePrecipDistribution`) werden so automatisch in `weather_data` und in den Prompt mitgegeben.
 
-Bei einem Regentag:
-- `buildDeterministicSkyParagraph` NICHT anwenden,
-- `isClearSkyDay` (Cloud ≤ 5 % UND Sonne ≥ 10 h) bleibt zwar formal möglich, ist aber bei Regen ohnehin nie wahr → kein Konflikt,
-- `enforceFogWording` weiterhin laufen lassen (rein lexikalische Korrektur, harmlos).
-
-### 2. Sky-Template defensiver
-
-In `buildDeterministicSkyParagraph` (Z. 226):
-- `verySunny`-Schwelle anheben: `sunnyHours ≥ 8` statt `≥ 7`, `sunshineAvg ≥ 10` statt `≥ 9` — damit das Template nur bei tatsächlich sehr sonnigen Tagen greift.
-- Zusätzliche Sicherung: wenn `weatherData.precip?.avg ≥ 1` mm, sofort `null` zurückgeben (Defense-in-Depth, falls Aufrufer den Override-Schutz vergisst).
-
-### 3. Prompt-Regel nachschärfen
-
-Im System-Prompt-Block für die Tagesbeschreibung ergänzen:
-- „Bei `precip.avg ≥ 1 mm` MUSS der erste Absatz die Niederschlagsphase explizit benennen (z. B. ‚am Vormittag zeitweise Regen, am Nachmittag Auflockerungen, am Abend erneut Schauer'). Sky-Beschreibung und Niederschlag dürfen NICHT in getrennten Absätzen stehen, wenn der Niederschlag tagesprägend ist."
-
-Damit liefert die KI von Anfang an einen integrierten Wetter-Absatz und der Override-Eingriff ist auch konzeptionell überflüssig.
-
-### 4. Diagnose-Log
-
-In `enforceSkyConsistency`: wenn der Override aktiv wäre (deterministicSky ≠ null), aber wegen Regen unterdrückt wird, einmal `console.log("[sky-override] suppressed due to precip", { date, precipAvg, peakBlock })`. Hilft, die Wirkung zu verifizieren.
+4. **Prompt-Hinweis schärfen**
+   - Im System-Prompt-Abschnitt zu Niederschlag eine Regel ergänzen: "Wenn `precip_distribution` vorhanden ist, beschreibe den Niederschlag chronologisch nach dem Block mit dem höchsten `precip_mm`/`max_prob`. Erfinde keine Tageszeit, wenn nur die Tagessumme vorliegt — dann 'im Tagesverlauf' / 'zeitweise' verwenden."
 
 ## Was wir nicht anfassen
 
-- `computePrecipDistribution`, Hourly-Fallback, Mid-/Short-Tier-Logik (vorheriger Fix bleibt).
-- Wetterbesserung/-verschlechterung-Prompt-Regeln (bleiben aktiv und passen zur neuen integrierten Sky-Formulierung).
-- UI / DB / Bias / Ensemble.
+- UI / `WeatherDataView` bleibt unverändert (das JSON ergänzt sich automatisch).
+- Bias-Correction, Ensemble, Lightning-Off-Logik, Auto-Forecast-Cron unverändert.
+- Long-Tier (Tag 5–10) bleibt ohne Hourly — dort soll die KI weiterhin generisch formulieren.
+- Keine DB-Migration nötig.
 
 ## Validierung
 
-1. Forecast `3254e7fd-…` neu generieren.
-2. **Tag 0 (heute):** klar oder leicht bewölkt → Sky-Override darf greifen (kein Niederschlag).
-3. **Montag (16 mm):** Body muss Regen morgens UND abends benennen, mit ggf. sonniger Phase am Nachmittag — KEIN reines „rasche Auflösung, danach recht sonnig".
-4. **Dienstag (8 mm, peak night/morning):** Body muss „in der Nacht/am Vormittag noch Regen, im Tagesverlauf Wetterbesserung" enthalten.
-5. Im Server-Log einen `[sky-override] suppressed due to precip`-Eintrag für Mo/Di sehen.
+- Forecast `8ddb31cf-…` neu generieren.
+- In `weather_data` für Tag 2 (Sonntag) bis Tag 4 muss `precip_distribution` mit den vier Blöcken erscheinen; erwartet für Sonntag: `afternoon`/`evening` mit höherem `precip_mm` als `morning`.
+- Sonntags-Body sollte dann z.B. lauten: "Am Vormittag stark bewölkt, weitgehend trocken. Am Nachmittag und Abend zeitweise Regen, vereinzelt Schauer."
 
 ## Risiken
 
-- Sehr leichter Niesel (`precip.avg` knapp ≥ 1 mm) deaktiviert das Sky-Template auch dann, wenn der Tag faktisch sonnig ist. Mitigiert durch zusätzliche Bedingung `peak_block ≠ null` ODER hohe Wahrscheinlichkeit; reine 1 mm Tagessumme ohne Block-Peak gilt nicht als Regentag.
-- Die KI kann auf wirklich klaren Tagen ohne Override eine schlechtere Sky-Formulierung liefern. Die geltenden Sky-Prompt-Regeln bleiben aber unverändert.
+- Open-Meteo-Quota: Der Mid-Tier-Call wird grösser (Hourly für 5 Modelle × 10 Tage). Mitigation: bestehender Tagescache greift bereits; zusätzlich `forecast_days` für Mid-Tier-Hourly optional auf 5 begrenzen.
