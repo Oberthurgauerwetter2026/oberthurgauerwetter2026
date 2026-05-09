@@ -328,6 +328,19 @@ function enforceSkyConsistency(text: string, weatherData: any): string {
   return enforceFogWording(out, weatherData);
 }
 
+// Tag-0-Nachmittagseintrag darf KEINE Tiefstwerte enthalten. Entfernt
+// entsprechende Sätze/Absätze nach der KI-Generierung als Sicherheitsnetz.
+export function stripTiefstwerteForAfternoon(text: string, title: string): string {
+  if (title !== "Heute Nachmittag & Abend") return text;
+  const tiefRe = /(Tiefstwerte?|Tiefste Werte|Bodenfrost(?:gefahr)?|In den Senken[^.]*|Frostgefahr in den Senken)[^.]*\.\s*/gi;
+  const paragraphs = text.split(/\n\n+/).map((p) => {
+    // Satz-für-Satz: Tiefstwerte-Sätze raus, andere bleiben.
+    const cleaned = p.replace(tiefRe, "").replace(/\s{2,}/g, " ").trim();
+    return cleaned;
+  }).filter((p) => p.length > 0);
+  return paragraphs.join("\n\n");
+}
+
 // Erkennt typische Vollverb-/Verbalstil-Phrasen, die im Nominal-/Telegrammstil
 // vermieden werden sollen. Liefert die Liste der gefundenen Verstöße zurück.
 // Der Text selbst wird NICHT verändert — die Korrektur erfolgt per Retry an das Modell.
@@ -2586,7 +2599,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
-        body: degradedNote + enforceSkyConsistency(body, firstData),
+        body: degradedNote + stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle),
         weather_data: firstData,
       })));
     }
@@ -2746,7 +2759,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
-        body: degradedNote + enforceSkyConsistency(body, firstData),
+        body: degradedNote + stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle),
         weather_data: firstData, forecast_id: data.forecastId,
       })));
     }
@@ -2823,8 +2836,14 @@ export const regenerateEntry = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     if (!entry) throw new Error("Eintrag nicht gefunden (ID ungültig oder keine Berechtigung).");
 
-    const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data);
-    const body = enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data);
+    const tempHint = entry.title === "Heute Nachmittag & Abend"
+      ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
+      : "";
+    const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data, tempHint);
+    const body = stripTiefstwerteForAfternoon(
+      enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data),
+      entry.title,
+    );
     const { error: uErr } = await supabase
       .from("forecast_entries")
       .update({ body })

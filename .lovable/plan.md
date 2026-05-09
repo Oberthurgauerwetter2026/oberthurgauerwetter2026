@@ -1,14 +1,22 @@
-Aktuell schreibt der Tag-0-Eintrag "Heute Nachmittag & Abend" Tiefstwerte in den Text (z. B. "Tiefstwerte in der Nacht um 11 Grad"). Das soll künftig nur noch in reinen Abend-/Nachtprognosen erscheinen.
+Ich habe den aktuellen Eintrag geprüft: Der Text steht noch in der Datenbank im bestehenden Entwurf. Zusätzlich greift die Regel bei „Text neu generieren“ für einzelne Einträge noch nicht, weil `regenerateEntry` den neuen Temperatur-Hinweis nicht mitgibt.
 
-Regel (Tag 0):
-- Titel "Heute Nachmittag & Abend" → KEINE Tiefstwerte, nur Höchstwerte (sofern noch sinnvoll) und Wind/Himmel.
-- Titel "Heute Abend & Nacht" → Tiefstwerte erlaubt (wie bisher), Höchstwerte werden nicht mehr genannt.
+Plan:
+1. **Gemeinsame Tag-0-Regel erstellen**
+   - Eine kleine Hilfsfunktion erkennt Titel wie `Heute Nachmittag & Abend`.
+   - Dafür wird ein verbindlicher Prompt-Zusatz erzeugt: keine `Tiefstwerte`, keine Nacht-Temperaturen, keine Senken-/Bodenfrost-Notiz.
 
-Umsetzung in `src/server/forecast.functions.ts`:
-1. In `generateForecast` und `regenerateForecast` beim Tag-0-Eintrag einen `windowHint` ergänzen, der je nach `firstTitle` klar vorschreibt:
-   - Bei "Heute Nachmittag & Abend": "KEIN Tiefstwerte-Satz, keine Nachtwerte, keine Bodenfrost-/Senken-Notiz. Absatz 2 enthält ausschliesslich Höchstwerte (falls noch nicht erreicht) — sonst entfällt Absatz 2."
-   - Bei "Heute Abend & Nacht": Tiefstwerte gemäss bestehender Regel, KEINE Höchstwerte mehr (entspricht bereits dem heutigen Verhalten).
-2. Diese Ausnahme überschreibt die `DEFAULT_TEMP_RULES` für diesen Eintrag.
-3. Der bestehende Tag-1-Hinweis (keine Tiefstwerte, weil schon im Tag-0-Eintrag genannt) greift nur, wenn der Tag-0-Eintrag tatsächlich Tiefstwerte gebracht hat — also nur bei `firstTitle === "Heute Abend & Nacht"`. Das ist heute schon korrekt.
+2. **Alle Generierungswege absichern**
+   - `generateForecast`: nutzt die gemeinsame Regel.
+   - `regenerateForecast`: nutzt die gemeinsame Regel.
+   - `regenerateEntry`: nutzt die Regel ebenfalls, damit der Button **Text neu generieren** den Satz nicht wieder erzeugt.
 
-Danach genügt eine Regeneration, um den aktuellen Sonntag/Heute-Eintrag zu korrigieren.
+3. **Nachbearbeitungs-Schutz einbauen**
+   - Nach der KI-Generierung wird bei Tag-0-Nachmittagseinträgen ein Sanitizer angewendet.
+   - Er entfernt Absätze/Sätze mit `Tiefstwerte`, `tiefste Werte`, `Minimum`, `Bodenfrost`, `Senken`, wenn der Titel `Heute Nachmittag & Abend` ist.
+   - Wenn im selben Absatz auch `Höchstwerte` steht, bleibt der Höchstwerte-Satz erhalten.
+
+4. **Bestehenden aktuellen Entwurf korrigieren**
+   - Den bereits gespeicherten Eintrag `Heute Nachmittag & Abend` in dieser Prognose bereinigen, damit die Änderung sofort sichtbar ist, ohne nochmals komplett neu generieren zu müssen.
+
+5. **Validierung**
+   - Den aktuellen Forecast-Eintrag erneut aus der Datenbank lesen und prüfen, dass bei `Heute Nachmittag & Abend` kein Tiefstwerte-Satz mehr vorhanden ist.
