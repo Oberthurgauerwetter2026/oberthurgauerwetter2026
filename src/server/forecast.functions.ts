@@ -841,12 +841,77 @@ function spread(values: number[]) {
 // Modell-Gewichte für Ensemble-Mittelung. Globale Modelle (GFS) sind im
 // Voralpenraum deutlich gröber als die hochauflösenden europäischen Modelle
 // und bekommen daher weniger Gewicht. Default für unbekannte Modelle = 1.0.
-const MODEL_WEIGHTS: Record<string, number> = {
-  gfs_global: 0.5,
-  gfs_seamless: 0.5,
+// =====================================================================
+// Wetterlagen-abhängige Modell-Gewichtung
+// =====================================================================
+type ModelKey = "icon_ch1" | "icon_ch2" | "arome" | "arpege" | "ecmwf" | "gfs" | "other";
+type Regime = "convective" | "frontal_west" | "bise_ne" | "stable_high" | "default";
+type VarGroup = "precip" | "temp" | "wind" | "other";
+
+function modelKey(name: string): ModelKey {
+  const n = name.toLowerCase();
+  if (n.includes("icon_ch1")) return "icon_ch1";
+  if (n.includes("icon_ch2")) return "icon_ch2";
+  if (n.includes("arome")) return "arome";
+  if (n.includes("arpege")) return "arpege";
+  if (n.includes("ecmwf")) return "ecmwf";
+  if (n.includes("gfs")) return "gfs";
+  return "other";
+}
+
+function varGroup(varName?: string): VarGroup {
+  if (!varName) return "other";
+  if (varName.includes("precipitation") || varName === "weathercode") return "precip";
+  if (varName.includes("temperature") || varName.includes("dewpoint")) return "temp";
+  if (varName.includes("wind") || varName.includes("gust")) return "wind";
+  return "other";
+}
+
+const REGIME_WEIGHTS: Record<Regime, Record<ModelKey, number>> = {
+  convective:   { icon_ch1: 1.6, icon_ch2: 1.1, arome: 1.4, arpege: 0.7, ecmwf: 0.7, gfs: 0.5, other: 1.0 },
+  frontal_west: { icon_ch1: 1.0, icon_ch2: 1.1, arome: 1.5, arpege: 1.3, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
+  bise_ne:      { icon_ch1: 1.3, icon_ch2: 1.4, arome: 0.8, arpege: 1.1, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
+  stable_high:  { icon_ch1: 1.0, icon_ch2: 1.1, arome: 0.9, arpege: 1.2, ecmwf: 1.4, gfs: 0.7, other: 1.0 },
+  default:      { icon_ch1: 1.0, icon_ch2: 1.0, arome: 1.0, arpege: 1.0, ecmwf: 1.0, gfs: 0.5, other: 1.0 },
 };
-function modelWeight(name: string): number {
-  return MODEL_WEIGHTS[name] ?? 1.0;
+
+const VAR_MODIFIERS: Record<VarGroup, Partial<Record<ModelKey, number>>> = {
+  precip: { arome: 1.1, icon_ch1: 1.1 },
+  temp:   { ecmwf: 1.1 },
+  wind:   { arpege: 1.1, icon_ch2: 1.1 },
+  other:  {},
+};
+
+function regimeWeight(name: string, variable?: string, regime?: Regime): number {
+  const k = modelKey(name);
+  const r = regime ?? "default";
+  const base = REGIME_WEIGHTS[r][k] ?? 1.0;
+  const mod = VAR_MODIFIERS[varGroup(variable)][k] ?? 1.0;
+  return base * mod;
+}
+
+// Klassifiziert die Tages-Wetterlage aus bereits vorhandenen Daten.
+// Verwendet ungewichtete Mittelwerte, damit keine Henne-Ei-Situation entsteht.
+function classifyRegime(weather: any, dayIndex: number): Regime {
+  const meanOf = (rec: Record<string, number>): number | null => {
+    const vals = Object.values(rec).filter((v) => Number.isFinite(v));
+    if (!vals.length) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  };
+  const cape = aggregateHourlyForDay(weather, dayIndex, "cape", "max", 8, 22)?.value ?? 0;
+  const li = aggregateHourlyForDay(weather, dayIndex, "lifted_index", "min", 8, 22)?.value;
+  if (cape > 800 || (li != null && li < -2)) return "convective";
+
+  const wind = meanOf(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex)) ?? 0;
+  const dirVals = Object.values(collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex));
+  const dir = circularMeanDeg(dirVals as number[]) ?? 0;
+  const precip = meanOf(collectModelValuesTiered(weather, "precipitation_sum", dayIndex)) ?? 0;
+  const cloud = meanOf(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex)) ?? 50;
+
+  if (precip > 5 && dir >= 200 && dir <= 290) return "frontal_west";
+  if (wind > 25 && dir >= 30 && dir <= 80) return "bise_ne";
+  if (cloud < 30 && precip < 0.5 && wind < 15) return "stable_high";
+  return "default";
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -875,14 +940,17 @@ function classifyUncertainty(spreadVal: number, scale: "temp" | "precip" | "wind
   return "low";
 }
 
-function aggregate(perModel: Record<string, number>) {
+function aggregate(
+  perModel: Record<string, number>,
+  opts?: { variable?: string; regime?: Regime },
+) {
   const entries = Object.entries(perModel);
   if (!entries.length) return null;
   const vals = entries.map(([, v]) => v);
   let wSum = 0;
   let wTot = 0;
   for (const [name, v] of entries) {
-    const w = modelWeight(name);
+    const w = regimeWeight(name, opts?.variable, opts?.regime);
     wSum += v * w;
     wTot += w;
   }
@@ -1529,11 +1597,15 @@ function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
-  const cloudcover = aggregate(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
+  const regime = classifyRegime(weather, dayIndex);
+  const agg = (varName: string, perModel: Record<string, number>) =>
+    aggregate(perModel, { variable: varName, regime });
+
+  const cloudcover = agg("cloudcover_mean", collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = aggregate(sunshineHours);
+  const sunshine_h = agg("sunshine_duration", sunshineHours);
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
   let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
@@ -1545,9 +1617,9 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source = "derived_from_sunshine";
   }
 
-  const wind_max = aggregate(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
+  const wind_max = agg("windspeed_10m_max", collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
   const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
-  const wind_dir = aggregate(windDirPerModel);
+  const wind_dir = agg("winddirection_10m_dominant", windDirPerModel);
   // Use circular mean for the dominant direction (avg of degrees is wrong across 360°)
   const wind_dir_avg = circularMeanDeg(Object.values(windDirPerModel));
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
@@ -1555,16 +1627,16 @@ function formatDayData(weather: any, dayIndex: number) {
 
   const sky_label = isClearSkyDay({ cloudcover: cloudcoverFinal, sunshine_h }) ? "Sonnig und wolkenlos" : null;
 
-  const tmax = aggregate(collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
-  const tmin = aggregate(collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
-  const precip = aggregate(collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
-  const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
-  const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
+  const tmax = agg("temperature_2m_max", collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
+  const tmin = agg("temperature_2m_min", collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
+  const precip = agg("precipitation_sum", collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
+  const precip_prob = agg("precipitation_probability_max", collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
+  const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
 
   // models actually contributing across all variables (transparency for the UI)
   const contributing = new Set<string>();
-  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h]) {
-    if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
+  for (const aggOut of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h]) {
+    if (aggOut?.by_model) for (const k of Object.keys(aggOut.by_model)) contributing.add(k);
   }
 
   return {
@@ -1572,6 +1644,7 @@ function formatDayData(weather: any, dayIndex: number) {
     models_configured: models,
     models_used: Array.from(contributing).join(","),
     tier,
+    regime,
     tmax,
     tmin,
     precip,
