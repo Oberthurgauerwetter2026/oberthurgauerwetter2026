@@ -313,11 +313,33 @@ export async function generatePressureMap(): Promise<{ url: string; targetUtc: s
   const targetUtc = pickTargetTime();
   const targetUtcIso = `${targetUtc}`; // matches Open-Meteo "YYYY-MM-DDTHH:MM"
   let grid = await fetchPressureGrid(targetUtcIso);
-  // Validate we have actual data
   const validCount = grid.values.filter((v) => Number.isFinite(v)).length;
-  if (validCount < grid.values.length * 0.8) {
+  console.log(`Pressure grid: ${validCount}/${grid.values.length} valid points`);
+  if (validCount < 100) {
     throw new Error(`Zu wenige gültige Druckwerte (${validCount}/${grid.values.length})`);
   }
+  // Iteratively fill NaN cells from neighbours so contours stay continuous.
+  for (let pass = 0; pass < 8; pass++) {
+    let filled = 0;
+    const next = grid.values.slice();
+    for (let r = 0; r < grid.rows; r++) {
+      for (let c = 0; c < grid.cols; c++) {
+        const i = r * grid.cols + c;
+        if (Number.isFinite(grid.values[i])) continue;
+        let s = 0, n = 0;
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+          const rr = r + dr, cc = c + dc;
+          if (rr < 0 || rr >= grid.rows || cc < 0 || cc >= grid.cols) continue;
+          const v = grid.values[rr * grid.cols + cc];
+          if (Number.isFinite(v)) { s += v; n++; }
+        }
+        if (n > 0) { next[i] = s / n; filled++; }
+      }
+    }
+    grid = { values: next, cols: grid.cols, rows: grid.rows };
+    if (filled === 0) break;
+  }
+  grid = { ...grid, values: grid.values.map((v) => Number.isFinite(v) ? v : 1013) };
   grid = smooth(smooth(grid));
   const svg = buildSvg(grid, targetUtcIso);
   const bytes = new TextEncoder().encode(svg);
