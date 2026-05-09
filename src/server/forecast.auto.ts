@@ -284,11 +284,18 @@ function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
-  const cloudcover = aggregate(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
-  const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
+  const overrideWeighted = (raw: ReturnType<typeof aggregate>, perModel: Record<string, number>) => {
+    if (!raw) return raw;
+    const w = weightedAvg(perModel, PRECIP_CLOUD_WEIGHTS);
+    return w ? { ...raw, avg: w.avg, weights_used: w.weights_used } : raw;
+  };
+
+  const cloudPerModel = collectPriorityModelValues(weather, "cloudcover_mean", dayIndex);
+  const cloudcover = overrideWeighted(aggregate(cloudPerModel), cloudPerModel);
+  const sunshineRaw = collectPriorityModelValues(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = aggregate(sunshineHours);
+  const sunshine_h = overrideWeighted(aggregate(sunshineHours), sunshineHours);
 
   let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
   let cloudcoverFinal = cloudcover;
@@ -315,8 +322,10 @@ function formatDayData(weather: any, dayIndex: number) {
 
   const tmax = aggregate(collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
   const tmin = aggregate(collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
-  const precip = aggregate(collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
-  const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
+  const precipPerModel = collectPriorityModelValues(weather, "precipitation_sum", dayIndex);
+  const precip = overrideWeighted(aggregate(precipPerModel), precipPerModel);
+  const precipProbPerModel = collectPriorityModelValues(weather, "precipitation_probability_max", dayIndex);
+  const precip_prob = overrideWeighted(aggregate(precipProbPerModel), precipProbPerModel);
   const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
 
   const contributing = new Set<string>();
