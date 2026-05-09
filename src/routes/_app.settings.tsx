@@ -49,7 +49,7 @@ function SettingsPage() {
     radar_radius_km: 15,
     radar_correction_strength: 70,
     bias_enabled: true,
-    bias_stations: "GUT,STG,TAE",
+    bias_stations: "BIZ,GUT",
     bias_lookback_days: 7,
     bias_strength: 70,
     tag0_weight_mosmix: 40,
