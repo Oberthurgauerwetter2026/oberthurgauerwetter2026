@@ -841,12 +841,77 @@ function spread(values: number[]) {
 // Modell-Gewichte für Ensemble-Mittelung. Globale Modelle (GFS) sind im
 // Voralpenraum deutlich gröber als die hochauflösenden europäischen Modelle
 // und bekommen daher weniger Gewicht. Default für unbekannte Modelle = 1.0.
-const MODEL_WEIGHTS: Record<string, number> = {
-  gfs_global: 0.5,
-  gfs_seamless: 0.5,
+// =====================================================================
+// Wetterlagen-abhängige Modell-Gewichtung
+// =====================================================================
+type ModelKey = "icon_ch1" | "icon_ch2" | "arome" | "arpege" | "ecmwf" | "gfs" | "other";
+type Regime = "convective" | "frontal_west" | "bise_ne" | "stable_high" | "default";
+type VarGroup = "precip" | "temp" | "wind" | "other";
+
+function modelKey(name: string): ModelKey {
+  const n = name.toLowerCase();
+  if (n.includes("icon_ch1")) return "icon_ch1";
+  if (n.includes("icon_ch2")) return "icon_ch2";
+  if (n.includes("arome")) return "arome";
+  if (n.includes("arpege")) return "arpege";
+  if (n.includes("ecmwf")) return "ecmwf";
+  if (n.includes("gfs")) return "gfs";
+  return "other";
+}
+
+function varGroup(varName?: string): VarGroup {
+  if (!varName) return "other";
+  if (varName.includes("precipitation") || varName === "weathercode") return "precip";
+  if (varName.includes("temperature") || varName.includes("dewpoint")) return "temp";
+  if (varName.includes("wind") || varName.includes("gust")) return "wind";
+  return "other";
+}
+
+const REGIME_WEIGHTS: Record<Regime, Record<ModelKey, number>> = {
+  convective:   { icon_ch1: 1.6, icon_ch2: 1.1, arome: 1.4, arpege: 0.7, ecmwf: 0.7, gfs: 0.5, other: 1.0 },
+  frontal_west: { icon_ch1: 1.0, icon_ch2: 1.1, arome: 1.5, arpege: 1.3, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
+  bise_ne:      { icon_ch1: 1.3, icon_ch2: 1.4, arome: 0.8, arpege: 1.1, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
+  stable_high:  { icon_ch1: 1.0, icon_ch2: 1.1, arome: 0.9, arpege: 1.2, ecmwf: 1.4, gfs: 0.7, other: 1.0 },
+  default:      { icon_ch1: 1.0, icon_ch2: 1.0, arome: 1.0, arpege: 1.0, ecmwf: 1.0, gfs: 0.5, other: 1.0 },
 };
-function modelWeight(name: string): number {
-  return MODEL_WEIGHTS[name] ?? 1.0;
+
+const VAR_MODIFIERS: Record<VarGroup, Partial<Record<ModelKey, number>>> = {
+  precip: { arome: 1.1, icon_ch1: 1.1 },
+  temp:   { ecmwf: 1.1 },
+  wind:   { arpege: 1.1, icon_ch2: 1.1 },
+  other:  {},
+};
+
+function regimeWeight(name: string, variable?: string, regime?: Regime): number {
+  const k = modelKey(name);
+  const r = regime ?? "default";
+  const base = REGIME_WEIGHTS[r][k] ?? 1.0;
+  const mod = VAR_MODIFIERS[varGroup(variable)][k] ?? 1.0;
+  return base * mod;
+}
+
+// Klassifiziert die Tages-Wetterlage aus bereits vorhandenen Daten.
+// Verwendet ungewichtete Mittelwerte, damit keine Henne-Ei-Situation entsteht.
+function classifyRegime(weather: any, dayIndex: number): Regime {
+  const meanOf = (rec: Record<string, number>): number | null => {
+    const vals = Object.values(rec).filter((v) => Number.isFinite(v));
+    if (!vals.length) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  };
+  const cape = aggregateHourlyForDay(weather, dayIndex, "cape", "max", 8, 22) ?? 0;
+  const li = aggregateHourlyForDay(weather, dayIndex, "lifted_index", "min", 8, 22);
+  if (cape > 800 || (li != null && li < -2)) return "convective";
+
+  const wind = meanOf(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex)) ?? 0;
+  const dirVals = Object.values(collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex));
+  const dir = circularMeanDeg(dirVals as number[]) ?? 0;
+  const precip = meanOf(collectModelValuesTiered(weather, "precipitation_sum", dayIndex)) ?? 0;
+  const cloud = meanOf(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex)) ?? 50;
+
+  if (precip > 5 && dir >= 200 && dir <= 290) return "frontal_west";
+  if (wind > 25 && dir >= 30 && dir <= 80) return "bise_ne";
+  if (cloud < 30 && precip < 0.5 && wind < 15) return "stable_high";
+  return "default";
 }
 
 function percentile(sorted: number[], p: number): number {
