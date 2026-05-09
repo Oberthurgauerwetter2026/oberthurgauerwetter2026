@@ -178,72 +178,133 @@ function geojsonToPath(geo: any): string {
   return parts.join(" ");
 }
 
-// Convert d3-contour multipolygon (in grid coords) to SVG path
-function contourToPath(coords: number[][][][]): string {
+// Convert d3-contour multipolygon (in grid coords) to a smoothed SVG path
+// using Catmull-Rom -> cubic Bezier conversion for clean, organic isobars.
+function contourToPath(coords: number[][][][], smooth = true): string {
   let d = "";
   for (const poly of coords) {
     for (const ring of poly) {
-      for (let i = 0; i < ring.length; i++) {
-        const [gx, gy] = ring[i];
-        const [x, y] = gridToPixel(gx, gy);
-        d += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+      const pts = ring.map(([gx, gy]) => gridToPixel(gx, gy));
+      if (pts.length < 2) continue;
+      if (!smooth || pts.length < 4) {
+        for (let i = 0; i < pts.length; i++) {
+          d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
+        }
+        continue;
       }
+      // Catmull-Rom -> Bezier (closed ring assumed when first==last)
+      const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
+      const n = closed ? pts.length - 1 : pts.length;
+      const get = (i: number): [number, number] => {
+        if (closed) return pts[((i % n) + n) % n];
+        return pts[Math.max(0, Math.min(pts.length - 1, i))];
+      };
+      d += "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
+      const limit = closed ? n : pts.length - 1;
+      for (let i = 0; i < limit; i++) {
+        const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2);
+        const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+        const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+        const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+        const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+        d += "C" + c1x.toFixed(1) + "," + c1y.toFixed(1)
+          + " " + c2x.toFixed(1) + "," + c2y.toFixed(1)
+          + " " + p2[0].toFixed(1) + "," + p2[1].toFixed(1);
+      }
+      if (closed) d += "Z";
     }
   }
   return d;
 }
 
-function buildSvg(grid: Grid, targetUtcIso: string): string {
-  // Build contours every 5 hPa from 960 to 1050
-  const thresholds: number[] = [];
-  for (let p = 960; p <= 1050; p += 5) thresholds.push(p);
-  const cont = d3contours()
-    .size([grid.cols, grid.rows])
-    .thresholds(thresholds);
-  const polys = cont(grid.values);
+// Map a pressure value to a fill color (blue=low, white=normal, red=high)
+function pressureColor(p: number): string {
+  // Stops: 970, 990, 1005, 1013, 1020, 1030, 1045
+  const stops: [number, [number, number, number]][] = [
+    [970, [40, 53, 147]],     // deep indigo
+    [985, [33, 150, 243]],    // blue
+    [1000, [144, 202, 249]],  // light blue
+    [1013, [245, 245, 240]],  // off-white
+    [1020, [255, 224, 178]],  // pale orange
+    [1030, [255, 138, 101]],  // orange
+    [1045, [183, 28, 28]],    // deep red
+  ];
+  if (p <= stops[0][0]) return `rgb(${stops[0][1].join(",")})`;
+  if (p >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(",")})`;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [a, ca] = stops[i], [b, cb] = stops[i + 1];
+    if (p >= a && p <= b) {
+      const t = (p - a) / (b - a);
+      const r = Math.round(ca[0] + (cb[0] - ca[0]) * t);
+      const g = Math.round(ca[1] + (cb[1] - ca[1]) * t);
+      const bl = Math.round(ca[2] + (cb[2] - ca[2]) * t);
+      return `rgb(${r},${g},${bl})`;
+    }
+  }
+  return "#fff";
+}
 
-  // Render
+function buildSvg(grid: Grid, targetUtcIso: string): string {
+  // ── Filled color contours every 2 hPa (soft pressure heat-map) ──
+  const fillThresholds: number[] = [];
+  for (let p = 960; p <= 1050; p += 2) fillThresholds.push(p);
+  const fillCont = d3contours().size([grid.cols, grid.rows]).thresholds(fillThresholds);
+  const fillPolys = fillCont(grid.values);
+
+  // ── Line contours every 5 hPa (synoptic standard) ──
+  const lineThresholds: number[] = [];
+  for (let p = 960; p <= 1050; p += 5) lineThresholds.push(p);
+  const lineCont = d3contours().size([grid.cols, grid.rows]).thresholds(lineThresholds);
+  const linePolys = lineCont(grid.values);
+
   const date = new Date(targetUtcIso);
   const title = `Bodendruck Europa — ${date.toLocaleString("de-CH", {
     timeZone: "UTC",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
   })} UTC`;
-  const subtitle = "Modell DWD ICON-EU · Isobaren je 5 hPa";
+  const subtitle = "Modell DWD ICON-EU · Isobaren je 5 hPa · Farbskala 970–1045 hPa";
 
-  // Coastlines path
-  const coastPath = geojsonToPath(europeCountries as any);
+  // Basemap paths
+  const oceanPath = geojsonToPath(europeOcean as any);
+  const landPath = geojsonToPath(europeCountries as any);
+  const lakesPath = geojsonToPath(europeLakes as any);
 
-  // Lat/lon grid lines
+  // Lat/lon graticule
   const gridLines: string[] = [];
   for (let lon = -20; lon <= 40; lon += 10) {
     const [x1, y1] = project(lon, S);
     const [x2, y2] = project(lon, N);
-    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#cfd8dc" stroke-width="0.5" />`);
+    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.5" />`);
   }
   for (let lat = 35; lat <= 65; lat += 5) {
     const [x1, y1] = project(W, lat);
     const [x2, y2] = project(E, lat);
-    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#cfd8dc" stroke-width="0.5" />`);
+    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.5" />`);
   }
 
-  // Contours with labels
+  // Filled contour bands
+  const fillSvg: string[] = [];
+  for (const poly of fillPolys) {
+    const d = contourToPath(poly.coordinates, true);
+    if (!d) continue;
+    const color = pressureColor(poly.value);
+    fillSvg.push(`<path d="${d}" fill="${color}" fill-rule="evenodd" stroke="none" />`);
+  }
+
+  // Line contours + labels
   const contourSvg: string[] = [];
   const labelSvg: string[] = [];
-  for (const poly of polys) {
+  for (const poly of linePolys) {
     const value = poly.value;
     const isThousand = value === 1000;
-    const isBold = value % 20 === 0; // 980, 1000, 1020, 1040 thicker
-    const stroke = value < 1000 ? "#1565c0" : value > 1000 ? "#c62828" : "#000";
-    const sw = isBold ? 1.6 : 1.0;
-    const d = contourToPath(poly.coordinates);
+    const isBold = value % 20 === 0;
+    const stroke = value < 1000 ? "#0d47a1" : value > 1000 ? "#7f0000" : "#1a1a1a";
+    const sw = isBold ? 1.6 : 0.9;
+    const d = contourToPath(poly.coordinates, true);
     if (!d) continue;
-    contourSvg.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}" />`);
+    contourSvg.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round" />`);
 
-    // Place a label on the longest ring
     let bestRing: number[][] | null = null;
     let bestLen = 0;
     for (const p of poly.coordinates) {
@@ -251,12 +312,11 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
         if (r.length > bestLen) { bestLen = r.length; bestRing = r; }
       }
     }
-    if (bestRing && bestRing.length > 8) {
+    if (bestRing && bestRing.length > 10) {
       const mid = bestRing[Math.floor(bestRing.length / 2)];
       const [lx, ly] = gridToPixel(mid[0], mid[1]);
-      // Draw a small white box behind the number for legibility
       const txt = String(Math.round(value));
-      labelSvg.push(`<g><rect x="${(lx - 12).toFixed(1)}" y="${(ly - 8).toFixed(1)}" width="24" height="12" fill="white" fill-opacity="0.85" /><text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="${isThousand ? "700" : "500"}" fill="${stroke}" text-anchor="middle">${txt}</text></g>`);
+      labelSvg.push(`<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="${isThousand ? "700" : "600"}" fill="${stroke}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.85" paint-order="stroke fill">${txt}</text>`);
     }
   }
 
@@ -265,40 +325,75 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
   const extremaSvg: string[] = [];
   for (const e of extrema) {
     const [x, y] = project(e.lon, e.lat);
-    const color = e.type === "H" ? "#c62828" : "#1565c0";
+    const isH = e.type === "H";
+    const color = isH ? "#7f0000" : "#0d47a1";
     extremaSvg.push(
       `<g>
-        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="Georgia,serif" font-size="34" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="middle">${e.type}</text>
-        <text x="${x.toFixed(1)}" y="${(y + 24).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="${color}" text-anchor="middle">${Math.round(e.value)}</text>
+        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="18" fill="white" fill-opacity="0.85" stroke="${color}" stroke-width="1.5" />
+        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="Georgia,serif" font-size="26" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text>
+        <text x="${x.toFixed(1)}" y="${(y + 28).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text>
       </g>`
     );
   }
 
-  // Frame
+  // Legend (color bar)
+  const legendItems: string[] = [];
+  const lgX = PAD.left + 12, lgY = IMG_H - 30, lgW = 320, lgH = 10;
+  const segs = 32;
+  for (let i = 0; i < segs; i++) {
+    const p = 970 + (1045 - 970) * (i / (segs - 1));
+    legendItems.push(`<rect x="${(lgX + (lgW / segs) * i).toFixed(1)}" y="${lgY}" width="${(lgW / segs + 0.5).toFixed(1)}" height="${lgH}" fill="${pressureColor(p)}" />`);
+  }
+  const legendLabels = [970, 990, 1013, 1030, 1045].map((p) => {
+    const x = lgX + ((p - 970) / (1045 - 970)) * lgW;
+    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#1f2937" text-anchor="middle">${p}</text>`;
+  }).join("");
+
   const [fx1, fy1] = [PAD.left, PAD.top];
-  const [fx2, fy2] = [PAD.left + PLOT_W, PAD.top + PLOT_H];
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${IMG_W} ${IMG_H}" width="${IMG_W}" height="${IMG_H}">
-  <rect width="${IMG_W}" height="${IMG_H}" fill="#f5f7fa" />
-  <text x="${IMG_W / 2}" y="28" font-family="Helvetica,Arial,sans-serif" font-size="20" font-weight="700" fill="#0f172a" text-anchor="middle">${escapeXml(title)}</text>
-  <text x="${IMG_W / 2}" y="48" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#475569" text-anchor="middle">${escapeXml(subtitle)}</text>
-
   <defs>
     <clipPath id="plot"><rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" /></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2332" />
+      <stop offset="1" stop-color="#0f1620" />
+    </linearGradient>
   </defs>
+  <rect width="${IMG_W}" height="${IMG_H}" fill="url(#bg)" />
+  <text x="${IMG_W / 2}" y="30" font-family="Helvetica,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">${escapeXml(title)}</text>
+  <text x="${IMG_W / 2}" y="50" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#cbd5e1" text-anchor="middle">${escapeXml(subtitle)}</text>
 
   <g clip-path="url(#plot)">
-    <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#e8f1f8" />
+    <!-- Ozean -->
+    <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#a8c8e0" />
+    <path d="${oceanPath}" fill="#7fb0d4" stroke="none" />
+    <!-- Land -->
+    <path d="${landPath}" fill="#e8e0c8" stroke="none" />
+    <!-- Druck-Farbflächen über alles, halbtransparent -->
+    <g opacity="0.55">
+      ${fillSvg.join("\n      ")}
+    </g>
+    <!-- Seen -->
+    <path d="${lakesPath}" fill="#a8c8e0" stroke="#6b8caa" stroke-width="0.4" />
+    <!-- Ländergrenzen oben drauf -->
+    <path d="${landPath}" fill="none" stroke="#3a4a5a" stroke-width="0.7" stroke-linejoin="round" />
+    <!-- Graticule -->
     ${gridLines.join("\n    ")}
-    <path d="${coastPath}" fill="#fafaf7" stroke="#90a4ae" stroke-width="0.7" stroke-linejoin="round" />
+    <!-- Isobaren -->
     ${contourSvg.join("\n    ")}
     ${labelSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
   </g>
 
-  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="#0f172a" stroke-width="1" />
-  <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748b" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
+  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="#ffffff" stroke-width="1.5" />
+
+  <!-- Legend -->
+  ${legendItems.join("\n  ")}
+  ${legendLabels}
+  <text x="${lgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Luftdruck (hPa)</text>
+
+  <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
 </svg>`;
 }
 
