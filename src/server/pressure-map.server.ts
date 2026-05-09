@@ -39,10 +39,9 @@ function gridToPixel(gx: number, gy: number): [number, number] {
 }
 
 type Grid = { values: number[]; cols: number; rows: number };
+type Grids = { pressure: Grid; t850: Grid; precip: Grid };
 
-async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
-  // Build coordinates list. Open-Meteo accepts comma-separated lat/lon and
-  // returns one location object per pair.
+async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   const lats: number[] = [];
   const lons: number[] = [];
   for (let r = 0; r < ROWS; r++) {
@@ -52,19 +51,19 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
     }
   }
 
-  // Limit per request: Open-Meteo allows up to ~100 locations. Batch.
   const BATCH = 100;
-  const values: number[] = new Array(lats.length).fill(NaN);
+  const pressure: number[] = new Array(lats.length).fill(NaN);
+  const t850: number[] = new Array(lats.length).fill(NaN);
+  const precip: number[] = new Array(lats.length).fill(NaN);
+
   for (let i = 0; i < lats.length; i += BATCH) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 250)); // throttle to avoid 429
+    if (i > 0) await new Promise((r) => setTimeout(r, 250));
     const la = lats.slice(i, i + BATCH).join(",");
     const lo = lons.slice(i, i + BATCH).join(",");
     const url = new URL("https://api.open-meteo.com/v1/forecast");
     url.searchParams.set("latitude", la);
     url.searchParams.set("longitude", lo);
-    url.searchParams.set("hourly", "pressure_msl");
-    // icon_seamless falls back to ICON global for points outside ICON-EU coverage
-    // (e.g. far Atlantic / Arctic corners of our extent), so the request never 400s.
+    url.searchParams.set("hourly", "pressure_msl,temperature_850hPa,precipitation");
     url.searchParams.set("models", "icon_seamless");
     url.searchParams.set("forecast_days", "2");
     url.searchParams.set("timezone", "UTC");
@@ -73,7 +72,7 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
       const res = await fetch(url);
       if (!res.ok) {
         console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${await res.text()}`);
-        continue; // leave NaN for this batch; smoothing fills gaps
+        continue;
       }
       json = await res.json();
     } catch (err) {
@@ -84,12 +83,31 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
     for (let k = 0; k < list.length; k++) {
       const loc = list[k];
       const times: string[] = loc?.hourly?.time ?? [];
-      const arr: number[] = loc?.hourly?.pressure_msl ?? [];
+      const pArr: number[] = loc?.hourly?.pressure_msl ?? [];
+      const tArr: number[] = loc?.hourly?.temperature_850hPa ?? [];
+      const rArr: number[] = loc?.hourly?.precipitation ?? [];
       const idx = times.indexOf(targetUtcIso);
-      values[i + k] = idx >= 0 && Number.isFinite(arr[idx]) ? arr[idx] : NaN;
+      if (idx >= 0) {
+        if (Number.isFinite(pArr[idx])) pressure[i + k] = pArr[idx];
+        if (Number.isFinite(tArr[idx])) t850[i + k] = tArr[idx];
+        // 6h precipitation sum centered on target (target-2 .. target+3)
+        let sum = 0, count = 0;
+        for (let off = -2; off <= 3; off++) {
+          const j = idx + off;
+          if (j >= 0 && j < rArr.length && Number.isFinite(rArr[j])) {
+            sum += rArr[j];
+            count++;
+          }
+        }
+        if (count > 0) precip[i + k] = sum;
+      }
     }
   }
-  return { values, cols: COLS, rows: ROWS };
+  return {
+    pressure: { values: pressure, cols: COLS, rows: ROWS },
+    t850: { values: t850, cols: COLS, rows: ROWS },
+    precip: { values: precip, cols: COLS, rows: ROWS },
+  };
 }
 
 // Simple 3x3 box blur (1 pass) to soften noisy isobars
@@ -242,24 +260,14 @@ function contourToPath(coords: number[][][][], smooth = true): string {
   return d;
 }
 
-// Map a pressure value to a fill color (blue=low, white=normal, red=high)
-function pressureColor(p: number): string {
-  // Stops: 970, 990, 1005, 1013, 1020, 1030, 1045
-  const stops: [number, [number, number, number]][] = [
-    [970, [40, 53, 147]],     // deep indigo
-    [985, [33, 150, 243]],    // blue
-    [1000, [144, 202, 249]],  // light blue
-    [1013, [245, 245, 240]],  // off-white
-    [1020, [255, 224, 178]],  // pale orange
-    [1030, [255, 138, 101]],  // orange
-    [1045, [183, 28, 28]],    // deep red
-  ];
-  if (p <= stops[0][0]) return `rgb(${stops[0][1].join(",")})`;
-  if (p >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(",")})`;
+// Interpolate within a stops table [value, [r,g,b]]
+function interpColor(v: number, stops: [number, [number, number, number]][]): string {
+  if (v <= stops[0][0]) return `rgb(${stops[0][1].join(",")})`;
+  if (v >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(",")})`;
   for (let i = 0; i < stops.length - 1; i++) {
     const [a, ca] = stops[i], [b, cb] = stops[i + 1];
-    if (p >= a && p <= b) {
-      const t = (p - a) / (b - a);
+    if (v >= a && v <= b) {
+      const t = (v - a) / (b - a);
       const r = Math.round(ca[0] + (cb[0] - ca[0]) * t);
       const g = Math.round(ca[1] + (cb[1] - ca[1]) * t);
       const bl = Math.round(ca[2] + (cb[2] - ca[2]) * t);
@@ -269,12 +277,45 @@ function pressureColor(p: number): string {
   return "#fff";
 }
 
-function buildSvg(grid: Grid, targetUtcIso: string): string {
-  // ── Filled color contours every 2 hPa (soft pressure heat-map) ──
-  const fillThresholds: number[] = [];
-  for (let p = 960; p <= 1050; p += 2) fillThresholds.push(p);
-  const fillCont = d3contours().size([grid.cols, grid.rows]).thresholds(fillThresholds);
-  const fillPolys = fillCont(grid.values);
+// T850 °C → color (cold blue → white at 0 → warm red)
+const T850_STOPS: [number, [number, number, number]][] = [
+  [-30, [49, 54, 149]],
+  [-20, [69, 117, 180]],
+  [-10, [116, 173, 209]],
+  [-5, [171, 217, 233]],
+  [0, [255, 255, 255]],
+  [5, [254, 224, 144]],
+  [10, [253, 174, 97]],
+  [15, [244, 109, 67]],
+  [20, [215, 48, 39]],
+  [25, [165, 0, 38]],
+];
+function t850Color(v: number): string { return interpColor(v, T850_STOPS); }
+
+// Precipitation 6h sum (mm) → color + opacity
+function precipStyle(mm: number): { fill: string; opacity: number } | null {
+  if (!Number.isFinite(mm) || mm < 0.5) return null;
+  if (mm < 1) return { fill: "#bfdbfe", opacity: 0.45 };
+  if (mm < 2) return { fill: "#93c5fd", opacity: 0.55 };
+  if (mm < 5) return { fill: "#60a5fa", opacity: 0.65 };
+  if (mm < 10) return { fill: "#3b82f6", opacity: 0.7 };
+  if (mm < 20) return { fill: "#1d4ed8", opacity: 0.78 };
+  return { fill: "#4c1d95", opacity: 0.85 };
+}
+
+function buildSvg(grids: Grids, targetUtcIso: string): string {
+  const { pressure: grid, t850, precip } = grids;
+
+  // ── T850 filled bands every 2.5 °C (warm/cold air masses) ──
+  const t850Thresholds: number[] = [];
+  for (let t = -32; t <= 28; t += 2.5) t850Thresholds.push(t);
+  const t850Cont = d3contours().size([t850.cols, t850.rows]).thresholds(t850Thresholds);
+  const t850Polys = t850Cont(t850.values);
+
+  // ── Precipitation bands ──
+  const precipThresholds = [0.5, 1, 2, 5, 10, 20];
+  const precipCont = d3contours().size([precip.cols, precip.rows]).thresholds(precipThresholds);
+  const precipPolys = precipCont(precip.values);
 
   // ── Line contours every 5 hPa (synoptic standard) ──
   const lineThresholds: number[] = [];
@@ -288,7 +329,7 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     day: "2-digit", month: "2-digit", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   })} UTC`;
-  const subtitle = "Modell DWD ICON-EU · Isobaren je 5 hPa · Farbskala 970–1045 hPa";
+  const subtitle = "DWD ICON-EU · T 850 hPa (°C) · Niederschlag 6 h · Isobaren je 5 hPa";
 
   // Basemap paths
   const oceanPath = geojsonToPath(europeOcean as any);
@@ -308,13 +349,22 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.5" />`);
   }
 
-  // Filled contour bands
-  const fillSvg: string[] = [];
-  for (const poly of fillPolys) {
+  // T850 filled bands
+  const t850Svg: string[] = [];
+  for (const poly of t850Polys) {
     const d = contourToPath(poly.coordinates, true);
     if (!d) continue;
-    const color = pressureColor(poly.value);
-    fillSvg.push(`<path d="${d}" fill="${color}" fill-rule="evenodd" stroke="none" />`);
+    t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
+  }
+
+  // Precipitation overlay
+  const precipSvg: string[] = [];
+  for (const poly of precipPolys) {
+    const style = precipStyle(poly.value);
+    if (!style) continue;
+    const d = contourToPath(poly.coordinates, true);
+    if (!d) continue;
+    precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
 
   // Line contours + labels
@@ -361,18 +411,40 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     );
   }
 
-  // Legend (color bar)
-  const legendItems: string[] = [];
-  const lgX = PAD.left + 12, lgY = IMG_H - 30, lgW = 320, lgH = 10;
-  const segs = 32;
-  for (let i = 0; i < segs; i++) {
-    const p = 970 + (1045 - 970) * (i / (segs - 1));
-    legendItems.push(`<rect x="${(lgX + (lgW / segs) * i).toFixed(1)}" y="${lgY}" width="${(lgW / segs + 0.5).toFixed(1)}" height="${lgH}" fill="${pressureColor(p)}" />`);
+  // ── Legend: T850 (left) + Precipitation (right) ──
+  const lgY = IMG_H - 30, lgH = 10;
+  // T850 bar
+  const t850LgX = PAD.left + 12, t850LgW = 320;
+  const t850Segs = 40;
+  const t850Items: string[] = [];
+  for (let i = 0; i < t850Segs; i++) {
+    const t = -30 + (25 - -30) * (i / (t850Segs - 1));
+    t850Items.push(`<rect x="${(t850LgX + (t850LgW / t850Segs) * i).toFixed(1)}" y="${lgY}" width="${(t850LgW / t850Segs + 0.5).toFixed(1)}" height="${lgH}" fill="${t850Color(t)}" />`);
   }
-  const legendLabels = [970, 990, 1013, 1030, 1045].map((p) => {
-    const x = lgX + ((p - 970) / (1045 - 970)) * lgW;
-    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${p}</text>`;
+  const t850Labels = [-30, -15, 0, 10, 25].map((t) => {
+    const x = t850LgX + ((t - -30) / (25 - -30)) * t850LgW;
+    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${t > 0 ? "+" : ""}${t}</text>`;
   }).join("");
+
+  // Precipitation bar (discrete swatches)
+  const pLgX = IMG_W - PAD.right - 12 - 280, pLgW = 280;
+  const pSwatches = [
+    { v: 0.5, label: "0.5" },
+    { v: 1, label: "1" },
+    { v: 2, label: "2" },
+    { v: 5, label: "5" },
+    { v: 10, label: "10" },
+    { v: 20, label: "20+" },
+  ];
+  const pStep = pLgW / pSwatches.length;
+  const pItems: string[] = [];
+  const pLabels: string[] = [];
+  for (let i = 0; i < pSwatches.length; i++) {
+    const s = precipStyle(pSwatches[i].v + 0.01)!;
+    const x = pLgX + i * pStep;
+    pItems.push(`<rect x="${x.toFixed(1)}" y="${lgY}" width="${(pStep - 1).toFixed(1)}" height="${lgH}" fill="${s.fill}" fill-opacity="${s.opacity}" />`);
+    pLabels.push(`<text x="${(x + pStep / 2).toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${pSwatches[i].label}</text>`);
+  }
 
   const [fx1, fy1] = [PAD.left, PAD.top];
 
@@ -391,9 +463,13 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     <path d="${oceanPath}" fill="#7fb0d4" stroke="none" />
     <!-- Land -->
     <path d="${landPath}" fill="#e8e0c8" stroke="none" />
-    <!-- Druck-Farbflächen über alles, halbtransparent -->
-    <g opacity="0.55">
-      ${fillSvg.join("\n      ")}
+    <!-- T850 Farbflächen (Warm-/Kaltluftmassen) -->
+    <g opacity="0.62">
+      ${t850Svg.join("\n      ")}
+    </g>
+    <!-- Niederschlag 6h -->
+    <g>
+      ${precipSvg.join("\n      ")}
     </g>
     <!-- Seen -->
     <path d="${lakesPath}" fill="#a8c8e0" stroke="#6b8caa" stroke-width="0.4" />
@@ -409,10 +485,15 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
 
   <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="#2561a1" stroke-width="1.5" />
 
-  <!-- Legend -->
-  ${legendItems.join("\n  ")}
-  ${legendLabels}
-  <text x="${lgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Luftdruck (hPa)</text>
+  <!-- Legend: T850 -->
+  ${t850Items.join("\n  ")}
+  ${t850Labels}
+  <text x="${t850LgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Temperatur 850 hPa (°C)</text>
+
+  <!-- Legend: Precipitation -->
+  ${pItems.join("\n  ")}
+  ${pLabels.join("\n  ")}
+  <text x="${pLgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Niederschlag 6 h (mm)</text>
 
   <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
 </svg>`;
@@ -427,39 +508,50 @@ function pickTargetTime(now = new Date()): string {
   return today.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
 }
 
-export async function generatePressureMap(): Promise<{ url: string; targetUtc: string; bytes: number }> {
-  const targetUtc = pickTargetTime();
-  const targetUtcIso = `${targetUtc}`; // matches Open-Meteo "YYYY-MM-DDTHH:MM"
-  let grid = await fetchPressureGrid(targetUtcIso);
-  const validCount = grid.values.filter((v) => Number.isFinite(v)).length;
-  console.log(`Pressure grid: ${validCount}/${grid.values.length} valid points`);
-  if (validCount < 100) {
-    throw new Error(`Zu wenige gültige Druckwerte (${validCount}/${grid.values.length})`);
-  }
-  // Iteratively fill NaN cells from neighbours so contours stay continuous.
+// Iteratively fill NaN cells from neighbours, then fill any remaining with fallback.
+function fillAndSmooth(g: Grid, fallback: number, smoothPasses = 3): Grid {
+  let cur: Grid = g;
   for (let pass = 0; pass < 8; pass++) {
     let filled = 0;
-    const next = grid.values.slice();
-    for (let r = 0; r < grid.rows; r++) {
-      for (let c = 0; c < grid.cols; c++) {
-        const i = r * grid.cols + c;
-        if (Number.isFinite(grid.values[i])) continue;
+    const next = cur.values.slice();
+    for (let r = 0; r < cur.rows; r++) {
+      for (let c = 0; c < cur.cols; c++) {
+        const i = r * cur.cols + c;
+        if (Number.isFinite(cur.values[i])) continue;
         let s = 0, n = 0;
         for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
           const rr = r + dr, cc = c + dc;
-          if (rr < 0 || rr >= grid.rows || cc < 0 || cc >= grid.cols) continue;
-          const v = grid.values[rr * grid.cols + cc];
+          if (rr < 0 || rr >= cur.rows || cc < 0 || cc >= cur.cols) continue;
+          const v = cur.values[rr * cur.cols + cc];
           if (Number.isFinite(v)) { s += v; n++; }
         }
         if (n > 0) { next[i] = s / n; filled++; }
       }
     }
-    grid = { values: next, cols: grid.cols, rows: grid.rows };
+    cur = { values: next, cols: cur.cols, rows: cur.rows };
     if (filled === 0) break;
   }
-  grid = { ...grid, values: grid.values.map((v) => Number.isFinite(v) ? v : 1013) };
-  grid = smooth(smooth(smooth(grid)));
-  const svg = buildSvg(grid, targetUtcIso);
+  cur = { ...cur, values: cur.values.map((v: number) => Number.isFinite(v) ? v : fallback) };
+  for (let i = 0; i < smoothPasses; i++) cur = smooth(cur);
+  return cur;
+}
+
+export async function generatePressureMap(): Promise<{ url: string; targetUtc: string; bytes: number }> {
+  const targetUtc = pickTargetTime();
+  const targetUtcIso = `${targetUtc}`; // matches Open-Meteo "YYYY-MM-DDTHH:MM"
+  const raw = await fetchGrids(targetUtcIso);
+  const validCount = raw.pressure.values.filter((v: number) => Number.isFinite(v)).length;
+  console.log(`Pressure grid: ${validCount}/${raw.pressure.values.length} valid points`);
+  if (validCount < 100) {
+    throw new Error(`Zu wenige gültige Druckwerte (${validCount}/${raw.pressure.values.length})`);
+  }
+  const grids: Grids = {
+    pressure: fillAndSmooth(raw.pressure, 1013, 3),
+    t850: fillAndSmooth(raw.t850, 0, 2),
+    // Precipitation: don't over-smooth; fill missing with 0
+    precip: fillAndSmooth(raw.precip, 0, 1),
+  };
+  const svg = buildSvg(grids, targetUtcIso);
   const bytes = new TextEncoder().encode(svg);
 
   const latestPath = "europe-pressure-latest.svg";
