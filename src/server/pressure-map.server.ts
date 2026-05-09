@@ -371,7 +371,7 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
   }
   const legendLabels = [970, 990, 1013, 1030, 1045].map((p) => {
     const x = lgX + ((p - 970) / (1045 - 970)) * lgW;
-    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#1f2937" text-anchor="middle">${p}</text>`;
+    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${p}</text>`;
   }).join("");
 
   const [fx1, fy1] = [PAD.left, PAD.top];
