@@ -263,6 +263,23 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   return merged;
 }
 
+// Sammelt Werte aus den vier priorisierten hochauflösenden Modellen über ALLE Tiers.
+// Wenn keines davon liefert → Fallback auf collectModelValuesTiered (alle Tier-Modelle).
+function collectPriorityModelValues(weather: any, varName: string, dayIndex: number) {
+  const merged: Record<string, number> = {};
+  const tiers = [weather.byModel.short, weather.byModel.mid, weather.byModel.long];
+  const lists = [weather.modelLists.short, weather.modelLists.mid, weather.modelLists.long];
+  for (let i = 0; i < tiers.length; i++) {
+    if (!tiers[i]) continue;
+    const v = collectModelValues(tiers[i], varName, lists[i], dayIndex);
+    for (const [k, val] of Object.entries(v)) {
+      if (PRIORITY_MODELS.has(k) && !(k in merged)) merged[k] = val;
+    }
+  }
+  if (Object.keys(merged).length) return merged;
+  return collectModelValuesTiered(weather, varName, dayIndex);
+}
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
