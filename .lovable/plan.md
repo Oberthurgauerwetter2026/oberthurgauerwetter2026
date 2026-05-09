@@ -1,5 +1,7 @@
 ## Änderung
 
-In `src/server/pressure-map.server.ts` die Umrandung des Kartenbereichs (aktuell weisser Rahmen `stroke="#ffffff" stroke-width="1.5"` um das Plot-Rechteck) in **#2561a1** ändern. Strichstärke bleibt.
+In `src/server/pressure-map.server.ts`:
 
-Falls stattdessen die Ländergrenzen oder die Isobaren-Beschriftungs-Halo gemeint sind, bitte kurz Bescheid geben — ich gehe vorerst vom äusseren Kartenrahmen aus, weil das die einzige aktuell schwarz/weiss umrandete Fläche ist.
+- Den dunklen Verlaufs-Hintergrund (`<linearGradient id="bg">` mit `#1a2332` → `#0f1620`) durch eine einfarbige Füllung **#2561a1** ersetzen.
+- Titel- und Untertitel-Textfarben bleiben weiss/hell — passen weiterhin auf den blauen Hintergrund.
+- Legenden-Beschriftung „Luftdruck (hPa)" bleibt weiss; die kleinen Zahlen (970/990/…) sind aktuell `#1f2937` und werden auf weiss gesetzt, damit sie auf #2561a1 lesbar bleiben.
