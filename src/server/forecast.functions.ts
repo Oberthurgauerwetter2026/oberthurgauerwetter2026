@@ -166,6 +166,63 @@ function isClearSkyDay(data: any): boolean {
   return typeof cloudAvg === "number" && typeof sunshineAvg === "number" && cloudAvg <= 5 && sunshineAvg >= 10;
 }
 
+/**
+ * Deterministische Himmels-Klassifikation basierend auf Modelldaten.
+ * Liefert IMMER ein sky_label + sky_pattern, damit die KI keine widersprüchlichen
+ * "sonnig"-Aussagen erfinden kann, wenn Niederschlag/Bewölkung dagegen sprechen.
+ */
+function classifySky(data: any): { sky_label: string; sky_pattern: string } {
+  const cloud = typeof data?.cloudcover?.avg === "number" ? data.cloudcover.avg : null;
+  const sun = typeof data?.sunshine_h?.avg === "number" ? data.sunshine_h.avg : null;
+  const wc = typeof data?.weathercode?.avg === "number" ? data.weathercode.avg : null;
+  const pp = typeof data?.precip_prob?.avg === "number" ? data.precip_prob.avg : null;
+  const thunder = data?.thunderstorm?.class;
+  const thunderActive = thunder && thunder !== "none";
+
+  // 1. Sonnig & wolkenlos
+  if (cloud != null && sun != null && cloud <= 5 && sun >= 10) {
+    return { sky_label: "Sonnig und wolkenlos", sky_pattern: "sonnig_klar" };
+  }
+
+  // 2. Schauer-dominant (kräftiger Niederschlag)
+  if ((wc != null && wc >= 80) || (pp != null && wc != null && pp >= 70 && wc >= 60)) {
+    return {
+      sky_label: thunderActive
+        ? "Stark bewölkt mit Schauern und Gewitterneigung"
+        : "Stark bewölkt mit Schauern",
+      sky_pattern: "schauer_dominant",
+    };
+  }
+
+  // 3. Regnerisch / bewölkt mit Niederschlagssignal
+  if (pp != null && wc != null && pp >= 60 && wc >= 51) {
+    return {
+      sky_label: thunderActive
+        ? "Stark bewölkt mit zeitweisem Regen und lokaler Gewitterneigung"
+        : "Stark bewölkt mit zeitweisem Regen",
+      sky_pattern: "regnerisch_bewoelkt",
+    };
+  }
+
+  // 4. Bedeckt
+  if (cloud != null && sun != null && cloud >= 80 && sun <= 4) {
+    return { sky_label: "Stark bewölkt bis bedeckt", sky_pattern: "bedeckt" };
+  }
+
+  // 5. Überwiegend sonnig
+  if (sun != null && cloud != null && sun >= 8 && cloud <= 30) {
+    return { sky_label: "Ziemlich sonnig", sky_pattern: "ueberwiegend_sonnig" };
+  }
+
+  // 6. Wechselnd bewölkt
+  if ((cloud != null && cloud >= 60) || (sun != null && sun < 4)) {
+    return { sky_label: "Wechselnd bewölkt", sky_pattern: "wechselnd_bewoelkt" };
+  }
+
+  // 7. Default
+  return { sky_label: "Heiter bis wolkig", sky_pattern: "heiter_bis_wolkig" };
+}
+
 function replaceFirstParagraph(text: string, firstParagraph: string): string {
   const paragraphs = text.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
   if (!paragraphs.length) return firstParagraph;
@@ -1671,13 +1728,30 @@ function formatDayData(weather: any, dayIndex: number) {
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max?.avg ?? null);
 
-  const sky_label = isClearSkyDay({ cloudcover: cloudcoverFinal, sunshine_h }) ? "Sonnig und wolkenlos" : null;
-
   const tmax = agg("temperature_2m_max", collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
   const tmin = agg("temperature_2m_min", collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
   const precip = agg("precipitation_sum", collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
   const precip_prob = agg("precipitation_probability_max", collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
   const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
+  const thunderstorm = assessThunderstormRisk(weather, dayIndex, weathercode?.by_model);
+
+  // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
+  // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
+  const skyClass = classifySky({
+    cloudcover: cloudcoverFinal,
+    sunshine_h,
+    weathercode,
+    precip_prob,
+    thunderstorm,
+  });
+  // Nebel-Auflösung als Sonderfall für Tag 0/1 — überschreibt Klassifikation
+  const fogDiss = dayIndex <= 1
+    ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+    : false;
+  const sky_label = fogDiss
+    ? "Morgens Nebel-/Hochnebelfelder, im Tagesverlauf Auflösung, am Nachmittag sonnig"
+    : skyClass.sky_label;
+  const sky_pattern = fogDiss ? "nebel_aufloesung" : skyClass.sky_pattern;
 
   // models actually contributing across all variables (transparency for the UI)
   const contributing = new Set<string>();
@@ -1708,14 +1782,10 @@ function formatDayData(weather: any, dayIndex: number) {
     sunshine_h,
     precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
     hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
-    sky_pattern: dayIndex <= 1
-      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
-      : null,
-    fog_dissipation: dayIndex <= 1
-      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
-      : null,
+    sky_pattern,
+    fog_dissipation: fogDiss,
     wind_gusts: assessGusts(weather, dayIndex),
-    thunderstorm: assessThunderstormRisk(weather, dayIndex, weathercode?.by_model),
+    thunderstorm,
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
@@ -2179,13 +2249,28 @@ PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebel
 
 VERBOTEN: "Es wird", "Wir erwarten", "Insgesamt", "Bitte beachten", "zeigt sich", "präsentiert sich", "gestaltet sich", "der Himmel ist …", "das Wetter wird …", Wettercodes, Prozentangaben, exakte Uhrzeiten, Aufzählungen mit "-" am Zeilenanfang. Vollverb-Konstruktionen wie "die Sonne scheint", "Wolken ziehen auf", "es regnet", "der Wind weht" sind STRIKT zugunsten von Nominalphrasen zu vermeiden. KEINE poetischen, dramatischen oder erfundenen Begriffe wie "grössenwahnsinnige Wolken", "unsichtbare Wolken", "schützende Wolkenschicht", "die Sonnenstrahlen erreichen die Erde", "der Himmel öffnet sich", o.ä. NUR sachliche meteorologische Standardbegriffe aus dem Pflicht-Vokabular. Wenn unsicher: knapp und nüchtern bleiben.`;
 
-export const DEFAULT_SKY_RULES = `Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt".
-Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt, 45/48 = Nebel bzw. Hochnebel).
-Bei weathercode 45 oder 48 bei der MEHRHEIT der Modelle (in "weathercode.by_model"): Du MUSST "Nebel" oder "Hochnebel" verwenden. Die Begriffe "stark bewölkt", "bedeckt", "trübe" oder "grau in grau" sind in diesem Fall ABSOLUT VERBOTEN — auch wenn sunshine_h niedrig ist. Bei Auflösung im Tagesverlauf (sunshine_h ≥ 5h ODER Stundenprofil zeigt nachmittags Aufhellung): "Nebel-/Hochnebelfelder am Morgen, im Tagesverlauf Auflösung, am Nachmittag sonnig". Ohne Auflösung: "Verbreitet Nebel- oder Hochnebelfelder, nur zögerliche Aufhellungen".
-Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
-WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
+export const DEFAULT_SKY_RULES = `HIERARCHIE DER DATENFELDER (strikt absteigend): "sky_label" > "sky_pattern" > "weathercode.avg" + "precip_prob.avg" > "cloudcover.avg" > "sunshine_h.avg". "sunshine_h" allein darf NIE eine sonnige Beschreibung rechtfertigen, wenn "precip_prob.avg" ≥ 50.
+
+ABSOLUTE PRIORITÄT — "sky_label": Wenn "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH (oder leicht stilistisch angepasst, aber inhaltlich identisch) als erster Satz des Wetterverlauf-Absatzes übernommen werden. Es ist ABSOLUT VERBOTEN, ein "sky_label" zu ignorieren oder mit eigenen Beobachtungen aus "sunshine_h" zu überschreiben.
+
+VERBOTS-KLAUSEL "kein sonnig": Wenn EINE der folgenden Bedingungen gilt:
+- "precip_prob.avg" ≥ 60
+- "weathercode.avg" ≥ 51
+- "sky_pattern" ist eines von "schauer_dominant", "regnerisch_bewoelkt", "bedeckt"
+DANN sind die Wörter "sonnig", "recht sonnig", "meist sonnig", "ziemlich sonnig", "heiter", "freundlich", "rasche Auflösung", "Auflockerung danach sonnig" ABSOLUT VERBOTEN. Erlaubte Alternativen für vereinzelte Aufhellungen: "sonnige Lücken", "Aufhellungen", "kurze trockene Phasen", "Wolkenlücken".
+
+KONSISTENZ-REGEL: Wenn der Wind-Absatz "in Schauernähe" oder "stürmische Böen in Schauernähe" enthält ODER "wind_gusts.class" = "strong"/"severe" ist, MUSS der Sky-Absatz Schauer/Regen/Niederschlag erwähnen. Widersprüche wie "recht sonnig … in Schauernähe" sind absolut verboten.
+
+GEWITTER-PFLICHT: Wenn "thunderstorm.class" eines von "isolated", "scattered", "widespread" ist, MUSS der Sky-Absatz "Gewitterneigung", "lokale Gewitter" oder "Gewitter" enthalten.
+
 WENN "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: morgens Nebel-/Hochnebelfelder im Flachland (gerne mit "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), ab spätem Vormittag Auflösung, am Nachmittag verbreitet sonnig. Tagesmittel von "sunshine_h"/"cloudcover" dürfen in diesem Fall NICHT für eine pauschale "stark bewölkt"-Aussage genutzt werden — der Tagesgang aus dem Stundenprofil hat Vorrang.
+
+Bei weathercode 45 oder 48 bei der MEHRHEIT der Modelle (in "weathercode.by_model"): Du MUSST "Nebel" oder "Hochnebel" verwenden. Die Begriffe "stark bewölkt", "bedeckt", "trübe" oder "grau in grau" sind in diesem Fall ABSOLUT VERBOTEN — auch wenn sunshine_h niedrig ist.
+
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
+
+FALLBACK (nur wenn KEIN sky_label vorgegeben): Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt". Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt). Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
+
 MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
