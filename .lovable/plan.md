@@ -1,104 +1,43 @@
-# Erweiterung Wetterpipeline – 7 neue Features
+## Modell-Setup verschlanken
 
-Ziel: Punkte 1, 2, 7, 9, 10, 11, 12 aus der Lückenliste umsetzen. Alles greift in `src/server/forecast.functions.ts` ein, plus neue Server-Module und eine Mini-Migration für `app_settings`.
+Ziel: Weniger Modell-Mittelung, klarere Signale. ICON-D2 (DWD) komplett raus, Globalmodelle (GFS, ECMWF) nur noch im Trend Tag 6–10.
 
-## Übersicht
+### Neue Modell-Tiers (in `app_settings`)
 
-| # | Feature | Quelle | Aufwand |
-|---|---------|--------|---------|
-| 1 | Wind-Böen | Open-Meteo `wind_gusts_10m` | XS |
-| 2 | Gewitter (CAPE + Lifted Index) | Open-Meteo `cape`, `lifted_index` | S |
-| 7 | Taupunkt + rel. Feuchte | Open-Meteo `dewpoint_2m`, `relativehumidity_2m` | S |
-| 9 | Niederschlagsphase | Ableitung aus T + Td + Schneefallgrenze | S |
-| 10 | Blitzdaten | Blitzortung.org-Feed (Bounding-Box JSON) | M |
-| 11 | Modell-Spread / Unsicherheit | Aus bestehenden `byModel`-Werten | S |
-| 12 | Ensemble (P10/P50/P90) | Open-Meteo `/ensemble` (ECMWF + GEFS) | M |
+| Tier | Tage | Modelle |
+|------|------|---------|
+| Kurzfrist | 0–2 | `meteoswiss_icon_ch1`, `meteoswiss_icon_ch2`, `meteofrance_arome_france_hd` |
+| Mittelfrist | 3–5 | `meteoswiss_icon_ch2`, `arpege_europe` |
+| Langfrist / Trend | 6–10 | `ecmwf_ifs025`, `gfs_global` |
 
----
+Änderungen gegenüber heute:
+- `icon_d2` aus Kurzfrist **und** Mittelfrist entfernt
+- `ecmwf_ifs025` + `gfs_global` aus Mittelfrist entfernt → nur noch Tag 6–10
+- Kurzfrist auf reine CH-/HD-Modelle reduziert (3 Modelle statt 4)
+- Mittelfrist nur noch 2 Modelle (ICON-CH2 + ARPEGE)
 
-## 1. Wind-Böen (XS)
+### Umsetzung
 
-- `HOURLY_VARS` um `wind_gusts_10m` erweitern.
-- Aggregation: Tagesmaximum + Zeitfenster der stärksten Böen.
-- Klassen: `<40` ignorieren · `40–60` „kräftige Böen" · `60–80` „stürmische Böen" · `>80` „Sturmböen".
-- Deterministischer Satz im Wind-Absatz, Pflicht-Hinweis im `DEFAULT_WIND_RULES`-Prompt.
+1. **Migration** (`app_settings` Defaults aktualisieren):
+   ```sql
+   UPDATE app_settings SET
+     models_shortterm = 'meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd',
+     models_midterm   = 'meteoswiss_icon_ch2,arpege_europe',
+     models_longterm  = 'ecmwf_ifs025,gfs_global';
+   ```
+   Plus neue Spalten-Defaults via `ALTER TABLE ... ALTER COLUMN ... SET DEFAULT ...` für künftige Resets.
 
-## 2. Konvektion / Gewitter (S)
+2. **Settings-UI** (`src/routes/_app.settings.tsx`): Hilfetexte / Default-Hinweise an die neuen Listen anpassen, falls dort Beispielwerte stehen.
 
-- `HOURLY_VARS` um `cape, lifted_index`.
-- Helfer `assessThunderstormRisk(hourly)` → `none / isolated / scattered / widespread / severe`:
-  - CAPE > 500 + LI < -2 → scattered
-  - CAPE > 1500 + LI < -4 → widespread
-  - CAPE > 2500 + LI < -6 → severe
-- Verknüpfung mit Mehrheit Weathercode 95/96/99 (analog `isFogMajority`).
-- Prompt-Pflicht ab `widespread`: „kräftige Gewitter mit Hagel-/Sturmböenrisiko".
+3. **Keine Code-Änderungen** in `forecast.functions.ts` nötig — die Tier-Logik liest die Modelle dynamisch aus `app_settings`.
 
-## 7. Taupunkt + Feuchte (S)
+### Auswirkungen
 
-- `HOURLY_VARS` um `dewpoint_2m, relativehumidity_2m`.
-- Zwei Auswertungen:
-  - **Schwüle (Sommer):** Td ≥ 16 → „schwül", ≥ 18 → „drückend schwül".
-  - **Nebelpotenzial (Nacht):** RH > 95 % + Wind < 5 km/h + klarer Himmel → Hinweis „lokale Nebelfelder in der Frühe".
-- Wird im Sky-/Temperatur-Absatz integriert.
+- **Kurzfrist (Tag 0–2):** schärfere CH-Auflösung, weniger Glättung durch grobes ICON-D2.
+- **Mittelfrist (Tag 3–5):** nur ICON-CH2 + ARPEGE — Spread-Klassifizierung („Unsicherheit") wird häufiger `high` ausweisen, weil nur 2 Modelle. → Empfehlung: **Ensemble (#12, P10/P50/P90)** als Stabilisator hier wichtig.
+- **Trend Tag 6–10:** unverändert ECMWF + GFS.
 
-## 9. Niederschlagsphase (S)
+### Validierung
 
-- Funktion `derivePhase(tempC, dewpointC, snowLineM, elevM)` → `rain | sleet | snow | freezing_rain`.
-- Regeln: T < 0 + Niederschlag → freezing_rain; T 0–2 + Td < 0 → snow; T 1–3 → sleet; sonst rain.
-- Pro Tagesabschnitt (Morgen/Mittag/Abend) berechnen, Übergänge im Text erwähnen
-  („zunächst Schneeregen, am Nachmittag Übergang zu Regen ab 800 m").
-
-## 10. Blitzdaten (M)
-
-- Neuer Server: `src/server/lightning.server.ts`.
-- Quelle: Blitzortung.org Bounding-Box-Feed (kostenlos). Fallback Open-Meteo `lightning_potential` falls Feed nicht erreichbar.
-- 5-min-Cache (analog Radar). Liefert Blitzanzahl letzte 1h / 3h innerhalb Radius.
-- Integration: aktive Blitze → Gewitter-Sätze priorisieren, Nowcast-Block erwähnt Lage.
-- Settings: `lightning_enabled boolean`, `lightning_radius_km int default 25` in `app_settings` (Migration).
-
-## 11. Modell-Spread / Unsicherheit (S)
-
-- Helfer `computeSpread(values)` → `{ min, max, p10, p90, stddev }`.
-- In `aggregate()` zusätzlich neben `avg` mitspeichern (heute nur Mittelwert).
-- Klassifizierung `low | moderate | high` für Tmax, Tmin, Niederschlag.
-- Bei `high`: Prompt-Pflicht „Prognoseunsicherheit" + Bandbreite („Tmax 12–18 °C je nach Modell").
-- Im `forecast_entries.weather_data`-Debug-Block sichtbar.
-
-## 12. Ensemble (M)
-
-- Neuer Server: `src/server/ensemble.server.ts`.
-- Open-Meteo `/v1/ensemble` mit `ecmwf_ifs025` + `gfs_global` (50 + 30 Member).
-- Nur Tag 2–7 (Tag 0/1 weiter aus deterministischen CH-Modellen).
-- Aggregation: P10/P50/P90 für `temperature_2m_max`, `precipitation_sum`, `windspeed_10m_max`.
-- Daraus Wahrscheinlichkeiten: „>5 mm Regen", „>25 °C", „Frost".
-- Speist Spread-Logik (#11) automatisch mit zusätzlichen Members.
-- Settings: `ensemble_enabled boolean`, `ensemble_min_day int default 2` in `app_settings` (Migration).
-
----
-
-## Migration
-
-```sql
-ALTER TABLE app_settings
-  ADD COLUMN lightning_enabled boolean NOT NULL DEFAULT true,
-  ADD COLUMN lightning_radius_km int NOT NULL DEFAULT 25,
-  ADD COLUMN ensemble_enabled boolean NOT NULL DEFAULT true,
-  ADD COLUMN ensemble_min_day int NOT NULL DEFAULT 2;
-```
-
-## Empfohlene Reihenfolge
-
-1. **#1 + #11** (Quick-Wins ohne neuen Endpoint)
-2. **#2, #7, #9** (alle nur HOURLY_VARS-Erweiterung + Logik)
-3. **#12 Ensemble** (neuer Endpoint, größere Aggregation)
-4. **#10 Blitz** (externe Quelle, eigener Cache + Settings)
-
-## Validierung
-
-- Forecast für aktuellen Tag generieren, prüfen dass alle neuen Felder im `weather_data`-JSON erscheinen.
-- Manuelles Review der Texte für: Gewittertag, schwüler Sommertag, ruhige Hochdrucklage.
-- Server-Logs mit `server-function-logs` checken auf neue API-Fehler.
-
-## Nicht enthalten
-
-Punkte 3 (Schneemenge), 4 (Föhn-Detektor), 5 (UV), 6 (Sicht), 8 (Hitze-Schwellen), 13 (Bergwetter).
+- Neue Prognose generieren, im `weather_data`-Debug prüfen dass `byModel` für Mittwoch nur noch ICON-CH2 + ARPEGE enthält.
+- Stichprobe Trend Tag 6–10: nur ECMWF + GFS.
