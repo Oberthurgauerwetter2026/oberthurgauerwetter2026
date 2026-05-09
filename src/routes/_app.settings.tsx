@@ -88,7 +88,7 @@ function SettingsPage() {
         radar_radius_km: (settings as any).radar_radius_km ?? 15,
         radar_correction_strength: (settings as any).radar_correction_strength ?? 70,
         bias_enabled: (settings as any).bias_enabled ?? true,
-        bias_stations: (settings as any).bias_stations ?? "GUT,STG,TAE",
+        bias_stations: (settings as any).bias_stations ?? "BIZ,GUT",
         bias_lookback_days: (settings as any).bias_lookback_days ?? 7,
         bias_strength: (settings as any).bias_strength ?? 70,
         tag0_weight_mosmix: (settings as any).tag0_weight_mosmix ?? 40,
