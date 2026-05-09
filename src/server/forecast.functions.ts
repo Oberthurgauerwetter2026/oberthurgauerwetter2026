@@ -983,15 +983,18 @@ function classifyUncertainty(spreadVal: number, scale: "temp" | "precip" | "wind
 
 function aggregate(
   perModel: Record<string, number>,
-  opts?: { variable?: string; regime?: Regime },
+  opts?: { variable?: string; regime?: Regime; horizon?: Horizon },
 ) {
-  const entries = Object.entries(perModel);
-  if (!entries.length) return null;
-  const vals = entries.map(([, v]) => v);
+  const allEntries = Object.entries(perModel);
+  if (!allEntries.length) return null;
+  // Modelle mit horizont-Gewicht 0 vollständig ausschliessen (auch aus min/max/spread).
+  const entries = allEntries.filter(([name]) => combinedWeight(name, opts) > 0);
+  const effEntries = entries.length ? entries : allEntries;
+  const vals = effEntries.map(([, v]) => v);
   let wSum = 0;
   let wTot = 0;
-  for (const [name, v] of entries) {
-    const w = regimeWeight(name, opts?.variable, opts?.regime);
+  for (const [name, v] of effEntries) {
+    const w = combinedWeight(name, opts);
     wSum += v * w;
     wTot += w;
   }
@@ -1007,6 +1010,7 @@ function aggregate(
     p50: r1(percentile(sorted, 0.5)),
     p90: r1(percentile(sorted, 0.9)),
     by_model: perModel,
+    n_effective: effEntries.length,
   };
 }
 
