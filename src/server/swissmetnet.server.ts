@@ -5,6 +5,7 @@ import { getOrSetCache } from "./weather-cache.server";
 
 // Bekannte Stationen rund um den Oberthurgau (Abkürzung -> Metadaten)
 const KNOWN_SMN: Record<string, { name: string; lat: number; lon: number; elev: number }> = {
+  BIZ: { name: "Bischofszell",     lat: 47.495, lon: 9.226, elev: 506 },
   GUT: { name: "Güttingen",        lat: 47.602, lon: 9.279, elev: 440 },
   STG: { name: "St. Gallen",       lat: 47.425, lon: 9.398, elev: 776 },
   TAE: { name: "Aadorf/Tänikon",   lat: 47.479, lon: 8.905, elev: 539 },

@@ -1,0 +1,1 @@
+ALTER TABLE public.app_settings ALTER COLUMN bias_stations SET DEFAULT 'BIZ,GUT';
