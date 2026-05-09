@@ -1643,8 +1643,9 @@ function formatDayData(weather: any, dayIndex: number) {
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
   const regime = classifyRegime(weather, dayIndex);
+  const horizon = horizonForDay(weather, dayIndex);
   const agg = (varName: string, perModel: Record<string, number>) =>
-    aggregate(perModel, { variable: varName, regime });
+    aggregate(perModel, { variable: varName, regime, horizon });
 
   const cloudcover = agg("cloudcover_mean", collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
