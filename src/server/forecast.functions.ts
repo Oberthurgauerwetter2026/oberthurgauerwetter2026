@@ -1789,7 +1789,6 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
 
   const out = { ...day };
   // Mittlere Stunde des Fensters für Horizont-Bestimmung
-  const dateStr = weather?.daily?.time?.[dayIndex];
   const midHour = Math.min(23, Math.floor((fromHour + 24) / 2));
   const horizon = dateStr
     ? horizonForHour(`${dateStr}T${String(midHour).padStart(2, "0")}:00:00Z`)
