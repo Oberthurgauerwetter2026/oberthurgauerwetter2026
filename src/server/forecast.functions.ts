@@ -224,6 +224,8 @@ function isFogMajority(weatherData: any): boolean {
 }
 
 function buildDeterministicSkyParagraph(weatherData: any): string | null {
+  // Defense-in-depth: nicht überschreiben, wenn der Tag tagesprägenden Niederschlag hat.
+  if (isPrecipDay(weatherData)) return null;
   const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null }>;
   if (!profile.length) return null;
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -241,8 +243,8 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
     : false;
   const fogMorning = weatherData?.sky_pattern === "nebel_aufloesung"
     || weatherData?.fog_dissipation != null
-    || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 3 || (sunshineAvg ?? 0) >= 5));
-  const verySunny = (sunshineAvg ?? 0) >= 9 || sunnyHours >= 7;
+    || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 4 || (sunshineAvg ?? 0) >= 6));
+  const verySunny = (sunshineAvg ?? 0) >= 10 || sunnyHours >= 8;
   if (!fogMorning && !verySunny && !fogMajority) return null;
 
   // Reiner Nebeltag: Mehrheit 45/48 ohne nennenswerte Auflösung.
