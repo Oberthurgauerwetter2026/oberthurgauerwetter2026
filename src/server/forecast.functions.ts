@@ -1637,7 +1637,7 @@ function formatDayData(weather: any, dayIndex: number) {
   const sunshine_h = aggregate(sunshineHours);
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
-  let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
+  let cloudcover_source: "model" | "derived_from_sunshine" | "none" | "model_clamped_precip" | "derived_from_precip" = cloudcover ? "model" : "none";
   let cloudcoverFinal = cloudcover;
   if (!cloudcover && sunshine_h && typeof sunshine_h.avg === "number") {
     const ratio = Math.max(0, Math.min(1, sunshine_h.avg / 12));
