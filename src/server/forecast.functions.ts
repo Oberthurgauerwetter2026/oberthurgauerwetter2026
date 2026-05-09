@@ -1668,6 +1668,36 @@ function formatDayData(weather: any, dayIndex: number) {
     if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
   }
 
+  // Niederschlags-Klassifikation + Konsistenz-Patches.
+  // Open-Meteo liefert auf mittel- und langfristigen Modellen oft unrealistisch
+  // hohe sunshine_duration-Werte gleichzeitig mit hoher Niederschlagswahrscheinlichkeit.
+  // Wir markieren sunshine_h dann als unzuverlässig und heben cloudcover an.
+  const precipDistEarly = dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null;
+  const hourlyProfileEarly = dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null;
+  const tmpForClass = { precip, precip_prob, weathercode };
+  const precip_class = derivePrecipClass(tmpForClass);
+  const precipDominant = precip_class === "showers" || precip_class === "rain" || precip_class === "heavy"
+    || isPrecipWeathercodeMajority({ weathercode });
+  let sunshine_h_reliable = true;
+  let cloudcoverPatched = cloudcoverFinal;
+  let cloudcoverSourcePatched = cloudcover_source;
+  if (precipDominant) {
+    const probAvg = precip_prob?.avg;
+    if (typeof probAvg === "number" && probAvg >= 60) sunshine_h_reliable = false;
+    if (sunshine_h && (sunshine_h.avg ?? 0) >= 9 && precip_class !== "dry") sunshine_h_reliable = false;
+    // Cloudcover mindestens auf 70 % anheben, falls Modellwert tiefer ist.
+    const cc = cloudcoverPatched?.avg;
+    if (typeof cc === "number" && cc < 70) {
+      cloudcoverPatched = { ...cloudcoverPatched, avg: 70 };
+      cloudcoverSourcePatched = "model_clamped_precip";
+    } else if (!cloudcoverPatched) {
+      cloudcoverPatched = { avg: 80, min: 80, max: 80, spread: 0, p10: 80, p50: 80, p90: 80, by_model: { derived: 80 } };
+      cloudcoverSourcePatched = "derived_from_precip";
+    }
+  }
+  const baseForDirective = { precip_class, cloudcover: cloudcoverPatched, precip_distribution: precipDistEarly };
+  const sky_directive = buildSkyDirective(baseForDirective);
+
   return {
     date: d.time[dayIndex],
     models_configured: models,
@@ -1677,27 +1707,30 @@ function formatDayData(weather: any, dayIndex: number) {
     tmin,
     precip,
     precip_prob,
+    precip_class,
     wind_max,
     wind_dir,
     wind_dir_avg,
     wind_dir_compass,
     wind_label,
     sky_label,
-    cloudcover: cloudcoverFinal,
-    cloudcover_source,
+    sky_directive,
+    cloudcover: cloudcoverPatched,
+    cloudcover_source: cloudcoverSourcePatched,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
+    sunshine_h_reliable,
+    precip_distribution: precipDistEarly,
+    hourly_profile: hourlyProfileEarly,
     sky_pattern: dayIndex <= 1
-      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
+      ? (detectFogDissipation(hourlyProfileEarly, weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
     fog_dissipation: dayIndex <= 1
-      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+      ? detectFogDissipation(hourlyProfileEarly, weathercode?.by_model)
       : null,
     wind_gusts: assessGusts(weather, dayIndex),
     thunderstorm: assessThunderstormRisk(weather, dayIndex, weathercode?.by_model),
-    humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
+    humidity: assessHumidity(weather, dayIndex, hourlyProfileEarly),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
 }
