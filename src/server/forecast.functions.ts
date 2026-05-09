@@ -1799,11 +1799,16 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source = "derived_from_sunshine";
   }
 
-  const wind_max = agg("windspeed_10m_max", collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
+  const windPerModel = collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex);
+  const wind_max_raw = agg("windspeed_10m_max", windPerModel);
+  const weightedW = weightedWindAvg(windPerModel);
+  const wind_max = wind_max_raw && weightedW
+    ? { ...wind_max_raw, avg: weightedW.avg, weights_used: weightedW.weights_used }
+    : wind_max_raw;
   const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
   const wind_dir = agg("winddirection_10m_dominant", windDirPerModel);
-  // Use circular mean for the dominant direction (avg of degrees is wrong across 360°)
-  const wind_dir_avg = circularMeanDeg(Object.values(windDirPerModel));
+  // Use weighted circular mean for the dominant direction; fall back to unweighted.
+  const wind_dir_avg = weightedCircularMeanDeg(windDirPerModel) ?? circularMeanDeg(Object.values(windDirPerModel));
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max?.avg ?? null);
 
