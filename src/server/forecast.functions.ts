@@ -240,9 +240,44 @@ function isFogMajority(weatherData: any): boolean {
 }
 
 function buildDeterministicSkyParagraph(weatherData: any): string | null {
-  const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null }>;
-  if (!profile.length) return null;
+  const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null; p?: number | null; pp?: number | null }>;
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const sunshineAvg = weatherData?.sunshine_h?.avg;
+  const ppAvg = weatherData?.precip_prob?.avg;
+  const wcAvg = weatherData?.weathercode?.avg;
+  const precipAvg = weatherData?.precip?.avg;
+  const thunderClass = weatherData?.thunderstorm?.class;
+  const thunderActive = thunderClass && thunderClass !== "none";
+  const skyPattern = weatherData?.sky_pattern;
+  const skyLabel = weatherData?.sky_label;
+  const fogMajority = isFogMajority(weatherData);
+
+  // SCHUTZ: Wenn die Daten klar Niederschlag/Gewitter zeigen, dürfen wir den
+  // KI-Text NICHT mit einer pauschalen "sonnig"-Variante überschreiben. Die
+  // KI hat dann bereits das sky_label übernommen — wir lassen sie in Ruhe.
+  const wetSignal =
+    (typeof ppAvg === "number" && ppAvg >= 50) ||
+    (typeof wcAvg === "number" && wcAvg >= 51) ||
+    (typeof precipAvg === "number" && precipAvg >= 1) ||
+    thunderActive ||
+    skyPattern === "schauer_dominant" ||
+    skyPattern === "regnerisch_bewoelkt" ||
+    skyPattern === "bedeckt" ||
+    (typeof skyLabel === "string" && /Regen|Schauer|Gewitter|bedeckt/i.test(skyLabel));
+
+  if (wetSignal) {
+    // Reiner Nebeltag bleibt als Spezialfall erlaubt (kein Niederschlag).
+    if (fogMajority && !((typeof ppAvg === "number" && ppAvg >= 50) || thunderActive)) {
+      return "Verbreitet Nebel- oder Hochnebelfelder, nur zögerliche Aufhellungen.";
+    }
+    return null;
+  }
+
+  if (!profile.length) {
+    if (fogMajority) return "Verbreitet Nebel- oder Hochnebelfelder, nur zögerliche Aufhellungen.";
+    return null;
+  }
+
   const early = profile.filter((r) => r.h >= 6 && r.h <= 7);
   const day = profile.filter((r) => r.h >= 8 && r.h <= 18);
   const afternoon = profile.filter((r) => r.h >= 15 && r.h <= 20);
@@ -250,18 +285,15 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
   const earlySun = avg(early.map((r) => r.s ?? 0));
   const sunnyHours = day.filter((r) => (r.s ?? 0) >= 30).length;
   const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
-  const sunshineAvg = weatherData?.sunshine_h?.avg;
-  const fogMajority = isFogMajority(weatherData);
   const fogByModel = weatherData?.weathercode?.by_model
     ? Object.values(weatherData.weathercode.by_model).some((v) => v === 45 || v === 48)
     : false;
-  const fogMorning = weatherData?.sky_pattern === "nebel_aufloesung"
+  const fogMorning = skyPattern === "nebel_aufloesung"
     || weatherData?.fog_dissipation != null
     || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 3 || (sunshineAvg ?? 0) >= 5));
   const verySunny = (sunshineAvg ?? 0) >= 9 || sunnyHours >= 7;
   if (!fogMorning && !verySunny && !fogMajority) return null;
 
-  // Reiner Nebeltag: Mehrheit 45/48 ohne nennenswerte Auflösung.
   if (fogMajority && !verySunny && !fogMorning) {
     return "Verbreitet Nebel- oder Hochnebelfelder, nur zögerliche Aufhellungen.";
   }
