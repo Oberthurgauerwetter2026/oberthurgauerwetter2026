@@ -300,7 +300,7 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     const value = poly.value;
     const isThousand = value === 1000;
     const isBold = value % 20 === 0;
-    const stroke = value < 1000 ? "#0d47a1" : value > 1000 ? "#7f0000" : "#1a1a1a";
+    const stroke = "#000000";
     const sw = isBold ? 1.6 : 0.9;
     const d = contourToPath(poly.coordinates, true);
     if (!d) continue;
