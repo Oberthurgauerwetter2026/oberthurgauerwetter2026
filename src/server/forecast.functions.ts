@@ -328,6 +328,19 @@ function enforceSkyConsistency(text: string, weatherData: any): string {
   return enforceFogWording(out, weatherData);
 }
 
+// Tag-0-Nachmittagseintrag darf KEINE Tiefstwerte enthalten. Entfernt
+// entsprechende Sätze/Absätze nach der KI-Generierung als Sicherheitsnetz.
+export function stripTiefstwerteForAfternoon(text: string, title: string): string {
+  if (title !== "Heute Nachmittag & Abend") return text;
+  const tiefRe = /(Tiefstwerte?|Tiefste Werte|Bodenfrost(?:gefahr)?|In den Senken[^.]*|Frostgefahr in den Senken)[^.]*\.\s*/gi;
+  const paragraphs = text.split(/\n\n+/).map((p) => {
+    // Satz-für-Satz: Tiefstwerte-Sätze raus, andere bleiben.
+    const cleaned = p.replace(tiefRe, "").replace(/\s{2,}/g, " ").trim();
+    return cleaned;
+  }).filter((p) => p.length > 0);
+  return paragraphs.join("\n\n");
+}
+
 // Erkennt typische Vollverb-/Verbalstil-Phrasen, die im Nominal-/Telegrammstil
 // vermieden werden sollen. Liefert die Liste der gefundenen Verstöße zurück.
 // Der Text selbst wird NICHT verändert — die Korrektur erfolgt per Retry an das Modell.
