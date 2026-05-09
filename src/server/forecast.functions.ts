@@ -2838,6 +2838,10 @@ export const updateSettings = createServerFn({ method: "POST" })
         tag0_weight_om: z.number().int().min(0).max(100).optional(),
         tag1_weight_mosmix: z.number().int().min(0).max(100).optional(),
         tag1_weight_om: z.number().int().min(0).max(100).optional(),
+        tag2_weight_mosmix: z.number().int().min(0).max(100).optional(),
+        tag2_weight_om: z.number().int().min(0).max(100).optional(),
+        tag3plus_weight_mosmix: z.number().int().min(0).max(100).optional(),
+        tag3plus_weight_om: z.number().int().min(0).max(100).optional(),
       })
       .parse(d)
   )
