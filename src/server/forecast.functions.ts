@@ -1728,13 +1728,30 @@ function formatDayData(weather: any, dayIndex: number) {
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max?.avg ?? null);
 
-  const sky_label = isClearSkyDay({ cloudcover: cloudcoverFinal, sunshine_h }) ? "Sonnig und wolkenlos" : null;
-
   const tmax = agg("temperature_2m_max", collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
   const tmin = agg("temperature_2m_min", collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
   const precip = agg("precipitation_sum", collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
   const precip_prob = agg("precipitation_probability_max", collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
   const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
+  const thunderstorm = assessThunderstormRisk(weather, dayIndex, weathercode?.by_model);
+
+  // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
+  // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
+  const skyClass = classifySky({
+    cloudcover: cloudcoverFinal,
+    sunshine_h,
+    weathercode,
+    precip_prob,
+    thunderstorm,
+  });
+  // Nebel-Auflösung als Sonderfall für Tag 0/1 — überschreibt Klassifikation
+  const fogDiss = dayIndex <= 1
+    ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+    : false;
+  const sky_label = fogDiss
+    ? "Morgens Nebel-/Hochnebelfelder, im Tagesverlauf Auflösung, am Nachmittag sonnig"
+    : skyClass.sky_label;
+  const sky_pattern = fogDiss ? "nebel_aufloesung" : skyClass.sky_pattern;
 
   // models actually contributing across all variables (transparency for the UI)
   const contributing = new Set<string>();
@@ -1765,14 +1782,10 @@ function formatDayData(weather: any, dayIndex: number) {
     sunshine_h,
     precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
     hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
-    sky_pattern: dayIndex <= 1
-      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
-      : null,
-    fog_dissipation: dayIndex <= 1
-      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
-      : null,
+    sky_pattern,
+    fog_dissipation: fogDiss,
     wind_gusts: assessGusts(weather, dayIndex),
-    thunderstorm: assessThunderstormRisk(weather, dayIndex, weathercode?.by_model),
+    thunderstorm,
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
