@@ -1691,6 +1691,7 @@ function formatDayData(weather: any, dayIndex: number) {
     models_used: Array.from(contributing).join(","),
     tier,
     regime,
+    horizon,
     tmax,
     tmin,
     precip,
