@@ -1597,11 +1597,15 @@ function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
-  const cloudcover = aggregate(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
+  const regime = classifyRegime(weather, dayIndex);
+  const agg = (varName: string, perModel: Record<string, number>) =>
+    aggregate(perModel, { variable: varName, regime });
+
+  const cloudcover = agg("cloudcover_mean", collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = aggregate(sunshineHours);
+  const sunshine_h = agg("sunshine_duration", sunshineHours);
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
   let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
@@ -1613,9 +1617,9 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source = "derived_from_sunshine";
   }
 
-  const wind_max = aggregate(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
+  const wind_max = agg("windspeed_10m_max", collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
   const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
-  const wind_dir = aggregate(windDirPerModel);
+  const wind_dir = agg("winddirection_10m_dominant", windDirPerModel);
   // Use circular mean for the dominant direction (avg of degrees is wrong across 360°)
   const wind_dir_avg = circularMeanDeg(Object.values(windDirPerModel));
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
@@ -1623,16 +1627,16 @@ function formatDayData(weather: any, dayIndex: number) {
 
   const sky_label = isClearSkyDay({ cloudcover: cloudcoverFinal, sunshine_h }) ? "Sonnig und wolkenlos" : null;
 
-  const tmax = aggregate(collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
-  const tmin = aggregate(collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
-  const precip = aggregate(collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
-  const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
-  const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
+  const tmax = agg("temperature_2m_max", collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
+  const tmin = agg("temperature_2m_min", collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
+  const precip = agg("precipitation_sum", collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
+  const precip_prob = agg("precipitation_probability_max", collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
+  const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
 
   // models actually contributing across all variables (transparency for the UI)
   const contributing = new Set<string>();
-  for (const agg of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h]) {
-    if (agg?.by_model) for (const k of Object.keys(agg.by_model)) contributing.add(k);
+  for (const aggOut of [tmax, tmin, precip, precip_prob, wind_max, wind_dir, weathercode, cloudcover, sunshine_h]) {
+    if (aggOut?.by_model) for (const k of Object.keys(aggOut.by_model)) contributing.add(k);
   }
 
   return {
@@ -1640,6 +1644,7 @@ function formatDayData(weather: any, dayIndex: number) {
     models_configured: models,
     models_used: Array.from(contributing).join(","),
     tier,
+    regime,
     tmax,
     tmin,
     precip,
