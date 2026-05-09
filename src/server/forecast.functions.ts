@@ -883,12 +883,52 @@ const VAR_MODIFIERS: Record<VarGroup, Partial<Record<ModelKey, number>>> = {
   other:  {},
 };
 
-function regimeWeight(name: string, variable?: string, regime?: Regime): number {
+// Horizont-basierte Gewichte: kurzfristig dominieren regionale, hochaufgelöste Modelle;
+// globale Modelle (ECMWF, GFS) tragen erst ab Tag +1/+2 bei. Gewicht 0 = Modell wird
+// vollständig aus dem Aggregat (inkl. min/max/spread/percentile) ausgeschlossen.
+const HORIZON_WEIGHTS: Record<Horizon, Record<ModelKey, number>> = {
+  h0_12:    { icon_ch1: 1.6, icon_ch2: 1.4, arome: 1.0, arpege: 1.2, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
+  h12_24:   { icon_ch1: 1.5, icon_ch2: 1.3, arome: 0.9, arpege: 1.2, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
+  h24_48:   { icon_ch1: 1.3, icon_ch2: 1.2, arome: 0.8, arpege: 1.2, ecmwf: 0.6, gfs: 0.4, other: 1.0 },
+  h48_plus: { icon_ch1: 1.0, icon_ch2: 1.0, arome: 0.6, arpege: 1.1, ecmwf: 1.0, gfs: 0.7, other: 1.0 },
+};
+
+function combinedWeight(name: string, opts?: { variable?: string; regime?: Regime; horizon?: Horizon }): number {
   const k = modelKey(name);
-  const r = regime ?? "default";
+  const r = opts?.regime ?? "default";
+  const h = opts?.horizon;
   const base = REGIME_WEIGHTS[r][k] ?? 1.0;
-  const mod = VAR_MODIFIERS[varGroup(variable)][k] ?? 1.0;
-  return base * mod;
+  const mod = VAR_MODIFIERS[varGroup(opts?.variable)][k] ?? 1.0;
+  const horiz = h ? (HORIZON_WEIGHTS[h][k] ?? 1.0) : 1.0;
+  return base * mod * horiz;
+}
+
+// Backwards-compatible alias used by older call sites.
+function regimeWeight(name: string, variable?: string, regime?: Regime): number {
+  return combinedWeight(name, { variable, regime });
+}
+
+// Bestimmt den Vorhersage-Horizont eines Tages relativ zu jetzt (Tagesmitte 12:00 UTC als Anker).
+function horizonForDay(weather: any, dayIndex: number): Horizon {
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!dateStr) return "h48_plus";
+  const dayMid = new Date(`${dateStr}T12:00:00Z`).getTime();
+  const diffH = (dayMid - Date.now()) / 3_600_000;
+  if (diffH < 6) return "h0_12";       // heute, Tagesmitte schon nahe/vorbei
+  if (diffH < 18) return "h12_24";     // heute später Tag
+  if (diffH < 42) return "h24_48";     // morgen
+  return "h48_plus";
+}
+
+// Bestimmt den Horizont für eine konkrete Stunde (ISO-String).
+function horizonForHour(hourIso: string): Horizon {
+  const t = new Date(hourIso).getTime();
+  if (!Number.isFinite(t)) return "h48_plus";
+  const diffH = (t - Date.now()) / 3_600_000;
+  if (diffH < 12) return "h0_12";
+  if (diffH < 24) return "h12_24";
+  if (diffH < 48) return "h24_48";
+  return "h48_plus";
 }
 
 // Klassifiziert die Tages-Wetterlage aus bereits vorhandenen Daten.
