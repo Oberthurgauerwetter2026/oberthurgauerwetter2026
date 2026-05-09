@@ -437,7 +437,7 @@ export async function generatePressureMap(): Promise<{ url: string; targetUtc: s
     if (filled === 0) break;
   }
   grid = { ...grid, values: grid.values.map((v) => Number.isFinite(v) ? v : 1013) };
-  grid = smooth(smooth(grid));
+  grid = smooth(grid);
   const svg = buildSvg(grid, targetUtcIso);
   const bytes = new TextEncoder().encode(svg);
 
