@@ -166,6 +166,63 @@ function isClearSkyDay(data: any): boolean {
   return typeof cloudAvg === "number" && typeof sunshineAvg === "number" && cloudAvg <= 5 && sunshineAvg >= 10;
 }
 
+/**
+ * Deterministische Himmels-Klassifikation basierend auf Modelldaten.
+ * Liefert IMMER ein sky_label + sky_pattern, damit die KI keine widersprüchlichen
+ * "sonnig"-Aussagen erfinden kann, wenn Niederschlag/Bewölkung dagegen sprechen.
+ */
+function classifySky(data: any): { sky_label: string; sky_pattern: string } {
+  const cloud = typeof data?.cloudcover?.avg === "number" ? data.cloudcover.avg : null;
+  const sun = typeof data?.sunshine_h?.avg === "number" ? data.sunshine_h.avg : null;
+  const wc = typeof data?.weathercode?.avg === "number" ? data.weathercode.avg : null;
+  const pp = typeof data?.precip_prob?.avg === "number" ? data.precip_prob.avg : null;
+  const thunder = data?.thunderstorm?.class;
+  const thunderActive = thunder && thunder !== "none";
+
+  // 1. Sonnig & wolkenlos
+  if (cloud != null && sun != null && cloud <= 5 && sun >= 10) {
+    return { sky_label: "Sonnig und wolkenlos", sky_pattern: "sonnig_klar" };
+  }
+
+  // 2. Schauer-dominant (kräftiger Niederschlag)
+  if ((wc != null && wc >= 80) || (pp != null && wc != null && pp >= 70 && wc >= 60)) {
+    return {
+      sky_label: thunderActive
+        ? "Stark bewölkt mit Schauern und Gewitterneigung"
+        : "Stark bewölkt mit Schauern",
+      sky_pattern: "schauer_dominant",
+    };
+  }
+
+  // 3. Regnerisch / bewölkt mit Niederschlagssignal
+  if (pp != null && wc != null && pp >= 60 && wc >= 51) {
+    return {
+      sky_label: thunderActive
+        ? "Stark bewölkt mit zeitweisem Regen und lokaler Gewitterneigung"
+        : "Stark bewölkt mit zeitweisem Regen",
+      sky_pattern: "regnerisch_bewoelkt",
+    };
+  }
+
+  // 4. Bedeckt
+  if (cloud != null && sun != null && cloud >= 80 && sun <= 4) {
+    return { sky_label: "Stark bewölkt bis bedeckt", sky_pattern: "bedeckt" };
+  }
+
+  // 5. Überwiegend sonnig
+  if (sun != null && cloud != null && sun >= 8 && cloud <= 30) {
+    return { sky_label: "Ziemlich sonnig", sky_pattern: "ueberwiegend_sonnig" };
+  }
+
+  // 6. Wechselnd bewölkt
+  if ((cloud != null && cloud >= 60) || (sun != null && sun < 4)) {
+    return { sky_label: "Wechselnd bewölkt", sky_pattern: "wechselnd_bewoelkt" };
+  }
+
+  // 7. Default
+  return { sky_label: "Heiter bis wolkig", sky_pattern: "heiter_bis_wolkig" };
+}
+
 function replaceFirstParagraph(text: string, firstParagraph: string): string {
   const paragraphs = text.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
   if (!paragraphs.length) return firstParagraph;
