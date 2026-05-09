@@ -691,15 +691,17 @@ function PressureMapCard({ session }: { session: any }) {
   }
 
   const embed = status?.embedUrl ?? "";
-  const html = `<img src="${embed}" alt="Bodendruckkarte Europa heute 12 UTC – DWD ICON-EU" style="max-width:100%;height:auto" />`;
+  const altText = "Wetterkarte Europa 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
+  const html = `<img src="${embed}" alt="${altText}" style="max-width:100%;height:auto" />`;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Bodendruckkarte (Europa)</CardTitle>
+        <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
         <CardDescription>
-          Tägliche Karte mit Isobaren und Hoch/Tief, gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo.
-          Wird automatisch täglich neu erzeugt; die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
+          Tägliche Karte mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag, gültig für 12:00 UTC.
+          Modell DWD ICON-EU via Open-Meteo. Wird automatisch täglich neu erzeugt; die Bild-URL bleibt stabil
+          und kann direkt in WordPress eingebettet werden.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -721,7 +723,7 @@ function PressureMapCard({ session }: { session: any }) {
             <div className="rounded border bg-muted/30 p-2">
               <img
                 src={`${embed}?v=${bust}`}
-                alt="Bodendruckkarte Europa"
+                alt={altText}
                 className="w-full h-auto"
                 onError={() => { /* noop */ }}
               />
