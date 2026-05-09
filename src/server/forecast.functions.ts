@@ -1812,12 +1812,18 @@ function formatDayData(weather: any, dayIndex: number) {
   const horizon = horizonForDay(weather, dayIndex);
   const agg = (varName: string, perModel: Record<string, number>) =>
     aggregate(perModel, { variable: varName, regime, horizon });
+  const overrideWeighted = (raw: any, perModel: Record<string, number>) => {
+    if (!raw) return raw;
+    const w = weightedAvg(perModel, PRECIP_CLOUD_WEIGHTS);
+    return w ? { ...raw, avg: w.avg, weights_used: w.weights_used } : raw;
+  };
 
-  const cloudcover = agg("cloudcover_mean", collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
-  const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
+  const cloudPerModel = collectPriorityModelValues(weather, "cloudcover_mean", dayIndex);
+  const cloudcover = overrideWeighted(agg("cloudcover_mean", cloudPerModel), cloudPerModel);
+  const sunshineRaw = collectPriorityModelValues(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = agg("sunshine_duration", sunshineHours);
+  const sunshine_h = overrideWeighted(agg("sunshine_duration", sunshineHours), sunshineHours);
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
   let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
@@ -1837,15 +1843,16 @@ function formatDayData(weather: any, dayIndex: number) {
     : wind_max_raw;
   const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
   const wind_dir = agg("winddirection_10m_dominant", windDirPerModel);
-  // Use weighted circular mean for the dominant direction; fall back to unweighted.
   const wind_dir_avg = weightedCircularMeanDeg(windDirPerModel) ?? circularMeanDeg(Object.values(windDirPerModel));
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max?.avg ?? null);
 
   const tmax = agg("temperature_2m_max", collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
   const tmin = agg("temperature_2m_min", collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
-  const precip = agg("precipitation_sum", collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
-  const precip_prob = agg("precipitation_probability_max", collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
+  const precipPerModel = collectPriorityModelValues(weather, "precipitation_sum", dayIndex);
+  const precip = overrideWeighted(agg("precipitation_sum", precipPerModel), precipPerModel);
+  const precipProbPerModel = collectPriorityModelValues(weather, "precipitation_probability_max", dayIndex);
+  const precip_prob = overrideWeighted(agg("precipitation_probability_max", precipProbPerModel), precipProbPerModel);
   const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
   const thunderstorm = assessThunderstormRisk(weather, dayIndex, weathercode?.by_model);
 
