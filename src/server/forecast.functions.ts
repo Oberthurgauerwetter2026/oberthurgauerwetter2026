@@ -1679,7 +1679,9 @@ function formatDayData(weather: any, dayIndex: number) {
   const precipDominant = precip_class === "showers" || precip_class === "rain" || precip_class === "heavy"
     || isPrecipWeathercodeMajority({ weathercode });
   let sunshine_h_reliable = true;
-  let cloudcoverPatched = cloudcoverFinal;
+  let cloudcoverPatched: any = cloudcoverFinal;
+  let _ignoreCloudOriginal = cloudcoverFinal;
+  void _ignoreCloudOriginal;
   let cloudcoverSourcePatched = cloudcover_source;
   if (precipDominant) {
     const probAvg = precip_prob?.avg;
