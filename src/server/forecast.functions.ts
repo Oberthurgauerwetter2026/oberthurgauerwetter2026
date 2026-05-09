@@ -1658,7 +1658,7 @@ function formatDayData(weather: any, dayIndex: number) {
   if (!cloudcover && sunshine_h && typeof sunshine_h.avg === "number") {
     const ratio = Math.max(0, Math.min(1, sunshine_h.avg / 12));
     const derived = Math.round((1 - ratio) * 100);
-    cloudcoverFinal = { avg: derived, min: derived, max: derived, spread: 0, p10: derived, p50: derived, p90: derived, by_model: { derived } };
+    cloudcoverFinal = { avg: derived, min: derived, max: derived, spread: 0, p10: derived, p50: derived, p90: derived, by_model: { derived }, n_effective: 1 };
     cloudcover_source = "derived_from_sunshine";
   }
 
