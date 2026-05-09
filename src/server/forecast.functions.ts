@@ -189,7 +189,77 @@ function buildWindLabel(dirDeg: number | null, maxKmh: number | null): string | 
 function isClearSkyDay(data: any): boolean {
   const cloudAvg = data?.cloudcover?.avg;
   const sunshineAvg = data?.sunshine_h?.avg;
+  if (isPrecipDominant(data)) return false;
   return typeof cloudAvg === "number" && typeof sunshineAvg === "number" && cloudAvg <= 5 && sunshineAvg >= 10;
+}
+
+// Klassifiziert die Niederschlagsintensität eines Tages aus Tagessumme + max. Wahrscheinlichkeit.
+function derivePrecipClass(weatherData: any): "dry" | "showers" | "rain" | "heavy" | null {
+  const p = weatherData?.precip?.avg;
+  const prob = weatherData?.precip_prob?.avg;
+  const pa = typeof p === "number" ? p : null;
+  const pp = typeof prob === "number" ? prob : null;
+  if (pa == null && pp == null) return null;
+  const paV = pa ?? 0;
+  const ppV = pp ?? 0;
+  if (paV >= 15) return "heavy";
+  if (paV >= 5 || ppV >= 80) return "rain";
+  if (paV >= 0.5 || ppV >= 50) return "showers";
+  if (paV <= 0.2 && ppV < 30) return "dry";
+  return "showers";
+}
+
+// Mehrheit der Modelle meldet einen Regen-/Schauer-/Gewitter-Code (>= 60).
+function isPrecipWeathercodeMajority(weatherData: any): boolean {
+  const byModel = weatherData?.weathercode?.by_model;
+  if (!byModel) return false;
+  const vals = Object.values(byModel).filter((v): v is number => typeof v === "number");
+  if (!vals.length) return false;
+  const rainy = vals.filter((v) => v >= 60).length;
+  return rainy / vals.length > 0.5;
+}
+
+// Niederschlag dominiert: precip_class >= showers ODER Mehrheit der weathercodes >= 60.
+function isPrecipDominant(weatherData: any): boolean {
+  const cls = weatherData?.precip_class ?? derivePrecipClass(weatherData);
+  if (cls === "showers" || cls === "rain" || cls === "heavy") return true;
+  if (isPrecipWeathercodeMajority(weatherData)) return true;
+  return false;
+}
+
+// Server-seitige Sky-Direktive: harte Vorgabe für den ersten Absatz, wenn Niederschlag dominiert.
+// Dadurch hängt der Sky-Satz nicht mehr von widersprüchlichen sunshine_h-Werten ab.
+function buildSkyDirective(weatherData: any): string | null {
+  const cls = weatherData?.precip_class ?? derivePrecipClass(weatherData);
+  if (!cls || cls === "dry") return null;
+  const cc = weatherData?.cloudcover?.avg;
+  const ccTxt = typeof cc !== "number"
+    ? "wechselnd bewölkt"
+    : cc >= 80 ? "stark bewölkt"
+    : cc >= 55 ? "wechselnd bewölkt"
+    : "teils sonnig, teils bewölkt";
+  // Tageszeit-Hinweis aus precip_distribution, falls vorhanden
+  let timeHint = "";
+  const dist = weatherData?.precip_distribution;
+  const blocks = dist?.blocks ?? null;
+  if (blocks && typeof blocks === "object") {
+    const order: Array<[string, string]> = [
+      ["morning", "am Vormittag"],
+      ["afternoon", "am Nachmittag"],
+      ["evening", "am Abend"],
+      ["night", "in der Nacht"],
+    ];
+    let bestKey = "";
+    let bestMm = -1;
+    for (const [k] of order) {
+      const mm = blocks[k]?.precip_mm ?? blocks[k]?.mm ?? null;
+      if (typeof mm === "number" && mm > bestMm) { bestMm = mm; bestKey = k; }
+    }
+    if (bestMm >= 1) timeHint = " " + (order.find((o) => o[0] === bestKey)?.[1] ?? "");
+  }
+  if (cls === "heavy") return `${ccTxt}, anhaltender Regen${timeHint}.`;
+  if (cls === "rain") return `${ccTxt}, zeitweise Regen${timeHint}.`;
+  return `${ccTxt}, Schauer${timeHint}.`;
 }
 
 function replaceFirstParagraph(text: string, firstParagraph: string): string {
@@ -209,6 +279,10 @@ function isFogMajority(weatherData: any): boolean {
 }
 
 function buildDeterministicSkyParagraph(weatherData: any): string | null {
+  // Niederschlag dominiert: harte Sky-Direktive zurückgeben (keine "sonnig"-Konstrukte).
+  if (isPrecipDominant(weatherData)) {
+    return weatherData?.sky_directive ?? buildSkyDirective(weatherData);
+  }
   const profile = (weatherData?.hourly_profile ?? []) as Array<{ h: number; c?: number | null; s?: number | null }>;
   if (!profile.length) return null;
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -220,6 +294,7 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
   const sunnyHours = day.filter((r) => (r.s ?? 0) >= 30).length;
   const afternoonCloud = avg(afternoon.map((r) => r.c).filter((v): v is number => v != null));
   const sunshineAvg = weatherData?.sunshine_h?.avg;
+  const sunshineReliable = weatherData?.sunshine_h_reliable !== false;
   const fogMajority = isFogMajority(weatherData);
   const fogByModel = weatherData?.weathercode?.by_model
     ? Object.values(weatherData.weathercode.by_model).some((v) => v === 45 || v === 48)
@@ -227,7 +302,7 @@ function buildDeterministicSkyParagraph(weatherData: any): string | null {
   const fogMorning = weatherData?.sky_pattern === "nebel_aufloesung"
     || weatherData?.fog_dissipation != null
     || (fogByModel && (earlyCloud ?? 0) >= 85 && (earlySun ?? 99) <= 10 && (sunnyHours >= 3 || (sunshineAvg ?? 0) >= 5));
-  const verySunny = (sunshineAvg ?? 0) >= 9 || sunnyHours >= 7;
+  const verySunny = sunshineReliable && ((sunshineAvg ?? 0) >= 9 || sunnyHours >= 7);
   if (!fogMorning && !verySunny && !fogMajority) return null;
 
   // Reiner Nebeltag: Mehrheit 45/48 ohne nennenswerte Auflösung.
