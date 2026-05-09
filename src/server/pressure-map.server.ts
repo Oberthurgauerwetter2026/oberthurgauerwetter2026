@@ -6,6 +6,8 @@
 
 import { contours as d3contours } from "d3-contour";
 import europeCountries from "@/data/europe-countries.json";
+import europeOcean from "@/data/europe-ocean.json";
+import europeLakes from "@/data/europe-lakes.json";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 // Map extent
