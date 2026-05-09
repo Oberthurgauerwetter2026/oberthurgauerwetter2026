@@ -56,6 +56,7 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
   const BATCH = 100;
   const values: number[] = new Array(lats.length).fill(NaN);
   for (let i = 0; i < lats.length; i += BATCH) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 250)); // throttle to avoid 429
     const la = lats.slice(i, i + BATCH).join(",");
     const lo = lons.slice(i, i + BATCH).join(",");
     const url = new URL("https://api.open-meteo.com/v1/forecast");
