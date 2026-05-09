@@ -60,12 +60,23 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
     url.searchParams.set("latitude", la);
     url.searchParams.set("longitude", lo);
     url.searchParams.set("hourly", "pressure_msl");
-    url.searchParams.set("models", "icon_eu");
+    // icon_seamless falls back to ICON global for points outside ICON-EU coverage
+    // (e.g. far Atlantic / Arctic corners of our extent), so the request never 400s.
+    url.searchParams.set("models", "icon_seamless");
     url.searchParams.set("forecast_days", "2");
     url.searchParams.set("timezone", "UTC");
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Open-Meteo ${res.status}: ${await res.text()}`);
-    const json: any = await res.json();
+    let json: any;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${await res.text()}`);
+        continue; // leave NaN for this batch; smoothing fills gaps
+      }
+      json = await res.json();
+    } catch (err) {
+      console.warn(`Open-Meteo batch ${i} threw:`, err);
+      continue;
+    }
     const list = Array.isArray(json) ? json : [json];
     for (let k = 0; k < list.length; k++) {
       const loc = list[k];
