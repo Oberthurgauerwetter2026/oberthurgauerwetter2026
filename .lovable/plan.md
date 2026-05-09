@@ -1,26 +1,29 @@
 ## Ziel
 
-Alt-Text und Beschreibung des Einbettungs-Snippets aktualisieren, damit sie die neuen Layer (T850, Niederschlag) widerspiegeln.
+Die Karte soll immer den **Folgetag 12:00 UTC** zeigen (Vorhersage statt aktueller/zurückliegender Tag).
 
-## Änderungen
+## Änderung
 
-Datei: `src/routes/_app.settings.tsx`
+Datei: `src/server/pressure-map.server.ts` — Funktion `pickTargetTime()` (Zeilen 502–509).
 
-1. **Alt-Text** (Zeile 694) — von
-   `"Bodendruckkarte Europa heute 12 UTC – DWD ICON-EU"`
-   auf
-   `"Wetterkarte Europa 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)"`.
+Statt heute/gestern wird konsequent **morgen 12:00 UTC** gewählt:
 
-2. **CardTitle** (Zeile 699) — von
-   `"Bodendruckkarte (Europa)"`
-   auf
-   `"Wetterkarte Europa (Druck · T850 · Niederschlag)"`.
+```ts
+function pickTargetTime(now = new Date()): string {
+  const tomorrow = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 12, 0, 0
+  ));
+  return tomorrow.toISOString().slice(0, 16);
+}
+```
 
-3. **CardDescription** (Zeilen 700–703) — Text erweitern:
-   *„Tägliche Karte mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag, gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Wird automatisch täglich neu erzeugt; die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden."*
+## Texte (Settings-Seite)
 
-4. **Inline-`<img alt>`** in der Vorschau (Zeile 724) — von `"Bodendruckkarte Europa"` auf den gleichen neuen Alt-Text wie in (1), damit Vorschau und Snippet konsistent sind.
+In `src/routes/_app.settings.tsx` Beschreibung/Alt-Text leicht anpassen, sodass „gültig für 12:00 UTC am Folgetag" klar wird:
+
+- Alt-Text: `"Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)"`
+- CardDescription: „Tägliche **Vorhersagekarte für den Folgetag** mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag, gültig für 12:00 UTC. …"
 
 ## Nicht geändert
 
-Endpoint, URL, Logik, Storage-Pfad — nur Texte.
+Open-Meteo-Forecast-Endpoint liefert bereits Vorhersagedaten — keine API-Änderung nötig. Cron-Zeitpunkt, Storage-Pfad (`europe-pressure-latest.svg`) und Embed-URL bleiben gleich.

@@ -691,7 +691,7 @@ function PressureMapCard({ session }: { session: any }) {
   }
 
   const embed = status?.embedUrl ?? "";
-  const altText = "Wetterkarte Europa 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
+  const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
   const html = `<img src="${embed}" alt="${altText}" style="max-width:100%;height:auto" />`;
 
   return (
@@ -699,9 +699,9 @@ function PressureMapCard({ session }: { session: any }) {
       <CardHeader>
         <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
         <CardDescription>
-          Tägliche Karte mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag, gültig für 12:00 UTC.
-          Modell DWD ICON-EU via Open-Meteo. Wird automatisch täglich neu erzeugt; die Bild-URL bleibt stabil
-          und kann direkt in WordPress eingebettet werden.
+          Tägliche Vorhersagekarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
+          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Wird automatisch täglich neu erzeugt;
+          die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
