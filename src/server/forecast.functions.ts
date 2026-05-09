@@ -1954,7 +1954,11 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   if (Object.keys(tmaxPerModel).length) out.tmax = aggH("temperature_2m_max", tmaxPerModel);
   if (Object.keys(precPerModel).length) out.precip = aggH("precipitation_sum", precPerModel);
   if (Object.keys(probPerModel).length) out.precip_prob = aggH("precipitation_probability_max", probPerModel);
-  if (Object.keys(windPerModel).length) out.wind_max = aggH("windspeed_10m_max", windPerModel);
+  if (Object.keys(windPerModel).length) {
+    const wRaw = aggH("windspeed_10m_max", windPerModel);
+    const wW = weightedWindAvg(windPerModel);
+    out.wind_max = wRaw && wW ? { ...wRaw, avg: wW.avg, weights_used: wW.weights_used } : wRaw;
+  }
   if (Object.keys(cloudPerModel).length) out.cloudcover = aggH("cloudcover_mean", cloudPerModel);
   if (Object.keys(sunHPerModel).length) out.sunshine_h = aggH("sunshine_duration", sunHPerModel);
   if (horizon) out.horizon = horizon;
