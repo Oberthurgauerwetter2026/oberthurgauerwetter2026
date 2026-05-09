@@ -2249,13 +2249,28 @@ PFLICHT-VOKABULAR (verwenden wo passend): "Quellwolken", "Hochnebel", "hochnebel
 
 VERBOTEN: "Es wird", "Wir erwarten", "Insgesamt", "Bitte beachten", "zeigt sich", "präsentiert sich", "gestaltet sich", "der Himmel ist …", "das Wetter wird …", Wettercodes, Prozentangaben, exakte Uhrzeiten, Aufzählungen mit "-" am Zeilenanfang. Vollverb-Konstruktionen wie "die Sonne scheint", "Wolken ziehen auf", "es regnet", "der Wind weht" sind STRIKT zugunsten von Nominalphrasen zu vermeiden. KEINE poetischen, dramatischen oder erfundenen Begriffe wie "grössenwahnsinnige Wolken", "unsichtbare Wolken", "schützende Wolkenschicht", "die Sonnenstrahlen erreichen die Erde", "der Himmel öffnet sich", o.ä. NUR sachliche meteorologische Standardbegriffe aus dem Pflicht-Vokabular. Wenn unsicher: knapp und nüchtern bleiben.`;
 
-export const DEFAULT_SKY_RULES = `Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt".
-Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt, 45/48 = Nebel bzw. Hochnebel).
-Bei weathercode 45 oder 48 bei der MEHRHEIT der Modelle (in "weathercode.by_model"): Du MUSST "Nebel" oder "Hochnebel" verwenden. Die Begriffe "stark bewölkt", "bedeckt", "trübe" oder "grau in grau" sind in diesem Fall ABSOLUT VERBOTEN — auch wenn sunshine_h niedrig ist. Bei Auflösung im Tagesverlauf (sunshine_h ≥ 5h ODER Stundenprofil zeigt nachmittags Aufhellung): "Nebel-/Hochnebelfelder am Morgen, im Tagesverlauf Auflösung, am Nachmittag sonnig". Ohne Auflösung: "Verbreitet Nebel- oder Hochnebelfelder, nur zögerliche Aufhellungen".
-Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
-WENN "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH übernommen werden.
+export const DEFAULT_SKY_RULES = `HIERARCHIE DER DATENFELDER (strikt absteigend): "sky_label" > "sky_pattern" > "weathercode.avg" + "precip_prob.avg" > "cloudcover.avg" > "sunshine_h.avg". "sunshine_h" allein darf NIE eine sonnige Beschreibung rechtfertigen, wenn "precip_prob.avg" ≥ 50.
+
+ABSOLUTE PRIORITÄT — "sky_label": Wenn "sky_label" gesetzt ist, MUSS diese Himmelsbeschreibung WÖRTLICH (oder leicht stilistisch angepasst, aber inhaltlich identisch) als erster Satz des Wetterverlauf-Absatzes übernommen werden. Es ist ABSOLUT VERBOTEN, ein "sky_label" zu ignorieren oder mit eigenen Beobachtungen aus "sunshine_h" zu überschreiben.
+
+VERBOTS-KLAUSEL "kein sonnig": Wenn EINE der folgenden Bedingungen gilt:
+- "precip_prob.avg" ≥ 60
+- "weathercode.avg" ≥ 51
+- "sky_pattern" ist eines von "schauer_dominant", "regnerisch_bewoelkt", "bedeckt"
+DANN sind die Wörter "sonnig", "recht sonnig", "meist sonnig", "ziemlich sonnig", "heiter", "freundlich", "rasche Auflösung", "Auflockerung danach sonnig" ABSOLUT VERBOTEN. Erlaubte Alternativen für vereinzelte Aufhellungen: "sonnige Lücken", "Aufhellungen", "kurze trockene Phasen", "Wolkenlücken".
+
+KONSISTENZ-REGEL: Wenn der Wind-Absatz "in Schauernähe" oder "stürmische Böen in Schauernähe" enthält ODER "wind_gusts.class" = "strong"/"severe" ist, MUSS der Sky-Absatz Schauer/Regen/Niederschlag erwähnen. Widersprüche wie "recht sonnig … in Schauernähe" sind absolut verboten.
+
+GEWITTER-PFLICHT: Wenn "thunderstorm.class" eines von "isolated", "scattered", "widespread" ist, MUSS der Sky-Absatz "Gewitterneigung", "lokale Gewitter" oder "Gewitter" enthalten.
+
 WENN "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: morgens Nebel-/Hochnebelfelder im Flachland (gerne mit "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), ab spätem Vormittag Auflösung, am Nachmittag verbreitet sonnig. Tagesmittel von "sunshine_h"/"cloudcover" dürfen in diesem Fall NICHT für eine pauschale "stark bewölkt"-Aussage genutzt werden — der Tagesgang aus dem Stundenprofil hat Vorrang.
+
+Bei weathercode 45 oder 48 bei der MEHRHEIT der Modelle (in "weathercode.by_model"): Du MUSST "Nebel" oder "Hochnebel" verwenden. Die Begriffe "stark bewölkt", "bedeckt", "trübe" oder "grau in grau" sind in diesem Fall ABSOLUT VERBOTEN — auch wenn sunshine_h niedrig ist.
+
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
+
+FALLBACK (nur wenn KEIN sky_label vorgegeben): Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt". Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt). Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
+
 MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
