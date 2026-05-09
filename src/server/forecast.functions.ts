@@ -1788,13 +1788,23 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
 
   const out = { ...day };
-  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel);
-  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel);
-  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel);
-  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel);
-  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel);
-  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel);
-  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
+  // Mittlere Stunde des Fensters für Horizont-Bestimmung
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  const midHour = Math.min(23, Math.floor((fromHour + 24) / 2));
+  const horizon = dateStr
+    ? horizonForHour(`${dateStr}T${String(midHour).padStart(2, "0")}:00:00Z`)
+    : (day?.horizon as Horizon | undefined);
+  const regime = day?.regime as Regime | undefined;
+  const aggH = (variable: string, perModel: Record<string, number>) =>
+    aggregate(perModel, { variable, regime, horizon });
+  if (Object.keys(tminPerModel).length) out.tmin = aggH("temperature_2m_min", tminPerModel);
+  if (Object.keys(tmaxPerModel).length) out.tmax = aggH("temperature_2m_max", tmaxPerModel);
+  if (Object.keys(precPerModel).length) out.precip = aggH("precipitation_sum", precPerModel);
+  if (Object.keys(probPerModel).length) out.precip_prob = aggH("precipitation_probability_max", probPerModel);
+  if (Object.keys(windPerModel).length) out.wind_max = aggH("windspeed_10m_max", windPerModel);
+  if (Object.keys(cloudPerModel).length) out.cloudcover = aggH("cloudcover_mean", cloudPerModel);
+  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggH("sunshine_duration", sunHPerModel);
+  if (horizon) out.horizon = horizon;
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
