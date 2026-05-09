@@ -52,10 +52,14 @@ function SettingsPage() {
     bias_stations: "BIZ,GUT",
     bias_lookback_days: 7,
     bias_strength: 70,
-    tag0_weight_mosmix: 40,
-    tag0_weight_om: 60,
-    tag1_weight_mosmix: 50,
-    tag1_weight_om: 50,
+    tag0_weight_mosmix: 0,
+    tag0_weight_om: 100,
+    tag1_weight_mosmix: 0,
+    tag1_weight_om: 100,
+    tag2_weight_mosmix: 25,
+    tag2_weight_om: 75,
+    tag3plus_weight_mosmix: 45,
+    tag3plus_weight_om: 55,
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
