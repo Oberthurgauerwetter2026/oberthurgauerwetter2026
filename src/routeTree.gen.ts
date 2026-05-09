@@ -20,6 +20,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppForecastForecastIdRouteImport } from './routes/_app.forecast.$forecastId'
+import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -75,6 +76,12 @@ const AppForecastForecastIdRoute = AppForecastForecastIdRouteImport.update({
   path: '/forecast/$forecastId',
   getParentRoute: () => AppRoute,
 } as any)
+const ApiPublicHooksGeneratePressureMapRoute =
+  ApiPublicHooksGeneratePressureMapRouteImport.update({
+    id: '/api/public/hooks/generate-pressure-map',
+    path: '/api/public/hooks/generate-pressure-map',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -87,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
+  '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -99,6 +107,7 @@ export interface FileRoutesByTo {
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
+  '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -113,6 +122,7 @@ export interface FileRoutesById {
   '/_app/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
   '/_app/forecast/$forecastId': typeof AppForecastForecastIdRoute
+  '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -127,6 +137,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/hooks/daily-forecast'
     | '/forecast/$forecastId'
+    | '/api/public/hooks/generate-pressure-map'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -139,6 +150,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/hooks/daily-forecast'
     | '/forecast/$forecastId'
+    | '/api/public/hooks/generate-pressure-map'
   id:
     | '__root__'
     | '/'
@@ -152,6 +164,7 @@ export interface FileRouteTypes {
     | '/_app/settings'
     | '/hooks/daily-forecast'
     | '/_app/forecast/$forecastId'
+    | '/api/public/hooks/generate-pressure-map'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -162,6 +175,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
   HooksDailyForecastRoute: typeof HooksDailyForecastRoute
+  ApiPublicHooksGeneratePressureMapRoute: typeof ApiPublicHooksGeneratePressureMapRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -243,6 +257,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppForecastForecastIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/api/public/hooks/generate-pressure-map': {
+      id: '/api/public/hooks/generate-pressure-map'
+      path: '/api/public/hooks/generate-pressure-map'
+      fullPath: '/api/public/hooks/generate-pressure-map'
+      preLoaderRoute: typeof ApiPublicHooksGeneratePressureMapRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -270,6 +291,8 @@ const rootRouteChildren: RootRouteChildren = {
   ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,
   HooksDailyForecastRoute: HooksDailyForecastRoute,
+  ApiPublicHooksGeneratePressureMapRoute:
+    ApiPublicHooksGeneratePressureMapRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
