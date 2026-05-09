@@ -1,46 +1,63 @@
-## Befund Dienstag (12.05.)
+## Befund
 
-`weather_data.precip_distribution` ist im gespeicherten Eintrag **null**, obwohl `precip.avg = 13.6 mm` und Modelle den Schwerpunkt vormittags sehen. Ohne Tagesgang-Anker fällt die KI auf die Tagessumme zurück und schreibt pauschal "zeitweise Regenschauer" — eine Wetterbesserung am Nachmittag wird nicht erkannt, weil die Information schlicht nicht im Prompt ankommt.
+`enforceSkyConsistency` ersetzt aktuell den ersten Absatz der KI-Ausgabe immer dann, wenn `buildDeterministicSkyParagraph` einen Text liefert. Diese Funktion baut einen reinen Sky-Text **ohne jeden Niederschlagsbezug** und triggert auch auf Tagen mit signifikantem Regen, sobald entweder
 
-Drei zusammenwirkende Ursachen:
+- `sunshine_h.avg ≥ 9` ODER
+- 7+ Stunden mit `s ≥ 30` im stündlichen Profil ODER
+- Nebelmehrheit / Nebelauflösung erkannt wird.
 
-1. **Prefix-Bug in `computePrecipDistribution`** (`src/server/forecast.functions.ts:1170 ff.`). Der Sammler iteriert `Object.keys(h)` und nimmt jeden Schlüssel mit `startsWith("precipitation_")` als mm-Array — also auch `precipitation_probability_<model>`. Dadurch landen 0–100-%-Werte in der mm-Summe, die Block-Aggregation wird unbrauchbar bzw. degeneriert in Edge-Cases zu null/0.
-2. **Kein Mid-Tier-Fallback für Tag 0/1**. `weatherForHourly` liefert für `dayIndex <= 1` `weather` unverändert. Wenn der Short-Tier (CH-Modelle) leer/limitiert zurückkommt — wie aktuell sichtbar (`models_used` enthält für Tag 0 nur `icon_d2`, kein `meteoswiss_icon_ch1` / `arome`) —, ist `weather.hourly` undefined und `precip_distribution` wird null.
-3. **Prompt fordert keine aktive Wetterbesserung**. Die bestehende Regel sagt nur "andere Blöcke *dürfen* als trocken beschrieben werden". Eine asymmetrische Niederschlagsverteilung (vormittags Regen, nachmittags trocken) wird nicht zwingend als Tagesverlauf benannt.
+Folge: Auf Tagen wie Montag (16 mm Niederschlag, aber laut Profil 5 sonnige Stunden am Nachmittag) oder Dienstag (8 mm in Nacht/Vormittag) überschreibt die Vorlage den korrekten KI-Text durch das immer gleiche „Am Morgen zunächst stark bewölkt … rasche Auflösung, danach recht sonnig …" — der Niederschlag verschwindet komplett aus dem Body.
 
-## Änderungen (nur `src/server/forecast.functions.ts`)
+Verstärkt wurde das Problem durch den vorherigen Prefix-Bug-Fix: das stündliche Profil ist jetzt sauberer, dadurch zählen mehr Tage als „verySunny" oder „fogMorning" und triggern den Override.
 
-### 1. Prefix-Bug fixen
-- Helper für die Modellschlüssel-Sammlung: nur Keys akzeptieren, die NICHT `_probability` enthalten und genau dem Schema `<base>_<modelName>` folgen.
-- Anwenden auf `computePrecipDistribution` (für `precArrs`) und auf alle weiteren Stellen, die denselben Prefix-Trick nutzen (`buildHourlyProfile`, `aggregateHourlyForDay`, `refineDayFromHour`). Diese Funktionen funktionieren heute teilweise nur "zufällig", weil sie kombinierte Werte mitteln.
+## Änderung (nur `src/server/forecast.functions.ts`)
 
-### 2. Hourly-Fallback Short → Mid für Tag 0/1
-- `weatherForHourly(weather, dayIndex)` so anpassen, dass für `dayIndex <= 1` zuerst `weather.hourly` geprüft wird; ist die Quelle leer (kein `time`-Array oder kein `precipitation*`-Schlüssel), auf `weather.hourly_mid` zurückfallen.
-- Damit ist auch bei Short-Tier-Ausfall ein Tagesgang vorhanden (gröber, aber existent).
+### 1. Sky-Override an Niederschlag knüpfen
 
-### 3. Diagnose-Log
-- In `formatDayData`: wenn `precip.avg >= 1 mm` aber `precip_distribution === null`, `console.warn` mit `dayIndex`, Datum und Grund (kein hourly / kein precipitation-Key / 0 Blöcke). Hilft, künftige Stille-Bugs früh zu sehen.
+In `enforceSkyConsistency` (Z. 275) eine Vorabprüfung einbauen: wenn der Tag nennenswerten Niederschlag hat, KEINE Überschreibung des ersten Absatzes mehr vornehmen.
 
-### 4. Prompt: Wetterbesserung verbindlich machen
-Im Block "=== NIEDERSCHLAGS-TAGESGANG ===" (Zeile ~2235) ergänzen:
-- "Wenn `peak_block` = `morning` ODER `night` und sowohl `afternoon` als auch `evening` < 1 mm haben (ggf. zusätzlich `dry_windows` mit `from <= 14`), MUSS der Wetterverlauf-Absatz die Wetterbesserung explizit benennen — z. B. 'am Vormittag noch Regen, am Nachmittag Auflockerungen und teils sonnig', 'Wetterbesserung im Tagesverlauf', 'am Nachmittag und Abend trocken'."
-- Analog für `peak_block` = `afternoon`/`evening` mit trockenem Vormittag: "am Vormittag trocken, am Nachmittag/Abend Schauer".
-- Neue Pflicht: bei Asymmetrie zwischen Blöcken die Begriffe "im Tagesverlauf", "im weiteren Verlauf" oder "Wetterbesserung" verwenden, statt nur Tagesmittel zu paraphrasieren.
+Kriterium „Regentag" (eines genügt):
+- `weatherData.precip?.avg ≥ 1` mm, ODER
+- `weatherData.precip_distribution?.peak_block` ist gesetzt (≥ 1 mm in einem Block), ODER
+- `precip_distribution.overall_max_prob ≥ 60` UND irgendein Block hat `precip_mm ≥ 0.5`.
+
+Bei einem Regentag:
+- `buildDeterministicSkyParagraph` NICHT anwenden,
+- `isClearSkyDay` (Cloud ≤ 5 % UND Sonne ≥ 10 h) bleibt zwar formal möglich, ist aber bei Regen ohnehin nie wahr → kein Konflikt,
+- `enforceFogWording` weiterhin laufen lassen (rein lexikalische Korrektur, harmlos).
+
+### 2. Sky-Template defensiver
+
+In `buildDeterministicSkyParagraph` (Z. 226):
+- `verySunny`-Schwelle anheben: `sunnyHours ≥ 8` statt `≥ 7`, `sunshineAvg ≥ 10` statt `≥ 9` — damit das Template nur bei tatsächlich sehr sonnigen Tagen greift.
+- Zusätzliche Sicherung: wenn `weatherData.precip?.avg ≥ 1` mm, sofort `null` zurückgeben (Defense-in-Depth, falls Aufrufer den Override-Schutz vergisst).
+
+### 3. Prompt-Regel nachschärfen
+
+Im System-Prompt-Block für die Tagesbeschreibung ergänzen:
+- „Bei `precip.avg ≥ 1 mm` MUSS der erste Absatz die Niederschlagsphase explizit benennen (z. B. ‚am Vormittag zeitweise Regen, am Nachmittag Auflockerungen, am Abend erneut Schauer'). Sky-Beschreibung und Niederschlag dürfen NICHT in getrennten Absätzen stehen, wenn der Niederschlag tagesprägend ist."
+
+Damit liefert die KI von Anfang an einen integrierten Wetter-Absatz und der Override-Eingriff ist auch konzeptionell überflüssig.
+
+### 4. Diagnose-Log
+
+In `enforceSkyConsistency`: wenn der Override aktiv wäre (deterministicSky ≠ null), aber wegen Regen unterdrückt wird, einmal `console.log("[sky-override] suppressed due to precip", { date, precipAvg, peakBlock })`. Hilft, die Wirkung zu verifizieren.
 
 ## Was wir nicht anfassen
 
-- UI / `WeatherDataView` bleibt unverändert.
-- Bias-Correction, Ensemble, Lightning-Off-Logik unverändert.
-- Keine DB-Migration.
+- `computePrecipDistribution`, Hourly-Fallback, Mid-/Short-Tier-Logik (vorheriger Fix bleibt).
+- Wetterbesserung/-verschlechterung-Prompt-Regeln (bleiben aktiv und passen zur neuen integrierten Sky-Formulierung).
+- UI / DB / Bias / Ensemble.
 
 ## Validierung
 
-1. Forecast `8ddb31cf-…` neu generieren (komplett, nicht nur einzelne Einträge).
-2. `weather_data` für Tag 0–4 muss `precip_distribution` mit Blöcken liefern (kein null mehr).
-3. Für Dienstag erwartet: `peak_block` ≈ `night`/`morning`, `afternoon`/`evening` < 1 mm.
-4. Body-Text soll dann z. B. lauten: "Am Morgen noch zeitweise Regen, im Tagesverlauf Wetterbesserung mit Auflockerungen, am Nachmittag und Abend weitgehend trocken."
+1. Forecast `3254e7fd-…` neu generieren.
+2. **Tag 0 (heute):** klar oder leicht bewölkt → Sky-Override darf greifen (kein Niederschlag).
+3. **Montag (16 mm):** Body muss Regen morgens UND abends benennen, mit ggf. sonniger Phase am Nachmittag — KEIN reines „rasche Auflösung, danach recht sonnig".
+4. **Dienstag (8 mm, peak night/morning):** Body muss „in der Nacht/am Vormittag noch Regen, im Tagesverlauf Wetterbesserung" enthalten.
+5. Im Server-Log einen `[sky-override] suppressed due to precip`-Eintrag für Mo/Di sehen.
 
 ## Risiken
 
-- Mid-Tier-Fallback für Tag 0/1 bringt gröbere Auflösung als CH-Modelle — nur wirksam, wenn Short-Tier leer ist.
-- Schärfere Prompt-Regel kann selten zu früh "Wetterbesserung" diagnostizieren, wenn `peak_block` knapp über 1 mm liegt; mit der bestehenden Intensitätsregel aber abgesichert.
+- Sehr leichter Niesel (`precip.avg` knapp ≥ 1 mm) deaktiviert das Sky-Template auch dann, wenn der Tag faktisch sonnig ist. Mitigiert durch zusätzliche Bedingung `peak_block ≠ null` ODER hohe Wahrscheinlichkeit; reine 1 mm Tagessumme ohne Block-Peak gilt nicht als Regentag.
+- Die KI kann auf wirklich klaren Tagen ohne Override eine schlechtere Sky-Formulierung liefern. Die geltenden Sky-Prompt-Regeln bleiben aber unverändert.
