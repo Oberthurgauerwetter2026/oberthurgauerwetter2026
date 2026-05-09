@@ -38,6 +38,9 @@ export type Database = {
           night_clear_cooling_c: number
           nowcast_enabled: boolean
           nowcast_obs_horizon_h: number
+          pressure_map_enabled: boolean
+          pressure_map_last_run: string | null
+          pressure_map_last_status: string | null
           prompt_sky: string | null
           prompt_temp: string | null
           prompt_wind: string | null
@@ -86,6 +89,9 @@ export type Database = {
           night_clear_cooling_c?: number
           nowcast_enabled?: boolean
           nowcast_obs_horizon_h?: number
+          pressure_map_enabled?: boolean
+          pressure_map_last_run?: string | null
+          pressure_map_last_status?: string | null
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null
@@ -134,6 +140,9 @@ export type Database = {
           night_clear_cooling_c?: number
           nowcast_enabled?: boolean
           nowcast_obs_horizon_h?: number
+          pressure_map_enabled?: boolean
+          pressure_map_last_run?: string | null
+          pressure_map_last_status?: string | null
           prompt_sky?: string | null
           prompt_temp?: string | null
           prompt_wind?: string | null
