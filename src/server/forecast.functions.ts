@@ -2836,8 +2836,14 @@ export const regenerateEntry = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     if (!entry) throw new Error("Eintrag nicht gefunden (ID ungültig oder keine Berechtigung).");
 
-    const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data);
-    const body = enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data);
+    const tempHint = entry.title === "Heute Nachmittag & Abend"
+      ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
+      : "";
+    const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data, tempHint);
+    const body = stripTiefstwerteForAfternoon(
+      enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data),
+      entry.title,
+    );
     const { error: uErr } = await supabase
       .from("forecast_entries")
       .update({ body })
