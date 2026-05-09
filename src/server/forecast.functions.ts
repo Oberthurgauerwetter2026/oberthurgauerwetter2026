@@ -1987,17 +1987,20 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const regime = day?.regime as Regime | undefined;
   const aggH = (variable: string, perModel: Record<string, number>) =>
     aggregate(perModel, { variable, regime, horizon });
+  const overrideW = (raw: any, perModel: Record<string, number>, weights: Record<string, number>) => {
+    if (!raw) return raw;
+    const w = weightedAvg(perModel, weights);
+    return w ? { ...raw, avg: w.avg, weights_used: w.weights_used } : raw;
+  };
   if (Object.keys(tminPerModel).length) out.tmin = aggH("temperature_2m_min", tminPerModel);
   if (Object.keys(tmaxPerModel).length) out.tmax = aggH("temperature_2m_max", tmaxPerModel);
-  if (Object.keys(precPerModel).length) out.precip = aggH("precipitation_sum", precPerModel);
-  if (Object.keys(probPerModel).length) out.precip_prob = aggH("precipitation_probability_max", probPerModel);
+  if (Object.keys(precPerModel).length) out.precip = overrideW(aggH("precipitation_sum", precPerModel), precPerModel, PRECIP_CLOUD_WEIGHTS);
+  if (Object.keys(probPerModel).length) out.precip_prob = overrideW(aggH("precipitation_probability_max", probPerModel), probPerModel, PRECIP_CLOUD_WEIGHTS);
   if (Object.keys(windPerModel).length) {
-    const wRaw = aggH("windspeed_10m_max", windPerModel);
-    const wW = weightedWindAvg(windPerModel);
-    out.wind_max = wRaw && wW ? { ...wRaw, avg: wW.avg, weights_used: wW.weights_used } : wRaw;
+    out.wind_max = overrideW(aggH("windspeed_10m_max", windPerModel), windPerModel, WIND_WEIGHTS);
   }
-  if (Object.keys(cloudPerModel).length) out.cloudcover = aggH("cloudcover_mean", cloudPerModel);
-  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggH("sunshine_duration", sunHPerModel);
+  if (Object.keys(cloudPerModel).length) out.cloudcover = overrideW(aggH("cloudcover_mean", cloudPerModel), cloudPerModel, PRECIP_CLOUD_WEIGHTS);
+  if (Object.keys(sunHPerModel).length) out.sunshine_h = overrideW(aggH("sunshine_duration", sunHPerModel), sunHPerModel, PRECIP_CLOUD_WEIGHTS);
   if (horizon) out.horizon = horizon;
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
