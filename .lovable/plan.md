@@ -1,65 +1,79 @@
 ## Ziel
 
-Täglich automatisch eine eigene Bodendruckkarte (Europa, ~30°N–70°N / 25°W–45°E, gültig für heute 12 UTC) als PNG erzeugen und unter einer **stabilen URL** bereitstellen, die per `<img src="…">` in WordPress eingebunden werden kann.
+Aus der reinen Linienkarte eine **professionell wirkende Wetterkarte** machen: farbige Druckverteilung, Hillshading-Relief im Hintergrund, glatte Isobaren, detaillierter Europa-Basemap.
 
-## Datenquelle
+## 1. Schönere Basemap
 
-DWD ICON-EU MSL-Druck via Open-Meteo (Modell `icon_eu`, Variable `pressure_msl`, ein Wert für 12:00 UTC). Open-Meteo liefert die DWD-ICON-Daten kostenlos und Worker-kompatibel über HTTP/JSON — kein GRIB-Parsing nötig.
+`src/data/europe-countries.json` (63 KB, stark vereinfacht) → ersetzen durch **Natural Earth 50 m** Mehrschicht-Set, vorab in `src/data/` abgelegt:
 
-Es wird ein regelmässiges Gitter mit ~1.5°-Schritt abgefragt (≈ 27 × 28 Punkte ≈ 756 Punkte). Die Anfrage wird in mehreren Batches an Open-Meteo gestellt (Multi-Location-Endpoint), das Ergebnis ist ein 2D-Druckfeld in hPa.
+- `ne_50m_ocean.json` (Meerflächen, hellblau gefüllt)
+- `ne_50m_land.json` (Landflächen, beige Grundton)
+- `ne_50m_lakes.json` (Seen, hellblau)
+- `ne_50m_rivers.json` (Flüsse, dünn blau)
+- `ne_50m_admin_0_countries.json` (Ländergrenzen, dezent grau)
+- `ne_50m_populated_places_simple.json` → Top-30 europäische Städte als Referenzpunkte
 
-## Rendering
+Alle vorab via Skript auf den Kartenausschnitt geclippt und auf 4 Dezimalstellen gerundet → Gesamtgrösse < 250 KB.
 
-In einer TanStack-Server-Function:
+## 2. Relief (Hillshading)
 
-1. Druckfeld glätten (einfacher Gauss-Filter über das Gitter).
-2. Isobaren alle 5 hPa (980, 985, …, 1040) mit `d3-contour` (pure JS, Worker-tauglich) aus dem Gitter berechnen.
-3. Linien in eine SVG zeichnen, mit:
-   - Küstenlinien + Ländergrenzen (statisches, vereinfachtes GeoJSON von Natural Earth, einmal in `/public` abgelegt).
-   - Mercator-ähnliche Projektion (einfache äquidistante Plattkarte reicht für diesen Ausschnitt).
-   - Druck-Beschriftungen entlang der Linien.
-   - **H** an lokalen Maxima, **T** an lokalen Minima (Detektion über 3×3-Nachbarschaft, Mindestabstand zwischen Markern).
-   - Header mit Titel, Lauf-Zeitstempel, Quellennennung „Modell DWD ICON-EU, gültig HH:MM UTC".
-4. SVG → PNG via `@resvg/resvg-wasm` (läuft in Cloudflare Workers).
+Option, die im Cloudflare Worker funktioniert: **vorgerendertes Hillshade-PNG** (1200 × 800 px, ~80 KB) als statisches Asset in `src/assets/europe-hillshade.png`, in das SVG via `<image href="data:image/png;base64,…">` als unterste Ebene eingebettet, mit `opacity: 0.35` über die Landflächen.
 
-## Speicherung & Auslieferung
+- Generierung **einmalig** mit einem Node-Skript (`scripts/build-hillshade.mjs`, läuft lokal, nicht im Worker) aus Open-Meteo Elevation API oder ETOPO1-Daten → committed.
+- Kein zusätzlicher Runtime-Cost, lädt offline.
 
-- Neuer öffentlicher Storage-Bucket `weather-maps` in Lovable Cloud.
-- Die Karte wird unter dem festen Pfad `weather-maps/europe-pressure-latest.png` gespeichert und täglich überschrieben → die öffentliche URL bleibt **immer dieselbe**, ideal zum Einbetten.
-- Zusätzlich Archiv unter `weather-maps/archive/europe-pressure-YYYY-MM-DD.png` für spätere Recherche.
+## 3. Farbige Druckverteilung
 
-## Tägliche Generierung
+Zusätzlich zu den Isobaren-Linien wird der Druckwert als **gefüllte Konturen** (`d3-contour` mit `thresholds(...)`) gerendert:
 
-- Server-Route `POST /api/public/hooks/generate-pressure-map` triggert die Erzeugung und das Hochladen.
-- `pg_cron` ruft diese Route täglich um 13:30 UTC (≈ 1.5 h nach Verfügbarkeit des 12-UTC-Laufs) und nochmals um 06:00 UTC (Backup) auf.
-- Manueller „Jetzt neu erzeugen"-Button im Admin-Bereich (`/settings`) für Tests.
+- Farbskala (oklch, in `src/styles.css` als Kommentar dokumentiert):
+  - ≤ 990 hPa → kräftiges Blau
+  - 1000 hPa → blasses Blau
+  - 1013 hPa → neutralweiss
+  - 1020 hPa → blasses Orange
+  - ≥ 1035 hPa → kräftiges Rot
+- Layer-Opacity 0.45, damit Hillshading + Grenzen sichtbar bleiben.
+- Schritt 2 hPa für die Farbflächen (sanfter Gradient), Schritt 5 hPa für die Linien (synoptischer Standard).
 
-## UI im Tool
+## 4. Saubere Drucklinien
 
-Im internen Tool eine kleine Vorschau-Karte unter Settings: aktueller Stand der erzeugten Karte + Zeitstempel + Button „Jetzt neu erzeugen" + die einzubindende `<img src="…">`-Zeile zum Kopieren.
+- d3-contour-Polygone werden **vor dem SVG-Pfad** mit einer einfachen Catmull-Rom-Glättung pro Liniensegment in eine kubische Bezier-Sequenz umgewandelt → keine Knickstellen mehr.
+- 1 Smoothing-Pass auf dem Druck-Grid (statt 2), damit Details erhalten bleiben.
+- Linienstärke gestaffelt:
+  - 1020 hPa & 1000 hPa fett (1.8 px)
+  - alle 5 hPa normal (1.0 px)
+  - Beschriftungen mittig auf der Linie mit weisser Halo-Stroke (Lesbarkeit über Farbflächen).
 
-## Einbettung in WordPress
+## 5. H- / T-Symbole
 
-Der Nutzer fügt einfach folgendes HTML in einen Custom-HTML-Block ein:
+- Grosse, halbtransparente weisse Kreisscheibe als Hintergrund.
+- **H** in dunklem Rot, **T** in dunklem Blau, Bold, 28 px.
+- Druckwert in 12 px darunter.
+
+## 6. Layer-Reihenfolge im SVG
 
 ```text
-<img src="https://<projekt>.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.png"
-     alt="Bodendruckkarte Europa heute 12 UTC – DWD ICON-EU"
-     style="max-width:100%;height:auto" />
+1. Ozean-Polygon (hellblau)
+2. Land-Polygon (beige)
+3. Hillshade-Bild (multiply, opacity 0.35)
+4. Seen + Flüsse
+5. Druck-Farbflächen (opacity 0.45)
+6. Ländergrenzen (dünn grau)
+7. Isobaren-Linien + Beschriftungen
+8. H/T-Symbole
+9. Städte als kleine Punkte + Labels
+10. Titel, Datum, Legende, Copyright-Hinweis
 ```
 
-Da die URL stabil ist, aktualisiert sich das Bild automatisch jeden Tag. Cache-Busting wird durch einen `Cache-Control: max-age=3600`-Header beim Upload sichergestellt; die Stunde Cache hält Wordpress-Seitencaches kurz.
+## 7. Was nicht geändert wird
 
-## Technische Details (für Entwickler)
+- Datenquelle (DWD ICON-EU + Fallback) bleibt.
+- Kartenausschnitt Europa.
+- Output-Format SVG, gleiche Storage-URL → WordPress-Embed bricht nicht.
+- Kein Wechsel zu Raster/PNG → Datei bleibt schlank.
 
-- Pakete: `d3-contour`, `@resvg/resvg-wasm` (beides Edge-tauglich).
-- Geodaten: Natural Earth „admin_0_countries" auf 1:110m, in `/public/geo/europe.geo.json` (ca. 200 KB) reduziert auf den Ausschnitt.
-- Migration: Storage-Bucket `weather-maps` öffentlich + RLS Public-Read.
-- Settings-Tabelle: optionale Zeile `pressure_map_enabled` (default true), `pressure_map_last_run`, `pressure_map_last_status`.
-- Fehlerbehandlung: bei Open-Meteo-Fehler wird die alte Karte nicht überschrieben; Status wird in Settings geloggt und im UI angezeigt.
+## Risiken / Trade-offs
 
-## Was bewusst NICHT enthalten ist
-
-- Keine Frontenanalyse (würde echte Synoptik-Software brauchen).
-- Keine 500-hPa-Linien, kein Niederschlagsfeld (auf deinen Wunsch hin nur Isobaren + H/T).
-- Keine 1:1-Replik der FU-Berlin-Karte (Lizenz/Look gehört FU Berlin) — eigenständige Karte mit klarer Quellennennung „DWD ICON-EU".
+- Asset-Grösse SVG steigt von ~30 KB auf ~120 KB (Hillshade als data-URL), inkl. base64 ≈ 200 KB. Akzeptabel für eine täglich gecachte Karte.
+- Erstes Generieren des Hillshade-Assets dauert ~5 Minuten lokal — wird einmalig committed.
+- Bei extremen Druckwerten (< 970, > 1045) wird die Farbe geclamped (kein Datenverlust, nur visuell flach).
