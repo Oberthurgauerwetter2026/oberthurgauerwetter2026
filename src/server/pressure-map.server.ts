@@ -217,8 +217,8 @@ function contourToPath(coords: number[][][][], smooth = true): string {
       const ringPts = closed ? pts.slice(0, -1) : pts;
       const smoothed = chaikin(ringPts, 2, closed);
       pts = closed ? [...smoothed, smoothed[0]] : smoothed;
-      // Catmull-Rom -> Bezier (closed ring assumed when first==last)
-      const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
+      // Catmull-Rom -> Bezier
+
       const n = closed ? pts.length - 1 : pts.length;
       const get = (i: number): [number, number] => {
         if (closed) return pts[((i % n) + n) % n];
