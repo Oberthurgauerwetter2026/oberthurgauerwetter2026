@@ -109,6 +109,40 @@ const DAILY_VARS = [
 const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
 
 // ===== Wind helpers =====
+// Region Oberthurgau: hochauflösende MeteoSwiss-/Météo-France-Modelle bilden den
+// Wind hier zuverlässiger ab. Statt eines ungewichteten Mittels gewichten wir.
+const WIND_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.40,
+  meteoswiss_icon_ch2: 0.30,
+  meteofrance_arome_france_hd: 0.20,
+  arpege_europe: 0.10,
+};
+function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
+  if (!entries.length) return null;
+  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
+  if (totalW <= 0) return null;
+  const avg = entries.reduce((s, [k, v]) => s + v * (WIND_WEIGHTS[k] / totalW), 0);
+  const weights_used: Record<string, number> = {};
+  for (const [k] of entries) weights_used[k] = Math.round((WIND_WEIGHTS[k] / totalW) * 100) / 100;
+  return { avg: Math.round(avg * 10) / 10, weights_used };
+}
+function weightedCircularMeanDeg(perModel: Record<string, number>): number | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
+  if (!entries.length) return null;
+  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
+  if (totalW <= 0) return null;
+  let x = 0, y = 0;
+  for (const [k, deg] of entries) {
+    const w = WIND_WEIGHTS[k] / totalW;
+    const r = (deg * Math.PI) / 180;
+    x += w * Math.cos(r); y += w * Math.sin(r);
+  }
+  if (x === 0 && y === 0) return null;
+  let d = (Math.atan2(y, x) * 180) / Math.PI;
+  if (d < 0) d += 360;
+  return Math.round(d);
+}
 // Circular mean over compass degrees (0-360). Returns null for empty input.
 function circularMeanDeg(degs: number[]): number | null {
   const valid = degs.filter((v) => v != null && Number.isFinite(v));
@@ -1765,11 +1799,16 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source = "derived_from_sunshine";
   }
 
-  const wind_max = agg("windspeed_10m_max", collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
+  const windPerModel = collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex);
+  const wind_max_raw = agg("windspeed_10m_max", windPerModel);
+  const weightedW = weightedWindAvg(windPerModel);
+  const wind_max = wind_max_raw && weightedW
+    ? { ...wind_max_raw, avg: weightedW.avg, weights_used: weightedW.weights_used }
+    : wind_max_raw;
   const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
   const wind_dir = agg("winddirection_10m_dominant", windDirPerModel);
-  // Use circular mean for the dominant direction (avg of degrees is wrong across 360°)
-  const wind_dir_avg = circularMeanDeg(Object.values(windDirPerModel));
+  // Use weighted circular mean for the dominant direction; fall back to unweighted.
+  const wind_dir_avg = weightedCircularMeanDeg(windDirPerModel) ?? circularMeanDeg(Object.values(windDirPerModel));
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max?.avg ?? null);
 
@@ -1915,7 +1954,11 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   if (Object.keys(tmaxPerModel).length) out.tmax = aggH("temperature_2m_max", tmaxPerModel);
   if (Object.keys(precPerModel).length) out.precip = aggH("precipitation_sum", precPerModel);
   if (Object.keys(probPerModel).length) out.precip_prob = aggH("precipitation_probability_max", probPerModel);
-  if (Object.keys(windPerModel).length) out.wind_max = aggH("windspeed_10m_max", windPerModel);
+  if (Object.keys(windPerModel).length) {
+    const wRaw = aggH("windspeed_10m_max", windPerModel);
+    const wW = weightedWindAvg(windPerModel);
+    out.wind_max = wRaw && wW ? { ...wRaw, avg: wW.avg, weights_used: wW.weights_used } : wRaw;
+  }
   if (Object.keys(cloudPerModel).length) out.cloudcover = aggH("cloudcover_mean", cloudPerModel);
   if (Object.keys(sunHPerModel).length) out.sunshine_h = aggH("sunshine_duration", sunHPerModel);
   if (horizon) out.horizon = horizon;
@@ -2039,7 +2082,16 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
 
   const hourlyTemps = slice.map(({ i }) => hourAvg(tArrs, i)).filter((v): v is number => v != null);
   const hourlyPrecs = slice.map(({ i }) => hourAvg(pArrs, i) ?? 0);
-  const hourlyWinds = slice.map(({ i }) => hourAvg(wArrs, i)).filter((v): v is number => v != null);
+  const hourWeightedWind = (i: number): number | null => {
+    const per: Record<string, number> = {};
+    for (const [m, arr] of Object.entries(wArrs)) {
+      const v = arr?.[i];
+      if (v != null && Number.isFinite(v) && m in WIND_WEIGHTS) per[m] = v;
+    }
+    const w = weightedWindAvg(per);
+    return w ? w.avg : hourAvg(wArrs, i);
+  };
+  const hourlyWinds = slice.map(({ i }) => hourWeightedWind(i)).filter((v): v is number => v != null);
   const hourlyClouds = slice.map(({ i }) => hourAvg(cArrs, i)).filter((v): v is number => v != null);
   const hourlySuns = slice.map(({ i }) => hourAvg(sArrs, i)).filter((v): v is number => v != null);
 
@@ -2074,14 +2126,28 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
   }
 
   // Wind direction over the window (circular mean across all models & hours)
-  const windDirSamples: number[] = [];
-  for (const arr of Object.values(wdArrs)) {
-    for (const { i } of slice) {
-      const v = arr[i];
-      if (v != null && Number.isFinite(v)) windDirSamples.push(v);
+  // Per-Stunde gewichtetes Richtungsmittel (nur priorisierte Modelle), dann zirkuläres Mittel über die Stunden.
+  const hourlyDirs: number[] = [];
+  for (const { i } of slice) {
+    const per: Record<string, number> = {};
+    for (const [m, arr] of Object.entries(wdArrs)) {
+      const v = arr?.[i];
+      if (v != null && Number.isFinite(v) && m in WIND_WEIGHTS) per[m] = v;
     }
+    const d = weightedCircularMeanDeg(per);
+    if (d != null) hourlyDirs.push(d);
   }
-  const wind_dir_avg = circularMeanDeg(windDirSamples);
+  let wind_dir_avg = circularMeanDeg(hourlyDirs);
+  if (wind_dir_avg == null) {
+    const samples: number[] = [];
+    for (const arr of Object.values(wdArrs)) {
+      for (const { i } of slice) {
+        const v = arr[i];
+        if (v != null && Number.isFinite(v)) samples.push(v);
+      }
+    }
+    wind_dir_avg = circularMeanDeg(samples);
+  }
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_max = hourlyWinds.length ? r1(Math.max(...hourlyWinds)) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
