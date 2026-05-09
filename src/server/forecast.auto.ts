@@ -47,15 +47,28 @@ const WIND_WEIGHTS: Record<string, number> = {
   meteofrance_arome_france_hd: 0.20,
   arpege_europe: 0.10,
 };
-function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
-  const entries = Object.entries(perModel).filter(([k]) => k in WIND_WEIGHTS);
+// Niederschlag, Niederschlagswahrscheinlichkeit, Bewölkung, Sonnenscheindauer:
+// MeteoSwiss-lastige Gewichtung. Globale Modelle (ECMWF/GFS/ICON-D2) fliessen NUR ein,
+// wenn keines der priorisierten Modelle einen Wert hat (siehe collectPriorityModelValues).
+const PRECIP_CLOUD_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.45,
+  meteoswiss_icon_ch2: 0.35,
+  meteofrance_arome_france_hd: 0.15,
+  arpege_europe: 0.05,
+};
+const PRIORITY_MODELS = new Set(Object.keys(PRECIP_CLOUD_WEIGHTS));
+function weightedAvg(perModel: Record<string, number>, weights: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in weights && Number.isFinite(v));
   if (!entries.length) return null;
-  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
+  const totalW = entries.reduce((s, [k]) => s + weights[k], 0);
   if (totalW <= 0) return null;
-  const avg = entries.reduce((s, [k, v]) => s + v * (WIND_WEIGHTS[k] / totalW), 0);
+  const avg = entries.reduce((s, [k, v]) => s + v * (weights[k] / totalW), 0);
   const weights_used: Record<string, number> = {};
-  for (const [k] of entries) weights_used[k] = Math.round((WIND_WEIGHTS[k] / totalW) * 100) / 100;
+  for (const [k] of entries) weights_used[k] = Math.round((weights[k] / totalW) * 100) / 100;
   return { avg: Math.round(avg * 10) / 10, weights_used };
+}
+function weightedWindAvg(perModel: Record<string, number>) {
+  return weightedAvg(perModel, WIND_WEIGHTS);
 }
 function weightedCircularMeanDeg(perModel: Record<string, number>): number | null {
   const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
