@@ -380,12 +380,8 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${IMG_W} ${IMG_H}" width="${IMG_W}" height="${IMG_H}">
   <defs>
     <clipPath id="plot"><rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" /></clipPath>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1a2332" />
-      <stop offset="1" stop-color="#0f1620" />
-    </linearGradient>
   </defs>
-  <rect width="${IMG_W}" height="${IMG_H}" fill="url(#bg)" />
+  <rect width="${IMG_W}" height="${IMG_H}" fill="#2561a1" />
   <text x="${IMG_W / 2}" y="30" font-family="Helvetica,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">${escapeXml(title)}</text>
   <text x="${IMG_W / 2}" y="50" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#cbd5e1" text-anchor="middle">${escapeXml(subtitle)}</text>
 
