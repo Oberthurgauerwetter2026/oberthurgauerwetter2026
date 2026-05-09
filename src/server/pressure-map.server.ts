@@ -260,24 +260,14 @@ function contourToPath(coords: number[][][][], smooth = true): string {
   return d;
 }
 
-// Map a pressure value to a fill color (blue=low, white=normal, red=high)
-function pressureColor(p: number): string {
-  // Stops: 970, 990, 1005, 1013, 1020, 1030, 1045
-  const stops: [number, [number, number, number]][] = [
-    [970, [40, 53, 147]],     // deep indigo
-    [985, [33, 150, 243]],    // blue
-    [1000, [144, 202, 249]],  // light blue
-    [1013, [245, 245, 240]],  // off-white
-    [1020, [255, 224, 178]],  // pale orange
-    [1030, [255, 138, 101]],  // orange
-    [1045, [183, 28, 28]],    // deep red
-  ];
-  if (p <= stops[0][0]) return `rgb(${stops[0][1].join(",")})`;
-  if (p >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(",")})`;
+// Interpolate within a stops table [value, [r,g,b]]
+function interpColor(v: number, stops: [number, [number, number, number]][]): string {
+  if (v <= stops[0][0]) return `rgb(${stops[0][1].join(",")})`;
+  if (v >= stops[stops.length - 1][0]) return `rgb(${stops[stops.length - 1][1].join(",")})`;
   for (let i = 0; i < stops.length - 1; i++) {
     const [a, ca] = stops[i], [b, cb] = stops[i + 1];
-    if (p >= a && p <= b) {
-      const t = (p - a) / (b - a);
+    if (v >= a && v <= b) {
+      const t = (v - a) / (b - a);
       const r = Math.round(ca[0] + (cb[0] - ca[0]) * t);
       const g = Math.round(ca[1] + (cb[1] - ca[1]) * t);
       const bl = Math.round(ca[2] + (cb[2] - ca[2]) * t);
@@ -285,6 +275,32 @@ function pressureColor(p: number): string {
     }
   }
   return "#fff";
+}
+
+// T850 °C → color (cold blue → white at 0 → warm red)
+const T850_STOPS: [number, [number, number, number]][] = [
+  [-30, [49, 54, 149]],
+  [-20, [69, 117, 180]],
+  [-10, [116, 173, 209]],
+  [-5, [171, 217, 233]],
+  [0, [255, 255, 255]],
+  [5, [254, 224, 144]],
+  [10, [253, 174, 97]],
+  [15, [244, 109, 67]],
+  [20, [215, 48, 39]],
+  [25, [165, 0, 38]],
+];
+function t850Color(v: number): string { return interpColor(v, T850_STOPS); }
+
+// Precipitation 6h sum (mm) → color + opacity
+function precipStyle(mm: number): { fill: string; opacity: number } | null {
+  if (!Number.isFinite(mm) || mm < 0.5) return null;
+  if (mm < 1) return { fill: "#bfdbfe", opacity: 0.45 };
+  if (mm < 2) return { fill: "#93c5fd", opacity: 0.55 };
+  if (mm < 5) return { fill: "#60a5fa", opacity: 0.65 };
+  if (mm < 10) return { fill: "#3b82f6", opacity: 0.7 };
+  if (mm < 20) return { fill: "#1d4ed8", opacity: 0.78 };
+  return { fill: "#4c1d95", opacity: 0.85 };
 }
 
 function buildSvg(grid: Grid, targetUtcIso: string): string {
