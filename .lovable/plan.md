@@ -1,48 +1,75 @@
-## Diagnose
+## Weiterführung: Prompt-Integration + Lightning + Ensemble
 
-Beim Forecast `08324cde…` sind die Texte ab Tag 2 (eigentlich erst Tag 3 — Dienstag und Mittwoch) faktisch falsch. Beispiel **Dienstag, 12. Mai**:
+### 1. Prompt-Integration (forecast.functions.ts)
 
-| Feld | Wert |
-|---|---|
-| `precip.avg` | 8 mm (Modelle: 4.7 – 13.9 mm) |
-| `precip_prob.avg` | 92 % |
-| `weathercode` (alle Modelle) | 61–85 (Regen / Regenschauer) |
-| `ensemble.precip_sum.p50` | 6.3 mm, `spread_class: high` |
-| `cloudcover.avg` | 59 % |
-| `sunshine_h.avg` | **12.2 h** (alle Modelle 11.7 – 13.3) |
+Die neuen Felder aus `formatDayData` (gusts, thunderstorm, humidity, precip_phase, uncertainty) sind aktuell im `weather_data` JSON, aber das AI-Modell weiß nicht, wie es sie verwenden soll. Ergänzungen in `DEFAULT_SKY_RULES` und `DEFAULT_WIND_RULES`:
 
-Geschriebener Text: *„Am Morgen zunächst stark bewölkt … danach recht sonnig … weiterhin recht sonnig"* — kein Wort über Regen.
+**SKY_RULES erweitern um:**
+- `thunderstorm.label` → bei `scattered`/`widespread`/`severe` explizit "Gewitter" / "teils kräftige Gewitter" / "schwere Gewitter mit Hagelgefahr" einbauen
+- `precip_phase` → "Regen" / "Schneeregen" / "Schnee" / "gefrierender Regen (Glatteisgefahr)" sauber benennen
+- `humidity.fog_potential` → bei klaren Nächten mit hoher Feuchte "Nebel-/Hochnebelfelder am Morgen" erwähnen
+- `humidity.muggy` → im Sommer bei Schwüle-Hinweis "schwül" verwenden
 
-Mittwoch (13. Mai) bekommt **wortwörtlich denselben Sky-Block** wie Dienstag, obwohl die Datenlage ganz anders ist (precip 0 mm, prob 28 %).
+**WIND_RULES erweitern um:**
+- `wind_gusts.label` → bei `kräftige Böen` / `stürmische Böen` / `Sturmböen` zwingend benennen mit km/h-Bereich
+- `uncertainty.wind` → bei `high` Formulierung "Windstärke noch unsicher" zulassen
 
-### Ursachen
+**Globale Regel ergänzen:**
+- `uncertainty.temperature` = `high` → "Temperaturprognose noch unsicher, mögliche Bandbreite X–Y°C"
+- Bei Tag ≥3: Ensemble-Spannweite (sobald #12 fertig) als Bandbreite nutzen
 
-1. **Open-Meteo liefert physikalisch widersprüchliche Tageswerte**: für mittel­fristige Modelle (Tag 2+) berichtet `sunshine_duration` 11–13 h, gleichzeitig sagt `precipitation_probability_max` 92 % und `weathercode` Regen. Das ist ein bekanntes Artefakt der Tages­aggregation (Sonne in Schauer­pausen wird voll gezählt).
-2. **Der Prompt priorisiert Sonne / Cloudcover gegenüber Niederschlag**: der Bot konstruiert die Sky-Beschreibung aus `cloudcover`/`sunshine_h` und übergeht `precip_prob` + `weathercode`, sobald die Sonne hoch erscheint. Es gibt keine harte Regel „wenn Modelle Regen sagen, MUSS Regen im Text stehen".
-3. **Ähnliche Inputs → identischer Output**: Di und Mi haben fast identische `cloudcover` (59 vs 59.7 %) und `sunshine_h` (12 vs 10 h). Da der Prompt Niederschlag ausklammert, generiert das Modell zweimal denselben Satz.
+### 2. `src/server/lightning.server.ts` (neu)
 
-## Vorschlag (3 Hebel, kombinieren)
+Blitzortung.org-Integration:
 
-### A) Daten plausibilisieren (`formatDayData`)
-- Wenn `precip_prob.avg ≥ 60` **oder** Mehrheit der `weathercode.by_model ≥ 60`: `sunshine_h` als „unzuverlässig" markieren (Feld `sunshine_h_reliable: false`), zusätzlich `cloudcover` mindestens auf 70 % anheben, falls der Modellwert tiefer ist (Konsistenz mit Niederschlagsdaten).
-- Neues server-seitiges Feld `precip_class`: `dry` (≤ 0.2 mm & prob < 30), `showers` (prob ≥ 50 oder 0.5–5 mm), `rain` (≥ 5 mm oder prob ≥ 80), `heavy` (≥ 15 mm).
-- Neues Feld `sky_directive`: kompakter, vom Server vorgegebener Sky-Hinweis (z. B. `"bewölkt mit Schauern"`, `"wechselnd bewölkt, Schauer am Nachmittag"`), abgeleitet aus precip_class + cloudcover + Tageszeit-Verteilung. Damit hat der LLM eine harte Vorgabe statt zu raten.
+```text
+fetchLightning(lat, lon, radiusKm) → {
+  count_last_1h, count_last_3h, count_last_6h,
+  closest_strike_km, last_strike_at,
+  active_now: boolean
+}
+```
 
-### B) Prompt-Regeln verschärfen (`DEFAULT_SKY_RULES`)
-- Neue Top-Regel: **„Niederschlag dominiert immer."** Wenn `precip_class ∈ {showers, rain, heavy}` ODER `precip_prob.avg ≥ 60` ODER Mehrheit der `weathercode.by_model ≥ 60`: der Sky-Satz **MUSS** Niederschlag (Schauer / Regen / Gewitter je nach Klasse) nennen und darf **nicht** mit „sonnig" / „recht sonnig" enden. „Sonnig" nur erlaubt, wenn precip_class = `dry`.
-- `sunshine_h` ignorieren, wenn `sunshine_h_reliable: false`.
-- Wenn `sky_directive` gesetzt ist, dieses sinngemäss übernehmen, statt eigenständig aus cloudcover/sunshine zu konstruieren.
+- Quelle: Blitzortung WebSocket-Archiv ist nicht öffentlich; nutze stattdessen den **kostenlosen JSON-Feed** von `https://api.blitzortung.org/v2/strikes/...` (BBox um lat/lon ± radiusKm umgerechnet in Grad).
+- Falls Blitzortung-API nicht direkt erreichbar (CORS/Auth): Fallback auf **Open-Meteo `lightning_potential` Variable** (CAPE-basiert) oder **MetOffice DataHub** — wir prüfen zur Implementierung welcher Endpoint stabil ohne Key liefert.
+- Cache 5 Minuten in `weather_cache` (`cache_key = lightning:{lat}:{lon}:{radius}`).
+- Setting-Gates: nur ausführen wenn `app_settings.lightning_enabled = true`, BBox aus `lightning_radius_km`.
+- Aufruf in `forecast.functions.ts`: Ergebnis nur dem **heutigen** Tag (Tag 0) anhängen als `lightning: {...}`, weil Live-Daten nur kurzfristig relevant sind.
+- Prompt-Hinweis ergänzen: bei `active_now` oder `count_last_1h > 5` → "Aktuell Gewitteraktivität im Raum Amriswil".
 
-### C) Variation zwischen ähnlichen Tagen
-- `precip_class` als Differenzierungs-Schlüssel an den Prompt mitgeben mit Hinweis: „benachbarte Tage mit unterschiedlicher precip_class müssen unterschiedlich beschrieben werden". Verhindert Copy/Paste-Output Di → Mi.
+### 3. `src/server/ensemble.server.ts` (neu)
 
-## Umsetzung (nach Freigabe)
+Open-Meteo Ensemble:
 
-1. `formatDayData`: `precip_class`, `sunshine_h_reliable`, `sky_directive` ableiten.
-2. `DEFAULT_SKY_RULES` in `forecast.functions.ts`: Niederschlag-dominiert-Regel + sunshine-fallback einbauen.
-3. `enforceSkyConsistency`: harte Nachprüfung — wenn `precip_class ∈ {rain, heavy}` und Wort „sonnig" im Text dominiert ohne Regen-Erwähnung, einen Hinweis-Satz prepend (oder Re-Generation triggern).
-4. Optional: Schwellwerte (`precip_prob` ≥ 60, „heavy" ≥ 15 mm) als Settings-Felder.
+```text
+fetchEnsemble(lat, lon) → per day:
+  t_max: { p10, p50, p90 },
+  t_min: { p10, p50, p90 },
+  precip_sum: { p10, p50, p90 },
+  wind_max: { p10, p50, p90 }
+```
 
-## Frage an dich
+- Endpoint: `https://ensemble-api.open-meteo.com/v1/ensemble`
+- Modelle: `icon_seamless` (40 Member) + `gfs_seamless` (31 Member) — kombiniert zu einem Multi-Model-Ensemble.
+- Variablen: `temperature_2m`, `precipitation`, `wind_speed_10m` stündlich; lokal zu Tagesaggregaten + Perzentilen reduzieren.
+- Cache: 2h in `weather_cache` (`cache_key = ensemble:{lat}:{lon}`).
+- Setting-Gates: nur wenn `app_settings.ensemble_enabled = true` und `dayIndex >= ensemble_min_day` (Default 2).
+- Integration in `formatDayData`: pro Tag ab Index 2 ein `ensemble: { t_max_p10, t_max_p50, t_max_p90, ... }` Block mit Spread → `ensemble_spread_class` (low/moderate/high) basierend auf `(p90-p10)`.
+- Prompt-Hinweis: ab Tag 3 die p10/p90-Spanne als Unsicherheitsbandbreite nutzen ("Modelle sehen 18–24°C möglich").
 
-Welche Hebel möchtest du? Empfehlung: **A + B**, das löst beide Probleme (falsche Sky-Beschreibung + Doppelung Di/Mi). C ist nice-to-have als Sicherheits­netz.
+### 4. Reihenfolge der Implementierung
+
+1. **Prompt-Regeln erweitern** (DEFAULT_SKY_RULES + DEFAULT_WIND_RULES in `forecast.functions.ts`) — XS, sofort sichtbarer Effekt.
+2. **Ensemble-Modul** (`ensemble.server.ts`) + Integration in `formatDayData` für Tag ≥2.
+3. **Lightning-Modul** (`lightning.server.ts`) + Integration für Tag 0.
+4. Ein Testlauf mit `invoke-server-function` auf eine bestehende Forecast-ID, um zu prüfen dass `weather_data` die neuen Blöcke enthält und der AI-Output sie sinnvoll verwendet.
+
+### Offene Frage zur Bestätigung
+
+Bei Lightning-Daten: Blitzortung.org bietet keinen offiziellen offenen REST-Feed mehr (nur WebSocket mit Registrierung). Drei realistische Optionen:
+
+- **A) Open-Meteo `lightning_potential`** — bereits in unserer API verfügbar, modellbasiert (kein echter Live-Strike). Zuverlässig, kein Key.
+- **B) Blitzortung WebSocket** mit eigenem Account/Token — echte Live-Strikes, aber Setup-Aufwand und User muss Token besorgen.
+- **C) Lightning-Feature streichen** und stattdessen die CAPE-/LI-basierte Gewitterklassifikation (bereits in #2 implementiert) als ausreichend betrachten.
+
+Bitte wähle A, B oder C bevor ich Lightning baue. Punkt 1 (Prompts) und Punkt 2 (Ensemble) starte ich unabhängig.
