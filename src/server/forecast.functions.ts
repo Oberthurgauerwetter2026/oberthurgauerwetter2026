@@ -274,11 +274,37 @@ function enforceFogWording(text: string, weatherData: any): string {
   );
 }
 
+// Tag mit tagesprägendem Niederschlag — dann darf der Sky-Override den ersten Absatz NICHT überschreiben.
+function isPrecipDay(weatherData: any): boolean {
+  const precipAvg = weatherData?.precip?.avg;
+  if (typeof precipAvg === "number" && precipAvg >= 1) return true;
+  const pd = weatherData?.precip_distribution;
+  if (pd?.peak_block) return true;
+  if (pd?.overall_max_prob != null && pd.overall_max_prob >= 60) {
+    const blocks = pd.blocks ?? {};
+    for (const b of Object.values(blocks) as any[]) {
+      if ((b?.precip_mm ?? 0) >= 0.5) return true;
+    }
+  }
+  return false;
+}
+
 function enforceSkyConsistency(text: string, weatherData: any): string {
   const deterministicSky = buildDeterministicSkyParagraph(weatherData);
   let out = text;
-  if (deterministicSky) out = replaceFirstParagraph(text, deterministicSky);
-  else if (isClearSkyDay(weatherData)) out = replaceFirstParagraph(text, "Sonnig und wolkenlos.");
+  if (deterministicSky) {
+    if (isPrecipDay(weatherData)) {
+      console.log("[sky-override] suppressed due to precip", {
+        date: weatherData?.date,
+        precipAvg: weatherData?.precip?.avg,
+        peakBlock: weatherData?.precip_distribution?.peak_block,
+      });
+    } else {
+      out = replaceFirstParagraph(text, deterministicSky);
+    }
+  } else if (isClearSkyDay(weatherData) && !isPrecipDay(weatherData)) {
+    out = replaceFirstParagraph(text, "Sonnig und wolkenlos.");
+  }
   return enforceFogWording(out, weatherData);
 }
 
