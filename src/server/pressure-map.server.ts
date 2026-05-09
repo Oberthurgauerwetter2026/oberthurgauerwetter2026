@@ -39,10 +39,9 @@ function gridToPixel(gx: number, gy: number): [number, number] {
 }
 
 type Grid = { values: number[]; cols: number; rows: number };
+type Grids = { pressure: Grid; t850: Grid; precip: Grid };
 
-async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
-  // Build coordinates list. Open-Meteo accepts comma-separated lat/lon and
-  // returns one location object per pair.
+async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   const lats: number[] = [];
   const lons: number[] = [];
   for (let r = 0; r < ROWS; r++) {
@@ -52,19 +51,19 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
     }
   }
 
-  // Limit per request: Open-Meteo allows up to ~100 locations. Batch.
   const BATCH = 100;
-  const values: number[] = new Array(lats.length).fill(NaN);
+  const pressure: number[] = new Array(lats.length).fill(NaN);
+  const t850: number[] = new Array(lats.length).fill(NaN);
+  const precip: number[] = new Array(lats.length).fill(NaN);
+
   for (let i = 0; i < lats.length; i += BATCH) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 250)); // throttle to avoid 429
+    if (i > 0) await new Promise((r) => setTimeout(r, 250));
     const la = lats.slice(i, i + BATCH).join(",");
     const lo = lons.slice(i, i + BATCH).join(",");
     const url = new URL("https://api.open-meteo.com/v1/forecast");
     url.searchParams.set("latitude", la);
     url.searchParams.set("longitude", lo);
-    url.searchParams.set("hourly", "pressure_msl");
-    // icon_seamless falls back to ICON global for points outside ICON-EU coverage
-    // (e.g. far Atlantic / Arctic corners of our extent), so the request never 400s.
+    url.searchParams.set("hourly", "pressure_msl,temperature_850hPa,precipitation");
     url.searchParams.set("models", "icon_seamless");
     url.searchParams.set("forecast_days", "2");
     url.searchParams.set("timezone", "UTC");
@@ -73,7 +72,7 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
       const res = await fetch(url);
       if (!res.ok) {
         console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${await res.text()}`);
-        continue; // leave NaN for this batch; smoothing fills gaps
+        continue;
       }
       json = await res.json();
     } catch (err) {
@@ -84,12 +83,31 @@ async function fetchPressureGrid(targetUtcIso: string): Promise<Grid> {
     for (let k = 0; k < list.length; k++) {
       const loc = list[k];
       const times: string[] = loc?.hourly?.time ?? [];
-      const arr: number[] = loc?.hourly?.pressure_msl ?? [];
+      const pArr: number[] = loc?.hourly?.pressure_msl ?? [];
+      const tArr: number[] = loc?.hourly?.temperature_850hPa ?? [];
+      const rArr: number[] = loc?.hourly?.precipitation ?? [];
       const idx = times.indexOf(targetUtcIso);
-      values[i + k] = idx >= 0 && Number.isFinite(arr[idx]) ? arr[idx] : NaN;
+      if (idx >= 0) {
+        if (Number.isFinite(pArr[idx])) pressure[i + k] = pArr[idx];
+        if (Number.isFinite(tArr[idx])) t850[i + k] = tArr[idx];
+        // 6h precipitation sum centered on target (target-2 .. target+3)
+        let sum = 0, count = 0;
+        for (let off = -2; off <= 3; off++) {
+          const j = idx + off;
+          if (j >= 0 && j < rArr.length && Number.isFinite(rArr[j])) {
+            sum += rArr[j];
+            count++;
+          }
+        }
+        if (count > 0) precip[i + k] = sum;
+      }
     }
   }
-  return { values, cols: COLS, rows: ROWS };
+  return {
+    pressure: { values: pressure, cols: COLS, rows: ROWS },
+    t850: { values: t850, cols: COLS, rows: ROWS },
+    precip: { values: precip, cols: COLS, rows: ROWS },
+  };
 }
 
 // Simple 3x3 box blur (1 pass) to soften noisy isobars
