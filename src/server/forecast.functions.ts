@@ -1680,9 +1680,7 @@ function formatDayData(weather: any, dayIndex: number) {
     || isPrecipWeathercodeMajority({ weathercode });
   let sunshine_h_reliable = true;
   let cloudcoverPatched: any = cloudcoverFinal;
-  let _ignoreCloudOriginal = cloudcoverFinal;
-  void _ignoreCloudOriginal;
-  let cloudcoverSourcePatched = cloudcover_source;
+  let cloudcoverSourcePatched: string = cloudcover_source;
   if (precipDominant) {
     const probAvg = precip_prob?.avg;
     if (typeof probAvg === "number" && probAvg >= 60) sunshine_h_reliable = false;
