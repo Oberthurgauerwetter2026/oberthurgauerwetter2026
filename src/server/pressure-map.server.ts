@@ -499,13 +499,12 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
 </svg>`;
 }
 
-// Picks today's 12:00 UTC; if it's already past today's 12 UTC + 90 min, use today, else use yesterday's 12 UTC
+// Always picks tomorrow's 12:00 UTC (forecast for the next day)
 function pickTargetTime(now = new Date()): string {
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0));
-  if (now.getTime() < today.getTime() - 30 * 60 * 1000) {
-    today.setUTCDate(today.getUTCDate() - 1);
-  }
-  return today.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+  const tomorrow = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 12, 0, 0
+  ));
+  return tomorrow.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
 }
 
 // Iteratively fill NaN cells from neighbours, then fill any remaining with fallback.
