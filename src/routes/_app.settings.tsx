@@ -657,6 +657,85 @@ function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <PressureMapCard session={session} />
     </div>
+  );
+}
+
+function PressureMapCard({ session }: { session: any }) {
+  const [status, setStatus] = useState<{ enabled: boolean; lastRun: string | null; lastStatus: string | null; embedUrl: string } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [bust, setBust] = useState(Date.now());
+
+  async function load() {
+    if (!session) return;
+    try {
+      const { getPressureMapStatus } = await import("@/lib/pressure-map.functions");
+      const r = await getPressureMapStatus({ headers: { Authorization: `Bearer ${session.access_token}` } } as any);
+      setStatus(r);
+    } catch (e: any) { toast.error(e.message); }
+  }
+  useEffect(() => { load(); }, [session]);
+
+  async function regen() {
+    if (!session) return;
+    setRunning(true);
+    try {
+      const { triggerPressureMap } = await import("@/lib/pressure-map.functions");
+      await triggerPressureMap({ headers: { Authorization: `Bearer ${session.access_token}` } } as any);
+      toast.success("Karte neu erzeugt");
+      setBust(Date.now());
+      await load();
+    } catch (e: any) { toast.error(e.message); } finally { setRunning(false); }
+  }
+
+  const embed = status?.embedUrl ?? "";
+  const html = `<img src="${embed}" alt="Bodendruckkarte Europa heute 12 UTC – DWD ICON-EU" style="max-width:100%;height:auto" />`;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Bodendruckkarte (Europa)</CardTitle>
+        <CardDescription>
+          Tägliche Karte mit Isobaren und Hoch/Tief, gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo.
+          Wird automatisch täglich neu erzeugt; die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <Button onClick={regen} disabled={running}>
+            {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Jetzt neu erzeugen
+          </Button>
+          {status?.lastRun && (
+            <span className="text-muted-foreground">
+              Letzter Lauf: {new Date(status.lastRun).toLocaleString("de-CH")}
+            </span>
+          )}
+          {status?.lastStatus && <Badge variant="secondary">{status.lastStatus}</Badge>}
+        </div>
+
+        {embed && (
+          <div className="space-y-2">
+            <div className="rounded border bg-muted/30 p-2">
+              <img
+                src={`${embed}?v=${bust}`}
+                alt="Bodendruckkarte Europa"
+                className="w-full h-auto"
+                onError={() => { /* noop */ }}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Einbettungs-HTML (in WordPress als Custom-HTML einfügen)</Label>
+              <Textarea readOnly rows={2} value={html} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Stabile URL: <a href={embed} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">{embed}</a>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
