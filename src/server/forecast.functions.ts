@@ -2580,7 +2580,10 @@ export const generateForecast = createServerFn({ method: "POST" })
 
     const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
     {
-      const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint);
+      const tempHint = firstTitle === "Heute Nachmittag & Abend"
+        ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
+        : "";
+      const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
@@ -2737,7 +2740,10 @@ export const regenerateForecast = createServerFn({ method: "POST" })
 
     const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
     {
-      const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint);
+      const tempHint = firstTitle === "Heute Nachmittag & Abend"
+        ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
+        : "";
+      const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceSkyConsistency(body, firstData),
