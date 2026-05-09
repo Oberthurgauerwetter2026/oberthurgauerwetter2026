@@ -47,28 +47,15 @@ const WIND_WEIGHTS: Record<string, number> = {
   meteofrance_arome_france_hd: 0.20,
   arpege_europe: 0.10,
 };
-// Niederschlag, Niederschlagswahrscheinlichkeit, Bewölkung, Sonnenscheindauer:
-// MeteoSwiss-lastige Gewichtung. Globale Modelle (ECMWF/GFS/ICON-D2) fliessen NUR ein,
-// wenn keines der priorisierten Modelle einen Wert hat (siehe collectPriorityModelValues).
-const PRECIP_CLOUD_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 0.45,
-  meteoswiss_icon_ch2: 0.35,
-  meteofrance_arome_france_hd: 0.15,
-  arpege_europe: 0.05,
-};
-const PRIORITY_MODELS = new Set(Object.keys(PRECIP_CLOUD_WEIGHTS));
-function weightedAvg(perModel: Record<string, number>, weights: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
-  const entries = Object.entries(perModel).filter(([k, v]) => k in weights && Number.isFinite(v));
+function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
+  const entries = Object.entries(perModel).filter(([k]) => k in WIND_WEIGHTS);
   if (!entries.length) return null;
-  const totalW = entries.reduce((s, [k]) => s + weights[k], 0);
+  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
   if (totalW <= 0) return null;
-  const avg = entries.reduce((s, [k, v]) => s + v * (weights[k] / totalW), 0);
+  const avg = entries.reduce((s, [k, v]) => s + v * (WIND_WEIGHTS[k] / totalW), 0);
   const weights_used: Record<string, number> = {};
-  for (const [k] of entries) weights_used[k] = Math.round((weights[k] / totalW) * 100) / 100;
+  for (const [k] of entries) weights_used[k] = Math.round((WIND_WEIGHTS[k] / totalW) * 100) / 100;
   return { avg: Math.round(avg * 10) / 10, weights_used };
-}
-function weightedWindAvg(perModel: Record<string, number>) {
-  return weightedAvg(perModel, WIND_WEIGHTS);
 }
 function weightedCircularMeanDeg(perModel: Record<string, number>): number | null {
   const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
@@ -263,39 +250,15 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   return merged;
 }
 
-// Sammelt Werte aus den vier priorisierten hochauflösenden Modellen über ALLE Tiers.
-// Wenn keines davon liefert → Fallback auf collectModelValuesTiered (alle Tier-Modelle).
-function collectPriorityModelValues(weather: any, varName: string, dayIndex: number) {
-  const merged: Record<string, number> = {};
-  const tiers = [weather.byModel.short, weather.byModel.mid, weather.byModel.long];
-  const lists = [weather.modelLists.short, weather.modelLists.mid, weather.modelLists.long];
-  for (let i = 0; i < tiers.length; i++) {
-    if (!tiers[i]) continue;
-    const v = collectModelValues(tiers[i], varName, lists[i], dayIndex);
-    for (const [k, val] of Object.entries(v)) {
-      if (PRIORITY_MODELS.has(k) && !(k in merged)) merged[k] = val;
-    }
-  }
-  if (Object.keys(merged).length) return merged;
-  return collectModelValuesTiered(weather, varName, dayIndex);
-}
-
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
-  const overrideWeighted = (raw: ReturnType<typeof aggregate>, perModel: Record<string, number>) => {
-    if (!raw) return raw;
-    const w = weightedAvg(perModel, PRECIP_CLOUD_WEIGHTS);
-    return w ? { ...raw, avg: w.avg, weights_used: w.weights_used } : raw;
-  };
-
-  const cloudPerModel = collectPriorityModelValues(weather, "cloudcover_mean", dayIndex);
-  const cloudcover = overrideWeighted(aggregate(cloudPerModel), cloudPerModel);
-  const sunshineRaw = collectPriorityModelValues(weather, "sunshine_duration", dayIndex);
+  const cloudcover = aggregate(collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
+  const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = overrideWeighted(aggregate(sunshineHours), sunshineHours);
+  const sunshine_h = aggregate(sunshineHours);
 
   let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
   let cloudcoverFinal = cloudcover;
@@ -322,10 +285,8 @@ function formatDayData(weather: any, dayIndex: number) {
 
   const tmax = aggregate(collectModelValuesTiered(weather, "temperature_2m_max", dayIndex));
   const tmin = aggregate(collectModelValuesTiered(weather, "temperature_2m_min", dayIndex));
-  const precipPerModel = collectPriorityModelValues(weather, "precipitation_sum", dayIndex);
-  const precip = overrideWeighted(aggregate(precipPerModel), precipPerModel);
-  const precipProbPerModel = collectPriorityModelValues(weather, "precipitation_probability_max", dayIndex);
-  const precip_prob = overrideWeighted(aggregate(precipProbPerModel), precipProbPerModel);
+  const precip = aggregate(collectModelValuesTiered(weather, "precipitation_sum", dayIndex));
+  const precip_prob = aggregate(collectModelValuesTiered(weather, "precipitation_probability_max", dayIndex));
   const weathercode = aggregate(collectModelValuesTiered(weather, "weathercode", dayIndex));
 
   const contributing = new Set<string>();
@@ -443,19 +404,19 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
   };
 
   const hourlyTemps = slice.map(({ i }) => hourAvg(tArrs, i)).filter((v): v is number => v != null);
-  const hourWeightedAvg = (arrs: Record<string, number[]>, i: number, weights: Record<string, number>): number | null => {
+  const hourlyPrecs = slice.map(({ i }) => hourAvg(pArrs, i) ?? 0);
+  const hourWeightedWind = (i: number): number | null => {
     const per: Record<string, number> = {};
-    for (const [m, arr] of Object.entries(arrs)) {
+    for (const [m, arr] of Object.entries(wArrs)) {
       const v = arr?.[i];
-      if (v != null && Number.isFinite(v) && m in weights) per[m] = v;
+      if (v != null && Number.isFinite(v) && m in WIND_WEIGHTS) per[m] = v;
     }
-    const w = weightedAvg(per, weights);
-    return w ? w.avg : hourAvg(arrs, i);
+    const w = weightedWindAvg(per);
+    return w ? w.avg : hourAvg(wArrs, i);
   };
-  const hourlyPrecs = slice.map(({ i }) => hourWeightedAvg(pArrs, i, PRECIP_CLOUD_WEIGHTS) ?? 0);
-  const hourlyWinds = slice.map(({ i }) => hourWeightedAvg(wArrs, i, WIND_WEIGHTS)).filter((v): v is number => v != null);
-  const hourlyClouds = slice.map(({ i }) => hourWeightedAvg(cArrs, i, PRECIP_CLOUD_WEIGHTS)).filter((v): v is number => v != null);
-  const hourlySuns = slice.map(({ i }) => hourWeightedAvg(sArrs, i, PRECIP_CLOUD_WEIGHTS)).filter((v): v is number => v != null);
+  const hourlyWinds = slice.map(({ i }) => hourWeightedWind(i)).filter((v): v is number => v != null);
+  const hourlyClouds = slice.map(({ i }) => hourAvg(cArrs, i)).filter((v): v is number => v != null);
+  const hourlySuns = slice.map(({ i }) => hourAvg(sArrs, i)).filter((v): v is number => v != null);
 
   if (!hourlyTemps.length) return null;
 
