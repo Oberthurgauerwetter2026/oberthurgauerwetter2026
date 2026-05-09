@@ -445,14 +445,29 @@ function formatEveningNight(weather: any, startHourOverride?: number) {
     cloudcover_source = "derived_from_sunshine";
   }
 
-  const windDirSamples: number[] = [];
-  for (const arr of Object.values(wdArrs)) {
-    for (const { i } of slice) {
-      const v = arr[i];
-      if (v != null && Number.isFinite(v)) windDirSamples.push(v);
+  // Per-Stunde gewichtetes Richtungsmittel, dann zirkuläres Mittel über die Stunden.
+  const hourlyDirs: number[] = [];
+  for (const { i } of slice) {
+    const per: Record<string, number> = {};
+    for (const [m, arr] of Object.entries(wdArrs)) {
+      const v = arr?.[i];
+      if (v != null && Number.isFinite(v) && m in WIND_WEIGHTS) per[m] = v;
     }
+    const d = weightedCircularMeanDeg(per);
+    if (d != null) hourlyDirs.push(d);
   }
-  const wind_dir_avg = circularMeanDeg(windDirSamples);
+  let wind_dir_avg = circularMeanDeg(hourlyDirs);
+  if (wind_dir_avg == null) {
+    // Fallback: alte Logik (alle Modelle, alle Stunden)
+    const samples: number[] = [];
+    for (const arr of Object.values(wdArrs)) {
+      for (const { i } of slice) {
+        const v = arr[i];
+        if (v != null && Number.isFinite(v)) samples.push(v);
+      }
+    }
+    wind_dir_avg = circularMeanDeg(samples);
+  }
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_max = hourlyWinds.length ? r1(Math.max(...hourlyWinds)) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max);
