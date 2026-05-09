@@ -269,10 +269,15 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source = "derived_from_sunshine";
   }
 
-  const wind_max = aggregate(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex));
+  const windPerModel = collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex);
+  const wind_max_raw = aggregate(windPerModel);
+  const weighted = weightedWindAvg(windPerModel);
+  const wind_max = wind_max_raw && weighted
+    ? { ...wind_max_raw, avg: weighted.avg, weights_used: weighted.weights_used }
+    : wind_max_raw;
   const windDirPerModel = collectModelValuesTiered(weather, "winddirection_10m_dominant", dayIndex);
   const wind_dir = aggregate(windDirPerModel);
-  const wind_dir_avg = circularMeanDeg(Object.values(windDirPerModel));
+  const wind_dir_avg = weightedCircularMeanDeg(windDirPerModel) ?? circularMeanDeg(Object.values(windDirPerModel));
   const wind_dir_compass = wind_dir_avg != null ? compassToName(wind_dir_avg) : null;
   const wind_label = buildWindLabel(wind_dir_avg, wind_max?.avg ?? null);
 
