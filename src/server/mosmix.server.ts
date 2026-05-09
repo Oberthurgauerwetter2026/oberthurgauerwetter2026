@@ -272,7 +272,7 @@ function aggregateDailyFromStations(
   return result;
 }
 
-// Hauptfunktion: Liefert MOSMIX-basierte Tagesdaten für Tag 0 und Tag 1
+// Hauptfunktion: Liefert MOSMIX-basierte Tagesdaten für Tag 0 bis Tag 7
 // als Map<dateString, dayData>. Gibt leere Map zurück wenn MOSMIX deaktiviert
 // oder keine Station Daten liefert (Fallback auf Open-Meteo greift dann).
 export async function fetchMosmixShortTerm(
@@ -294,11 +294,13 @@ export async function fetchMosmixShortTerm(
 
   if (!stations || !stations.length) return new Map();
 
-  // Heute + morgen in Europe/Zurich bestimmen
-  const today = zurichDate(new Date().toISOString());
-  const tomorrowDate = new Date();
-  tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
-  const tomorrow = zurichDate(tomorrowDate.toISOString());
+  // Tag 0 .. Tag 7 in Europe/Zurich bestimmen
+  const dates: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + i);
+    dates.push(zurichDate(d.toISOString()));
+  }
 
-  return aggregateDailyFromStations(stations, [today, tomorrow]);
+  return aggregateDailyFromStations(stations, dates);
 }
