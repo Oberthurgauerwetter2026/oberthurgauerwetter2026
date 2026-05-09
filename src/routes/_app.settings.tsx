@@ -52,10 +52,14 @@ function SettingsPage() {
     bias_stations: "BIZ,GUT",
     bias_lookback_days: 7,
     bias_strength: 70,
-    tag0_weight_mosmix: 40,
-    tag0_weight_om: 60,
-    tag1_weight_mosmix: 50,
-    tag1_weight_om: 50,
+    tag0_weight_mosmix: 0,
+    tag0_weight_om: 100,
+    tag1_weight_mosmix: 0,
+    tag1_weight_om: 100,
+    tag2_weight_mosmix: 25,
+    tag2_weight_om: 75,
+    tag3plus_weight_mosmix: 45,
+    tag3plus_weight_om: 55,
   });
   const [defaults, setDefaults] = useState<{ general: string; sky: string; temp: string; wind: string } | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -91,10 +95,14 @@ function SettingsPage() {
         bias_stations: (settings as any).bias_stations ?? "BIZ,GUT",
         bias_lookback_days: (settings as any).bias_lookback_days ?? 7,
         bias_strength: (settings as any).bias_strength ?? 70,
-        tag0_weight_mosmix: (settings as any).tag0_weight_mosmix ?? 40,
-        tag0_weight_om: (settings as any).tag0_weight_om ?? 60,
-        tag1_weight_mosmix: (settings as any).tag1_weight_mosmix ?? 50,
-        tag1_weight_om: (settings as any).tag1_weight_om ?? 50,
+        tag0_weight_mosmix: (settings as any).tag0_weight_mosmix ?? 0,
+        tag0_weight_om: (settings as any).tag0_weight_om ?? 100,
+        tag1_weight_mosmix: (settings as any).tag1_weight_mosmix ?? 0,
+        tag1_weight_om: (settings as any).tag1_weight_om ?? 100,
+        tag2_weight_mosmix: (settings as any).tag2_weight_mosmix ?? 25,
+        tag2_weight_om: (settings as any).tag2_weight_om ?? 75,
+        tag3plus_weight_mosmix: (settings as any).tag3plus_weight_mosmix ?? 45,
+        tag3plus_weight_om: (settings as any).tag3plus_weight_om ?? 55,
       });
     }
     if (session && !defaults) {
@@ -261,17 +269,17 @@ function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">ICON-MOS (DWD MOSMIX)</CardTitle>
           <CardDescription>
-            Statistisch korrigierte Punktvorhersagen vom Deutschen Wetterdienst für Tag 0 & 1.
-            Standard-Stationen: 10935 (Friedrichshafen), 10929 (Konstanz). Bei aktiviertem MOSMIX
-            wird die manuelle Stations-Bias-Korrektur für die ersten beiden Tage übersprungen,
-            da die Daten bereits statistisch kalibriert sind.
+            Statistisch korrigierte Punktvorhersagen vom Deutschen Wetterdienst.
+            Standard-Stationen: 10935 (Friedrichshafen), 10929 (Konstanz).
+            MOSMIX wird ab Tag 2 als statistische Stützung beigemischt; Tag 0 & 1 laufen
+            rein über Open-Meteo + Radar + SMN-Bias (Mini-SuperHD).
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1">
-              <Label>MOSMIX-Korrektur aktivieren</Label>
-              <p className="text-xs text-muted-foreground">Tag 0 & 1 werden aus DWD MOSMIX statt Open-Meteo berechnet.</p>
+              <Label>MOSMIX-Beimischung aktivieren</Label>
+              <p className="text-xs text-muted-foreground">Ab Tag 2 fliesst DWD MOSMIX in die Tageswerte ein.</p>
             </div>
             <Switch
               checked={form.mosmix_enabled}
@@ -287,62 +295,50 @@ function SettingsPage() {
             />
           </div>
           <div className="space-y-2 pt-2 border-t">
-            <Label>Tag 0 — Gewicht MOSMIX ({form.tag0_weight_mosmix} %)</Label>
+            <Label>Tag 2 (24–48 h) — Gewicht MOSMIX ({form.tag2_weight_mosmix} %)</Label>
             <input
-              type="range"
-              min={0}
-              max={100}
-              value={form.tag0_weight_mosmix}
-              onChange={(e) => setForm({ ...form, tag0_weight_mosmix: parseInt(e.target.value || "0", 10) })}
+              type="range" min={0} max={100}
+              value={form.tag2_weight_mosmix}
+              onChange={(e) => setForm({ ...form, tag2_weight_mosmix: parseInt(e.target.value || "0", 10) })}
               className="w-full"
             />
           </div>
           <div className="space-y-2">
-            <Label>Tag 0 — Gewicht Open-Meteo Modelle ({form.tag0_weight_om} %)</Label>
+            <Label>Tag 2 — Gewicht Open-Meteo Modelle ({form.tag2_weight_om} %)</Label>
             <input
-              type="range"
-              min={0}
-              max={100}
-              value={form.tag0_weight_om}
-              onChange={(e) => setForm({ ...form, tag0_weight_om: parseInt(e.target.value || "0", 10) })}
+              type="range" min={0} max={100}
+              value={form.tag2_weight_om}
+              onChange={(e) => setForm({ ...form, tag2_weight_om: parseInt(e.target.value || "0", 10) })}
               className="w-full"
             />
             <p className="text-xs text-muted-foreground">
-              Gewichteter Mix für die Tageswerte von heute (tmin, tmax, Niederschlag, Wind, Bewölkung).
-              Default 40 / 60. Niedrigeres MOSMIX-Gewicht = stärkerer Einfluss von ICON-CH1/CH2 & Co. auf den heutigen Tag.
-              Stations-Bias, Nowcast und Radar wirken zusätzlich on top. Summe wird intern normalisiert
-              (aktuell: {Math.round((form.tag0_weight_mosmix / Math.max(1, form.tag0_weight_mosmix + form.tag0_weight_om)) * 100)} % MOSMIX
-              / {Math.round((form.tag0_weight_om / Math.max(1, form.tag0_weight_mosmix + form.tag0_weight_om)) * 100)} % Open-Meteo).
+              Default 25 / 75. Moderate MOSMIX-Stützung für den Mittelfristbereich.
+              Aktuell:{" "}{Math.round((form.tag2_weight_mosmix / Math.max(1, form.tag2_weight_mosmix + form.tag2_weight_om)) * 100)} % MOSMIX
+              {" "}/ {Math.round((form.tag2_weight_om / Math.max(1, form.tag2_weight_mosmix + form.tag2_weight_om)) * 100)} % Open-Meteo.
             </p>
           </div>
           <div className="space-y-2 pt-2 border-t">
-            <Label>Tag 1 — Gewicht MOSMIX ({form.tag1_weight_mosmix} %)</Label>
+            <Label>Tag 3+ (&gt;48 h) — Gewicht MOSMIX ({form.tag3plus_weight_mosmix} %)</Label>
             <input
-              type="range"
-              min={0}
-              max={100}
-              value={form.tag1_weight_mosmix}
-              onChange={(e) => setForm({ ...form, tag1_weight_mosmix: parseInt(e.target.value || "0", 10) })}
+              type="range" min={0} max={100}
+              value={form.tag3plus_weight_mosmix}
+              onChange={(e) => setForm({ ...form, tag3plus_weight_mosmix: parseInt(e.target.value || "0", 10) })}
               className="w-full"
             />
           </div>
           <div className="space-y-2">
-            <Label>Tag 1 — Gewicht Open-Meteo Modelle ({form.tag1_weight_om} %)</Label>
+            <Label>Tag 3+ — Gewicht Open-Meteo Modelle ({form.tag3plus_weight_om} %)</Label>
             <input
-              type="range"
-              min={0}
-              max={100}
-              value={form.tag1_weight_om}
-              onChange={(e) => setForm({ ...form, tag1_weight_om: parseInt(e.target.value || "0", 10) })}
+              type="range" min={0} max={100}
+              value={form.tag3plus_weight_om}
+              onChange={(e) => setForm({ ...form, tag3plus_weight_om: parseInt(e.target.value || "0", 10) })}
               className="w-full"
             />
             <p className="text-xs text-muted-foreground">
-              Gewichteter Mix für morgen (tmin, tmax, Niederschlag, Wind, Bewölkung).
-              Default 50 / 50. MOSMIX bringt das DWD-Stationsensemble (10935/10929), Open-Meteo
-              die hochauflösenden Modelle (ICON-EU, ICON-D2, IFS …). Stations-Bias und Bias-Korrektur
-              wirken zusätzlich. Nowcast/Radar greift nur Tag 0. Aktuell:
-              {" "}{Math.round((form.tag1_weight_mosmix / Math.max(1, form.tag1_weight_mosmix + form.tag1_weight_om)) * 100)} % MOSMIX
-              / {Math.round((form.tag1_weight_om / Math.max(1, form.tag1_weight_mosmix + form.tag1_weight_om)) * 100)} % Open-Meteo.
+              Default 45 / 55. Deutlichere MOSMIX-Stützung ab Tag 3, wo MOS seine statistische
+              Stationskorrektur gegen die Globalmodelle (ECMWF/GFS) ausspielt. Aktuell:
+              {" "}{Math.round((form.tag3plus_weight_mosmix / Math.max(1, form.tag3plus_weight_mosmix + form.tag3plus_weight_om)) * 100)} % MOSMIX
+              {" "}/ {Math.round((form.tag3plus_weight_om / Math.max(1, form.tag3plus_weight_mosmix + form.tag3plus_weight_om)) * 100)} % Open-Meteo.
             </p>
           </div>
         </CardContent>
