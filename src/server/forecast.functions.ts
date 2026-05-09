@@ -757,12 +757,12 @@ async function fetchWeather(
   // Mid-Tier jetzt MIT Hourly: liefert Stundenprofil für Tag 2–4
   // (CH-Modelle des Short-Tiers reichen typischerweise nur ~3 Tage).
   const midData = await getOrSetCache(
-    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}:h2`,
+    `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}:h`,
     () => fetchOpenMeteoOptional(lat, lon, midModels, true),
   );
   await wait(500);
   const longData = await getOrSetCache(
-    `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}:v2`,
+    `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
     () => fetchOpenMeteoOptional(lat, lon, longModels, false),
   );
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
@@ -788,28 +788,18 @@ async function fetchWeather(
 // Tag 0/1 → Short-Tier (CH-Modelle), Tag 2–4 → Mid-Tier, sonst → ohne Hourly.
 function weatherForHourly(weather: any, dayIndex: number): any {
   if (!weather) return weather;
-  const dateStr = weather?.daily?.time?.[dayIndex];
-  const countCoveredHours = (h: any): number => {
-    if (!h?.time || !dateStr) return 0;
-    const hasPrecip = Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"));
-    if (!hasPrecip) return 0;
-    let n = 0;
-    for (const t of h.time as string[]) if (typeof t === "string" && t.startsWith(dateStr)) n++;
-    return n;
+  const hasUsableHourly = (h: any): boolean => {
+    if (!h?.time?.length) return false;
+    // mindestens ein precipitation*-Schlüssel muss vorhanden sein
+    return Object.keys(h).some((k) => k === "precipitation" || isModelKeyForBase(k, "precipitation"));
   };
-  const shortHours = countCoveredHours(weather.hourly);
-  const midHours = countCoveredHours(weather.hourly_mid);
   if (dayIndex <= 1) {
-    // Short-Tier ist primär; bei Lückenhaftigkeit (< 18 Stunden abgedeckt) Mid-Tier nutzen,
-    // wenn dieses mehr Stunden bietet.
-    if (shortHours >= 18) return weather;
-    if (midHours > shortHours) return { ...weather, hourly: weather.hourly_mid };
+    if (hasUsableHourly(weather.hourly)) return weather;
+    if (hasUsableHourly(weather.hourly_mid)) return { ...weather, hourly: weather.hourly_mid };
     return weather;
   }
-  if (dayIndex <= 4) {
-    if (midHours > 0) return { ...weather, hourly: weather.hourly_mid };
-    if (shortHours > 0) return weather;
-    return { ...weather, hourly: undefined };
+  if (dayIndex <= 4 && hasUsableHourly(weather.hourly_mid)) {
+    return { ...weather, hourly: weather.hourly_mid };
   }
   return { ...weather, hourly: undefined };
 }
@@ -1297,72 +1287,6 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
     }
   }
 
-  // === Trend (Wetterbesserung / Wetterverschlechterung / intermittent / steady / dry) ===
-  // basiert auf wet/dry-Sequenzen im Stundenverlauf (>= 0.2 mm/h ist nass).
-  const totalMm = hoursOfDay.reduce((a, b) => a + b.mm, 0);
-  let trend: "improving" | "deteriorating" | "intermittent" | "steady" | "dry" = "steady";
-  let transitionHour: number | null = null;
-  let dryAfterHour: number | null = null;
-  let wetAfterHour: number | null = null;
-
-  if (totalMm < 1) {
-    trend = "dry";
-  } else {
-    // wet/dry hour map (begrenzt auf den tatsächlich abgedeckten Bereich)
-    const hourMap = new Map<number, number>();
-    for (const { hour, mm } of hoursOfDay) hourMap.set(hour, mm);
-    const minH = Math.min(...hoursOfDay.map((x) => x.hour));
-    const maxH = Math.max(...hoursOfDay.map((x) => x.hour));
-    let wetSegments: Array<{ from: number; to: number; mm: number }> = [];
-    let segStart: number | null = null;
-    let segMm = 0;
-    for (let hh = minH; hh <= maxH + 1; hh++) {
-      const mm = hourMap.get(hh) ?? 0;
-      const isWet = mm >= 0.2;
-      if (isWet && segStart == null) { segStart = hh; segMm = 0; }
-      if (isWet) segMm += mm;
-      if ((!isWet || hh === maxH + 1) && segStart != null) {
-        wetSegments.push({ from: segStart, to: hh, mm: segMm });
-        segStart = null; segMm = 0;
-      }
-    }
-    // mehrere getrennte nasse Phasen (>= 3h Pause dazwischen)?
-    let hasGap = false;
-    for (let i = 1; i < wetSegments.length; i++) {
-      if (wetSegments[i].from - wetSegments[i - 1].to >= 3) { hasGap = true; break; }
-    }
-    const significantSegs = wetSegments.filter((s) => s.mm >= 0.5);
-    if (significantSegs.length >= 2 && hasGap) {
-      trend = "intermittent";
-    } else if (significantSegs.length === 0) {
-      trend = "dry";
-    } else {
-      // Eine Hauptnass-Phase: bestimme, ob sie eher früh oder spät liegt
-      // und ob ein längerer trockener Block davor/danach kommt (>= 4h, < 0.5 mm/h).
-      const main = significantSegs[significantSegs.length - 1].mm > significantSegs[0].mm
-        ? significantSegs[significantSegs.length - 1]
-        : significantSegs[0];
-      const dryBeforeLen = main.from - minH;
-      const dryAfterLen = (maxH + 1) - main.to;
-      const dryBeforeTotal = Array.from(hourMap.entries())
-        .filter(([h]) => h >= minH && h < main.from).reduce((a, [, mm]) => a + mm, 0);
-      const dryAfterTotal = Array.from(hourMap.entries())
-        .filter(([h]) => h >= main.to && h <= maxH).reduce((a, [, mm]) => a + mm, 0);
-
-      if (dryAfterLen >= 4 && dryAfterTotal < 0.5 && main.from <= 14) {
-        trend = "improving";
-        transitionHour = main.to; // Stunde, ab der es trocken wird
-        dryAfterHour = main.to;
-      } else if (dryBeforeLen >= 4 && dryBeforeTotal < 0.5 && main.from >= 10) {
-        trend = "deteriorating";
-        transitionHour = main.from; // Stunde, ab der Niederschlag einsetzt
-        wetAfterHour = main.from;
-      } else {
-        trend = "steady";
-      }
-    }
-  }
-
   return {
     blocks: result,
     peak_block: peakSum >= 1 ? peakBlock : null,
@@ -1372,148 +1296,7 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
     peak_hour: peakHour != null && peakHourMm >= 0.5 ? peakHour : null,
     peak_hour_mm: peakHour != null ? Math.round(peakHourMm * 10) / 10 : null,
     dry_windows: dryWindows,
-    trend,
-    transition_hour: transitionHour,
-    dry_after_hour: dryAfterHour,
-    wet_after_hour: wetAfterHour,
-    total_mm: Math.round(totalMm * 10) / 10,
   };
-}
-
-// ===== Bewölkungs-Tagesgang (Tag 0–4) =====
-function computeCloudDistribution(weather: any, dayIndex: number): any | null {
-  const h = weather?.hourly;
-  const dateStr = weather?.daily?.time?.[dayIndex];
-  if (!h?.time || !dateStr) return null;
-
-  const collectArrs = (base: string): number[][] => {
-    const out: number[][] = [];
-    if (Array.isArray(h[base])) out.push(h[base]);
-    for (const k of Object.keys(h)) {
-      if (isModelKeyForBase(k, base) && Array.isArray(h[k])) out.push(h[k]);
-    }
-    return out;
-  };
-  const cloudArrs = collectArrs("cloudcover");
-  const sunArrs = collectArrs("sunshine_duration");
-  if (!cloudArrs.length && !sunArrs.length) return null;
-
-  type BlockAgg = { cloud_pct: number | null; sunshine_min: number | null; hours: number };
-  const blocks: Record<string, { range: [number, number]; agg: BlockAgg }> = {
-    morning: { range: [6, 12], agg: { cloud_pct: null, sunshine_min: null, hours: 0 } },
-    afternoon: { range: [12, 18], agg: { cloud_pct: null, sunshine_min: null, hours: 0 } },
-    evening: { range: [18, 24], agg: { cloud_pct: null, sunshine_min: null, hours: 0 } },
-  };
-
-  const hourly: Array<{ hour: number; cloud: number | null; sun: number | null }> = [];
-  for (let i = 0; i < (h.time as string[]).length; i++) {
-    const t = h.time[i] as string;
-    if (!t.startsWith(dateStr)) continue;
-    const hour = parseInt(t.slice(11, 13), 10);
-    if (!Number.isFinite(hour)) continue;
-    const cVals = cloudArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
-    const sVals = sunArrs.map((a) => a[i]).filter((v) => v != null && Number.isFinite(v)) as number[];
-    const cloud = cVals.length ? cVals.reduce((a, b) => a + b, 0) / cVals.length : null;
-    const sun = sVals.length ? sVals.reduce((a, b) => a + b, 0) / sVals.length : null;
-    hourly.push({ hour, cloud, sun });
-  }
-
-  for (const [, { range, agg }] of Object.entries(blocks)) {
-    const inBlock = hourly.filter((r) => r.hour >= range[0] && r.hour < range[1]);
-    const cv = inBlock.map((r) => r.cloud).filter((v): v is number => v != null);
-    const sv = inBlock.map((r) => r.sun).filter((v): v is number => v != null);
-    agg.cloud_pct = cv.length ? Math.round(cv.reduce((a, b) => a + b, 0) / cv.length) : null;
-    agg.sunshine_min = sv.length ? Math.round(sv.reduce((a, b) => a + b, 0) / 60) : null;
-    agg.hours = inBlock.length;
-  }
-
-  const categorize = (cloud: number | null, sunMin: number | null, blockHours: number): string => {
-    const sunRatio = blockHours > 0 && sunMin != null ? sunMin / (blockHours * 60) : null;
-    if (sunRatio != null && sunRatio >= 0.7) return "klar";
-    if (sunRatio != null && sunRatio >= 0.4) return "heiter";
-    if (cloud != null && cloud >= 80) return "bedeckt";
-    if (cloud != null && cloud >= 50) return "wolkig";
-    if (sunRatio != null && sunRatio >= 0.15) return "wechselnd";
-    return "wolkig";
-  };
-
-  const blockOut: Record<string, BlockAgg & { category: string }> = {};
-  for (const [key, { agg }] of Object.entries(blocks)) {
-    blockOut[key] = { ...agg, category: categorize(agg.cloud_pct, agg.sunshine_min, agg.hours || 1) };
-  }
-
-  const m = blockOut.morning;
-  const a = blockOut.afternoon;
-  const e = blockOut.evening;
-  const isClear = (b: typeof m) => b.category === "klar" || b.category === "heiter";
-  const isOvercast = (b: typeof m) => b.category === "bedeckt";
-  const isCloudy = (b: typeof m) => b.category === "wolkig" || b.category === "bedeckt";
-
-  let pattern:
-    | "clear_all_day"
-    | "morning_clouds_clearing"
-    | "afternoon_buildup"
-    | "evening_clearing"
-    | "overcast_all_day"
-    | "variable" = "variable";
-
-  if (isClear(m) && isClear(a) && (isClear(e) || e.hours === 0)) pattern = "clear_all_day";
-  else if (isOvercast(m) && isOvercast(a) && isOvercast(e)) pattern = "overcast_all_day";
-  else if (isCloudy(m) && isClear(a)) pattern = "morning_clouds_clearing";
-  else if (isClear(m) && isCloudy(a) && (a.cloud_pct ?? 0) > (m.cloud_pct ?? 0) + 15) pattern = "afternoon_buildup";
-  else if (isCloudy(a) && isClear(e)) pattern = "evening_clearing";
-  else pattern = "variable";
-
-  return { blocks: blockOut, pattern };
-}
-
-// ===== Server-seitige Klartext-Story (Anker für die KI) =====
-function buildDayNarrative(day: any): string | null {
-  const pd = day?.precip_distribution;
-  const cd = day?.cloud_distribution;
-  const fog = day?.fog_dissipation;
-  const sentences: string[] = [];
-
-  if (fog) {
-    sentences.push("Am Morgen verbreitet Nebel- oder Hochnebelfelder im Flachland.");
-  } else if (cd?.blocks?.morning) {
-    const cat = cd.blocks.morning.category;
-    if (cat === "klar" || cat === "heiter") sentences.push("Am Vormittag überwiegend sonnig.");
-    else if (cat === "bedeckt") sentences.push("Am Vormittag stark bewölkt.");
-    else if (cat === "wolkig") sentences.push("Am Vormittag wolkig.");
-    else sentences.push("Am Vormittag wechselnd bewölkt.");
-  }
-
-  if (pd) {
-    if (pd.trend === "improving") {
-      sentences.push("Am Vormittag noch zeitweise Niederschlag, im Tagesverlauf Wetterbesserung, am Nachmittag und Abend weitgehend trocken.");
-    } else if (pd.trend === "deteriorating") {
-      sentences.push("Tagsüber zunächst trocken, am Nachmittag/Abend aufkommender Niederschlag.");
-    } else if (pd.trend === "intermittent") {
-      sentences.push("Im Tagesverlauf wiederholt Schauer mit trockenen Phasen dazwischen.");
-    } else if (pd.trend === "steady" && pd.peak_block) {
-      const blockName: Record<string, string> = {
-        night: "in der Nacht", morning: "am Vormittag",
-        afternoon: "am Nachmittag", evening: "am Abend",
-      };
-      sentences.push(`Schwerpunkt der Niederschläge ${blockName[pd.peak_block] ?? ""}.`.trim());
-    }
-  }
-
-  if (cd && (!pd || pd.trend === "dry" || pd.trend === "steady")) {
-    if (cd.pattern === "afternoon_buildup") sentences.push("Am Nachmittag zunehmend Quellbewölkung.");
-    else if (cd.pattern === "evening_clearing") sentences.push("Gegen Abend Aufhellungen.");
-    else if (cd.pattern === "morning_clouds_clearing" && !fog) sentences.push("Im Tagesverlauf Auflockerungen.");
-    else if (cd.pattern === "clear_all_day") sentences.push("Den ganzen Tag über sonnig.");
-    else if (cd.pattern === "overcast_all_day") sentences.push("Ganztägig stark bewölkt.");
-  }
-
-  if (day?.thunderstorm?.peak_hour != null) {
-    sentences.push("Im späten Tagesverlauf lokale Gewitter möglich.");
-  }
-
-  if (!sentences.length) return null;
-  return sentences.join(" ");
 }
 
 // Kompaktes Stundenprofil pro Tag: Median + Spread aus allen verfügbaren Modellen
@@ -1868,22 +1651,18 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     precip_distribution: dayIndex <= 4 ? computePrecipDistribution(weatherForHourly(weather, dayIndex), dayIndex) : null,
-    cloud_distribution: dayIndex <= 4 ? computeCloudDistribution(weatherForHourly(weather, dayIndex), dayIndex) : null,
     hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex) : null,
-    sky_pattern: dayIndex <= 4
-      ? (detectFogDissipation(buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
+    sky_pattern: dayIndex <= 1
+      ? (detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model) ? "nebel_aufloesung" : null)
       : null,
-    fog_dissipation: dayIndex <= 4
-      ? detectFogDissipation(buildHourlyProfile(weatherForHourly(weather, dayIndex), dayIndex), weathercode?.by_model)
+    fog_dissipation: dayIndex <= 1
+      ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
       : null,
     wind_gusts: assessGusts(weatherForHourly(weather, dayIndex), dayIndex),
     thunderstorm: assessThunderstormRisk(weatherForHourly(weather, dayIndex), dayIndex, weathercode?.by_model),
     humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
-  // Server-seitige Klartext-Story als verbindlicher Anker für die KI
-  out.day_narrative = dayIndex <= 4 ? buildDayNarrative(out) : null;
-
   if (
     dayIndex <= 4 &&
     (out.precip?.avg ?? 0) >= 1 &&
@@ -1901,17 +1680,6 @@ function formatDayData(weather: any, dayIndex: number) {
     console.warn(
       `[precip_distribution] dayIndex=${dayIndex} date=${out.date} precip.avg=${out.precip?.avg} → null (${reason})`,
     );
-  }
-  // Konsistenz-Checks
-  if (dayIndex <= 4) {
-    const pd = out.precip_distribution;
-    const cd = out.cloud_distribution;
-    if (pd?.trend === "improving" && cd?.pattern === "overcast_all_day") {
-      console.warn(`[consistency] dayIndex=${dayIndex} date=${out.date}: trend=improving aber cloud pattern=overcast_all_day`);
-    }
-    if ((out.sunshine_h?.avg ?? 0) >= 9 && (out.cloudcover?.avg ?? 0) >= 70) {
-      console.warn(`[consistency] dayIndex=${dayIndex} date=${out.date}: sunshine_h=${out.sunshine_h?.avg}h aber cloudcover=${out.cloudcover?.avg}%`);
-    }
   }
   return out;
 }
@@ -1992,9 +1760,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
-  out.cloud_distribution = computeCloudDistribution(weather, dayIndex);
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
-  out.day_narrative = buildDayNarrative(out);
   out.window_from_hour = fromHour;
   out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
   return normalizeSkyDiagnostics(out);
@@ -2508,20 +2274,8 @@ Tagesmittel "cloudcover.avg" darf den Tagesgang aus dem STUNDENPROFIL NIEMALS ü
     "=== NOWCAST / KONFIDENZ ===",
     "Wenn der Datensatz ein Feld `nowcast` enthält: nutze `observed_now` (aktuelle Stationswerte) und `next_2h.trend` als verlässliche Anker für die ersten Stunden. Wenn `nowcast.confidence` 'niedrig' ist, formuliere vorsichtiger ('zeichnet sich ab', 'deutet sich an', 'unsichere Lage'). Bei `next_2h.trend === 'zunehmend'` Niederschlag explizit erwähnen, bei 'trocken' keine Schauer ankündigen. Bei `night_fog_likely === true` auf mögliches Aufkommen von Nebel hinweisen statt auf besonders kalte Nacht.",
     "",
-    "=== TAGES-STORY (HÖCHSTE PRIORITÄT) ===",
-    "Wenn der Datensatz ein Feld `day_narrative` enthält, ist das die VERBINDLICHE chronologische Story für diesen Tag. Übernimm Reihenfolge und Zeitbezüge (Vormittag → Nachmittag → Abend) exakt — du darfst sprachlich variieren, aber NICHT die Reihenfolge ändern und keine Zeitangabe erfinden, die der Story widerspricht. Die Story hat Vorrang vor Tagesmittelwerten (cloudcover.avg, sunshine_h.avg). Sie darf NICHT wörtlich als Satz erscheinen — sie ist ein Anker, kein Zitat.",
-    "",
     "=== NIEDERSCHLAGS-TAGESGANG ===",
-    "Wenn `precip_distribution` vorhanden ist (Tag 0–4), beschreibe den Tagesverlauf des Niederschlags chronologisch.\n- TREND ist verbindlich: `trend = 'improving'` → 'Wetterbesserung im Tagesverlauf' (am Vormittag noch Regen, Nachmittag/Abend trocken). `trend = 'deteriorating'` → 'Wetterverschlechterung im Tagesverlauf' (Vormittag trocken, Nachmittag/Abend Niederschlag). `trend = 'intermittent'` → 'wiederholt Schauer' / 'zeitweise Schauer'. `trend = 'steady'` → Niederschlag ganztägig ähnlich verteilt. `trend = 'dry'` → 'überwiegend trocken' / 'meist trocken'.\n- ABSOLUT VERBOTEN: eine Tageszeit für Niederschlag zu nennen, die NICHT durch `peak_block`, `peak_hour` oder `transition_hour` gedeckt ist.\n- `peak_block` (nur wenn ≥ 1 mm) nennt den Block mit dem Hauptniederschlag (night/morning/afternoon/evening). Diesen explizit hervorheben.\n- `transition_hour` markiert den Wechsel nass↔trocken (bei improving/deteriorating). Grob in Tageszeit übersetzen ('gegen Mittag', 'am frühen Nachmittag').\n- `peak_hour` nur grob nennen ('um den Mittag', 'gegen 17 Uhr'), nie exakte Uhrzeit.\n- `dry_windows` (≥ 3h trocken) explizit erwähnen, wenn sie zwischen Niederschlagsphasen liegen.\n- Blöcke mit 0 mm dürfen/sollen als trocken benannt werden, wenn sie zur Story beitragen.\n- Intensität nach `peak_block_prob`: ≥ 70 → 'Regen'/'Schauer'; 40–69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `precip_distribution` FEHLT (ab Tag 5): KEINE konkrete Tageszeit für Niederschlag erfinden — generisch 'im Tagesverlauf zeitweise'.\nWenn `mix_weights` vorhanden ist (Tag 0): Mix-Verhältnis nicht im Text erwähnen. Wenn `mosmix_reference` vorhanden ist: NUR interne Plausibilitätskontrolle, NICHT im Text erwähnen.",
-    "",
-    "=== BEWÖLKUNGS-TAGESGANG ===",
-    "Wenn `cloud_distribution` vorhanden ist (Tag 0–4), beschreibe Bewölkung/Sonne nach `pattern`:\n- `clear_all_day` → 'ganztägig sonnig' / 'meist sonnig' / 'klar'.\n- `morning_clouds_clearing` → 'am Morgen stark bewölkt, im Tagesverlauf Auflockerungen, am Nachmittag sonnig'.\n- `afternoon_buildup` → 'am Vormittag sonnig, am Nachmittag zunehmend Quellbewölkung' (bei Gewitter-Risiko ergänzen).\n- `evening_clearing` → 'tagsüber wechselnd bewölkt, gegen Abend Aufhellungen'.\n- `overcast_all_day` → 'ganztägig stark bewölkt' / 'bedeckt'.\n- `variable` → freie Beschreibung anhand der Block-Kategorien (`blocks.morning.category` etc.).\n`cloud_distribution.pattern` ist VERBINDLICH und überstimmt das Tagesmittel `cloudcover.avg` und `sunshine_h.avg` für die Tagesgang-Beschreibung. `sunshine_h.avg` bleibt nur sekundärer Anker für die Intensität.",
-    "",
-    "=== KONSISTENZ DATEN ↔ TEXT ===",
-    "Der erste Satz des Tagesabsatzes MUSS Bewölkungsmuster (`cloud_distribution.pattern`) UND Niederschlags-Trend (`precip_distribution.trend`) widerspiegeln. Beispiele: improving + morning_clouds_clearing → 'Am Vormittag stark bewölkt mit Regen, im Tagesverlauf Wetterbesserung mit Auflockerungen'. dry + clear_all_day → 'Ganztägig sonnig und trocken'. deteriorating + afternoon_buildup → 'Am Vormittag freundlich, am Nachmittag zunehmend Wolken und aufkommender Regen'.",
-    "",
-    "=== ALT: NIEDERSCHLAGS-TAGESGANG (FALLBACK) ===",
-    "Falls die obigen Felder fehlen: KEINE konkrete Tageszeit erfinden, nur generische Formulierungen verwenden.",
+    "Wenn der Datensatz ein Feld `precip_distribution` enthält (verfügbar für Tag 0–4), beschreibe den Tagesverlauf des Niederschlags entsprechend den vier Blöcken (night = 'in der Nacht', morning = 'am Vormittag', afternoon = 'am Nachmittag', evening = 'am Abend').\n- ABSOLUT VERBOTEN: eine Tageszeit für Niederschlag zu nennen, die NICHT durch `precip_distribution.peak_block` oder `peak_hour` gedeckt ist. Wenn z. B. `peak_block` = 'afternoon' ist, darf NICHT 'am Morgen Regen' geschrieben werden.\n- `peak_block` nennt den Block mit dem Hauptniederschlag (nur wenn ≥ 1 mm). Diesen Block explizit hervorheben.\n- Wenn `peak_hour` gesetzt ist, die Stunde im Text grob nennen ('um den Mittag', 'gegen 17 Uhr', 'in den späten Nachmittagsstunden') — nie als exakte Uhrzeit ('um 14:00').\n- `dry_windows` (≥ 3h trocken) explizit als 'längere trockene Phase am Vormittag' o. ä. erwähnen, wenn es zwischen Niederschlagsphasen liegt.\n- WETTERBESSERUNG / WETTERVERSCHLECHTERUNG (PFLICHT): Bei asymmetrischer Niederschlagsverteilung MUSS der Verlauf chronologisch benannt werden:\n  • peak_block = 'night' oder 'morning' UND afternoon < 1 mm UND evening < 1 mm → 'am Vormittag noch Regen, im Tagesverlauf Wetterbesserung mit Auflockerungen, am Nachmittag und Abend weitgehend trocken'.\n  • peak_block = 'afternoon' oder 'evening' UND morning < 1 mm → 'am Vormittag trocken, am Nachmittag/Abend aufkommende Schauer/Regen'.\n  • peak_block = 'evening' UND morning + afternoon < 1 mm → 'tagsüber meist trocken, erst am Abend Regen'.\n  Das blosse Paraphrasieren der Tagessumme ('zeitweise Schauer') ist in diesen Fällen NICHT zulässig.\n- Andere Blöcke nur erwähnen wenn `precip_mm` ≥ 1 mm; Blöcke mit 0 mm dürfen/sollen als trocken/niederschlagsfrei beschrieben werden, wenn sie zur Tagesgang-Story beitragen.\n- Intensität nach `peak_block_prob`: ≥ 70 → bestimmt formulieren ('Regen', 'Schauer'); 40-69 → 'zeitweise Schauer'; < 40 → 'vereinzelt Schauer möglich'.\n- Wenn `peak_block` null ist (Tagessumme < 1 mm), den Tag als überwiegend trocken beschreiben.\n- Wenn `precip_distribution` FEHLT (ab Tag 5): KEINE konkrete Tageszeit für Niederschlag erfinden — generisch 'im Tagesverlauf zeitweise', 'verbreitet zeitweise' o. ä. verwenden.\nWenn `mix_weights` vorhanden ist (Tag 0): die Werte sind ein gewichteter Mix aus Open-Meteo Multi-Modell und MOSMIX, zusätzlich mit Stations-Bias, Bias-Korrektur und Nowcast/Radar veredelt. Mix-Verhältnis nicht im Text erwähnen.\nWenn `mosmix_reference` vorhanden ist: NUR als interne Plausibilitätskontrolle nutzen, NICHT im Text erwähnen oder Werte daraus zitieren.",
     "",
     "=== STUNDENPROFIL (TAG 0 + 1) ===",
     "Wenn im userPrompt ein Block 'STUNDENPROFIL' folgt, ist das die HÖCHSTE Auflösung des Tagesgangs (eine Zeile pro Stunde, Median über alle verfügbaren Modelle, in Klammern die Modell-Streuung). Nutze ihn primär zur Bestimmung wann genau Bewölkung, Niederschlag, Sonne oder Wind wechseln. Übersetze Stundenangaben in Tageszeit-Bezüge ('am Vormittag', 'gegen Mittag', 'am späten Nachmittag', 'in der ersten Nachthälfte') — nie exakte Uhrzeiten nennen. Bei grosser Streuung (±) vorsichtig formulieren ('zeichnet sich ab', 'lokal unterschiedlich'). Wenn das Profil widersprüchlich zu den Tagesaggregaten ist, hat das Profil Vorrang für die Tagesgang-Beschreibung; die Aggregate (tmin/tmax) bleiben für die Temperaturangaben verbindlich. Spalte 'Quelle' (nur Tag 0) ist ein internes Qualitätssignal: 'obs'-Werte sind verbindlich und haben Vorrang vor Modellwerten, 'mix' = Übergang für die laufende Stunde, 'mod' = Modellprognose. WICHTIG: Die Datenquelle darf im Text NICHT erwähnt werden — Begriffe wie 'gemessen', 'beobachtet', 'laut Messung', 'Stationsdaten', 'im Rückblick' o. Ä. sind verboten. Die Prognose bleibt durchgehend eine einheitliche Wetterbeschreibung, unabhängig davon ob ein Wert aus Messung oder Modell stammt.",
