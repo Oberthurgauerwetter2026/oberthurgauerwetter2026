@@ -898,8 +898,8 @@ function classifyRegime(weather: any, dayIndex: number): Regime {
     if (!vals.length) return null;
     return vals.reduce((a, b) => a + b, 0) / vals.length;
   };
-  const cape = aggregateHourlyForDay(weather, dayIndex, "cape", "max", 8, 22) ?? 0;
-  const li = aggregateHourlyForDay(weather, dayIndex, "lifted_index", "min", 8, 22);
+  const cape = aggregateHourlyForDay(weather, dayIndex, "cape", "max", 8, 22)?.value ?? 0;
+  const li = aggregateHourlyForDay(weather, dayIndex, "lifted_index", "min", 8, 22)?.value;
   if (cape > 800 || (li != null && li < -2)) return "convective";
 
   const wind = meanOf(collectModelValuesTiered(weather, "windspeed_10m_max", dayIndex)) ?? 0;
