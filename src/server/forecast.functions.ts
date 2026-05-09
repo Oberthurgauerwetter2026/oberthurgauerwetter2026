@@ -940,14 +940,17 @@ function classifyUncertainty(spreadVal: number, scale: "temp" | "precip" | "wind
   return "low";
 }
 
-function aggregate(perModel: Record<string, number>) {
+function aggregate(
+  perModel: Record<string, number>,
+  opts?: { variable?: string; regime?: Regime },
+) {
   const entries = Object.entries(perModel);
   if (!entries.length) return null;
   const vals = entries.map(([, v]) => v);
   let wSum = 0;
   let wTot = 0;
   for (const [name, v] of entries) {
-    const w = modelWeight(name);
+    const w = regimeWeight(name, opts?.variable, opts?.regime);
     wSum += v * w;
     wTot += w;
   }
