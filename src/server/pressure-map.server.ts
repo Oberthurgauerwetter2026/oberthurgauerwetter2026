@@ -179,13 +179,32 @@ function geojsonToPath(geo: any): string {
   return parts.join(" ");
 }
 
-// Convert d3-contour multipolygon (in grid coords) to a smoothed SVG path
-// using Catmull-Rom -> cubic Bezier conversion for clean, organic isobars.
+// Chaikin corner-cutting: each iteration replaces every edge with two new
+// points at 25% and 75%, halving every corner angle. Two iterations give
+// noticeably rounder rings without losing shape.
+function chaikin(pts: [number, number][], iterations = 2, closed = true): [number, number][] {
+  let cur = pts;
+  for (let it = 0; it < iterations; it++) {
+    const out: [number, number][] = [];
+    const n = cur.length;
+    const last = closed ? n : n - 1;
+    for (let i = 0; i < last; i++) {
+      const a = cur[i];
+      const b = cur[closed ? (i + 1) % n : i + 1];
+      out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+      out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    if (!closed) out.unshift(cur[0]), out.push(cur[n - 1]);
+    cur = out;
+  }
+  return cur;
+}
+
 function contourToPath(coords: number[][][][], smooth = true): string {
   let d = "";
   for (const poly of coords) {
     for (const ring of poly) {
-      const pts = ring.map(([gx, gy]) => gridToPixel(gx, gy));
+      let pts: [number, number][] = ring.map(([gx, gy]) => gridToPixel(gx, gy));
       if (pts.length < 2) continue;
       if (!smooth || pts.length < 4) {
         for (let i = 0; i < pts.length; i++) {
@@ -193,6 +212,11 @@ function contourToPath(coords: number[][][][], smooth = true): string {
         }
         continue;
       }
+      const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
+      // Round corners first via Chaikin, then connect with Catmull-Rom Bezier
+      const ringPts = closed ? pts.slice(0, -1) : pts;
+      const smoothed = chaikin(ringPts, 2, closed);
+      pts = closed ? [...smoothed, smoothed[0]] : smoothed;
       // Catmull-Rom -> Bezier (closed ring assumed when first==last)
       const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
       const n = closed ? pts.length - 1 : pts.length;
