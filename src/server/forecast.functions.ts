@@ -109,6 +109,40 @@ const DAILY_VARS = [
 const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
 
 // ===== Wind helpers =====
+// Region Oberthurgau: hochauflösende MeteoSwiss-/Météo-France-Modelle bilden den
+// Wind hier zuverlässiger ab. Statt eines ungewichteten Mittels gewichten wir.
+const WIND_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.40,
+  meteoswiss_icon_ch2: 0.30,
+  meteofrance_arome_france_hd: 0.20,
+  arpege_europe: 0.10,
+};
+function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
+  if (!entries.length) return null;
+  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
+  if (totalW <= 0) return null;
+  const avg = entries.reduce((s, [k, v]) => s + v * (WIND_WEIGHTS[k] / totalW), 0);
+  const weights_used: Record<string, number> = {};
+  for (const [k] of entries) weights_used[k] = Math.round((WIND_WEIGHTS[k] / totalW) * 100) / 100;
+  return { avg: Math.round(avg * 10) / 10, weights_used };
+}
+function weightedCircularMeanDeg(perModel: Record<string, number>): number | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
+  if (!entries.length) return null;
+  const totalW = entries.reduce((s, [k]) => s + WIND_WEIGHTS[k], 0);
+  if (totalW <= 0) return null;
+  let x = 0, y = 0;
+  for (const [k, deg] of entries) {
+    const w = WIND_WEIGHTS[k] / totalW;
+    const r = (deg * Math.PI) / 180;
+    x += w * Math.cos(r); y += w * Math.sin(r);
+  }
+  if (x === 0 && y === 0) return null;
+  let d = (Math.atan2(y, x) * 180) / Math.PI;
+  if (d < 0) d += 360;
+  return Math.round(d);
+}
 // Circular mean over compass degrees (0-360). Returns null for empty input.
 function circularMeanDeg(degs: number[]): number | null {
   const valid = degs.filter((v) => v != null && Number.isFinite(v));
