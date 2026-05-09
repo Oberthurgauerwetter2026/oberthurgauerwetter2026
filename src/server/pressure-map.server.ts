@@ -303,12 +303,19 @@ function precipStyle(mm: number): { fill: string; opacity: number } | null {
   return { fill: "#4c1d95", opacity: 0.85 };
 }
 
-function buildSvg(grid: Grid, targetUtcIso: string): string {
-  // ── Filled color contours every 2 hPa (soft pressure heat-map) ──
-  const fillThresholds: number[] = [];
-  for (let p = 960; p <= 1050; p += 2) fillThresholds.push(p);
-  const fillCont = d3contours().size([grid.cols, grid.rows]).thresholds(fillThresholds);
-  const fillPolys = fillCont(grid.values);
+function buildSvg(grids: Grids, targetUtcIso: string): string {
+  const { pressure: grid, t850, precip } = grids;
+
+  // ── T850 filled bands every 2.5 °C (warm/cold air masses) ──
+  const t850Thresholds: number[] = [];
+  for (let t = -32; t <= 28; t += 2.5) t850Thresholds.push(t);
+  const t850Cont = d3contours().size([t850.cols, t850.rows]).thresholds(t850Thresholds);
+  const t850Polys = t850Cont(t850.values);
+
+  // ── Precipitation bands ──
+  const precipThresholds = [0.5, 1, 2, 5, 10, 20];
+  const precipCont = d3contours().size([precip.cols, precip.rows]).thresholds(precipThresholds);
+  const precipPolys = precipCont(precip.values);
 
   // ── Line contours every 5 hPa (synoptic standard) ──
   const lineThresholds: number[] = [];
@@ -322,7 +329,7 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     day: "2-digit", month: "2-digit", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   })} UTC`;
-  const subtitle = "Modell DWD ICON-EU · Isobaren je 5 hPa · Farbskala 970–1045 hPa";
+  const subtitle = "DWD ICON-EU · T 850 hPa (°C) · Niederschlag 6 h · Isobaren je 5 hPa";
 
   // Basemap paths
   const oceanPath = geojsonToPath(europeOcean as any);
@@ -342,13 +349,22 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.5" />`);
   }
 
-  // Filled contour bands
-  const fillSvg: string[] = [];
-  for (const poly of fillPolys) {
+  // T850 filled bands
+  const t850Svg: string[] = [];
+  for (const poly of t850Polys) {
     const d = contourToPath(poly.coordinates, true);
     if (!d) continue;
-    const color = pressureColor(poly.value);
-    fillSvg.push(`<path d="${d}" fill="${color}" fill-rule="evenodd" stroke="none" />`);
+    t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
+  }
+
+  // Precipitation overlay
+  const precipSvg: string[] = [];
+  for (const poly of precipPolys) {
+    const style = precipStyle(poly.value);
+    if (!style) continue;
+    const d = contourToPath(poly.coordinates, true);
+    if (!d) continue;
+    precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
 
   // Line contours + labels
@@ -395,18 +411,40 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     );
   }
 
-  // Legend (color bar)
-  const legendItems: string[] = [];
-  const lgX = PAD.left + 12, lgY = IMG_H - 30, lgW = 320, lgH = 10;
-  const segs = 32;
-  for (let i = 0; i < segs; i++) {
-    const p = 970 + (1045 - 970) * (i / (segs - 1));
-    legendItems.push(`<rect x="${(lgX + (lgW / segs) * i).toFixed(1)}" y="${lgY}" width="${(lgW / segs + 0.5).toFixed(1)}" height="${lgH}" fill="${pressureColor(p)}" />`);
+  // ── Legend: T850 (left) + Precipitation (right) ──
+  const lgY = IMG_H - 30, lgH = 10;
+  // T850 bar
+  const t850LgX = PAD.left + 12, t850LgW = 320;
+  const t850Segs = 40;
+  const t850Items: string[] = [];
+  for (let i = 0; i < t850Segs; i++) {
+    const t = -30 + (25 - -30) * (i / (t850Segs - 1));
+    t850Items.push(`<rect x="${(t850LgX + (t850LgW / t850Segs) * i).toFixed(1)}" y="${lgY}" width="${(t850LgW / t850Segs + 0.5).toFixed(1)}" height="${lgH}" fill="${t850Color(t)}" />`);
   }
-  const legendLabels = [970, 990, 1013, 1030, 1045].map((p) => {
-    const x = lgX + ((p - 970) / (1045 - 970)) * lgW;
-    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${p}</text>`;
+  const t850Labels = [-30, -15, 0, 10, 25].map((t) => {
+    const x = t850LgX + ((t - -30) / (25 - -30)) * t850LgW;
+    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${t > 0 ? "+" : ""}${t}</text>`;
   }).join("");
+
+  // Precipitation bar (discrete swatches)
+  const pLgX = IMG_W - PAD.right - 12 - 280, pLgW = 280;
+  const pSwatches = [
+    { v: 0.5, label: "0.5" },
+    { v: 1, label: "1" },
+    { v: 2, label: "2" },
+    { v: 5, label: "5" },
+    { v: 10, label: "10" },
+    { v: 20, label: "20+" },
+  ];
+  const pStep = pLgW / pSwatches.length;
+  const pItems: string[] = [];
+  const pLabels: string[] = [];
+  for (let i = 0; i < pSwatches.length; i++) {
+    const s = precipStyle(pSwatches[i].v + 0.01)!;
+    const x = pLgX + i * pStep;
+    pItems.push(`<rect x="${x.toFixed(1)}" y="${lgY}" width="${(pStep - 1).toFixed(1)}" height="${lgH}" fill="${s.fill}" fill-opacity="${s.opacity}" />`);
+    pLabels.push(`<text x="${(x + pStep / 2).toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${pSwatches[i].label}</text>`);
+  }
 
   const [fx1, fy1] = [PAD.left, PAD.top];
 
@@ -425,9 +463,13 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
     <path d="${oceanPath}" fill="#7fb0d4" stroke="none" />
     <!-- Land -->
     <path d="${landPath}" fill="#e8e0c8" stroke="none" />
-    <!-- Druck-Farbflächen über alles, halbtransparent -->
-    <g opacity="0.55">
-      ${fillSvg.join("\n      ")}
+    <!-- T850 Farbflächen (Warm-/Kaltluftmassen) -->
+    <g opacity="0.62">
+      ${t850Svg.join("\n      ")}
+    </g>
+    <!-- Niederschlag 6h -->
+    <g>
+      ${precipSvg.join("\n      ")}
     </g>
     <!-- Seen -->
     <path d="${lakesPath}" fill="#a8c8e0" stroke="#6b8caa" stroke-width="0.4" />
@@ -443,10 +485,15 @@ function buildSvg(grid: Grid, targetUtcIso: string): string {
 
   <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="#2561a1" stroke-width="1.5" />
 
-  <!-- Legend -->
-  ${legendItems.join("\n  ")}
-  ${legendLabels}
-  <text x="${lgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Luftdruck (hPa)</text>
+  <!-- Legend: T850 -->
+  ${t850Items.join("\n  ")}
+  ${t850Labels}
+  <text x="${t850LgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Temperatur 850 hPa (°C)</text>
+
+  <!-- Legend: Precipitation -->
+  ${pItems.join("\n  ")}
+  ${pLabels.join("\n  ")}
+  <text x="${pLgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Niederschlag 6 h (mm)</text>
 
   <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
 </svg>`;
