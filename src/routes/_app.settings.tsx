@@ -431,8 +431,8 @@ function SettingsPage() {
               onChange={(e) => setForm({ ...form, bias_stations: e.target.value })}
             />
             <p className="text-xs text-muted-foreground">
-              Verfügbar u.a.: GUT (Güttingen), STG (St. Gallen), TAE (Aadorf/Tänikon),
-              SMA (Zürich-Fluntern), KLO (Kloten).
+              Verfügbar u.a.: BIZ (Bischofszell), GUT (Güttingen), STG (St. Gallen),
+              TAE (Aadorf/Tänikon), SMA (Zürich-Fluntern), KLO (Kloten).
             </p>
           </div>
           <div className="space-y-2">
