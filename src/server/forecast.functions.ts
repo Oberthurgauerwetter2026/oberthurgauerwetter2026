@@ -847,6 +847,7 @@ function spread(values: number[]) {
 type ModelKey = "icon_ch1" | "icon_ch2" | "arome" | "arpege" | "ecmwf" | "gfs" | "other";
 type Regime = "convective" | "frontal_west" | "bise_ne" | "stable_high" | "default";
 type VarGroup = "precip" | "temp" | "wind" | "other";
+type Horizon = "h0_12" | "h12_24" | "h24_48" | "h48_plus";
 
 function modelKey(name: string): ModelKey {
   const n = name.toLowerCase();
