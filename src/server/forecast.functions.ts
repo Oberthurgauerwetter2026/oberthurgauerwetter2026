@@ -847,6 +847,7 @@ function spread(values: number[]) {
 type ModelKey = "icon_ch1" | "icon_ch2" | "arome" | "arpege" | "ecmwf" | "gfs" | "other";
 type Regime = "convective" | "frontal_west" | "bise_ne" | "stable_high" | "default";
 type VarGroup = "precip" | "temp" | "wind" | "other";
+type Horizon = "h0_12" | "h12_24" | "h24_48" | "h48_plus";
 
 function modelKey(name: string): ModelKey {
   const n = name.toLowerCase();
@@ -882,12 +883,52 @@ const VAR_MODIFIERS: Record<VarGroup, Partial<Record<ModelKey, number>>> = {
   other:  {},
 };
 
-function regimeWeight(name: string, variable?: string, regime?: Regime): number {
+// Horizont-basierte Gewichte: kurzfristig dominieren regionale, hochaufgelöste Modelle;
+// globale Modelle (ECMWF, GFS) tragen erst ab Tag +1/+2 bei. Gewicht 0 = Modell wird
+// vollständig aus dem Aggregat (inkl. min/max/spread/percentile) ausgeschlossen.
+const HORIZON_WEIGHTS: Record<Horizon, Record<ModelKey, number>> = {
+  h0_12:    { icon_ch1: 1.6, icon_ch2: 1.4, arome: 1.0, arpege: 1.2, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
+  h12_24:   { icon_ch1: 1.5, icon_ch2: 1.3, arome: 0.9, arpege: 1.2, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
+  h24_48:   { icon_ch1: 1.3, icon_ch2: 1.2, arome: 0.8, arpege: 1.2, ecmwf: 0.6, gfs: 0.4, other: 1.0 },
+  h48_plus: { icon_ch1: 1.0, icon_ch2: 1.0, arome: 0.6, arpege: 1.1, ecmwf: 1.0, gfs: 0.7, other: 1.0 },
+};
+
+function combinedWeight(name: string, opts?: { variable?: string; regime?: Regime; horizon?: Horizon }): number {
   const k = modelKey(name);
-  const r = regime ?? "default";
+  const r = opts?.regime ?? "default";
+  const h = opts?.horizon;
   const base = REGIME_WEIGHTS[r][k] ?? 1.0;
-  const mod = VAR_MODIFIERS[varGroup(variable)][k] ?? 1.0;
-  return base * mod;
+  const mod = VAR_MODIFIERS[varGroup(opts?.variable)][k] ?? 1.0;
+  const horiz = h ? (HORIZON_WEIGHTS[h][k] ?? 1.0) : 1.0;
+  return base * mod * horiz;
+}
+
+// Backwards-compatible alias used by older call sites.
+function regimeWeight(name: string, variable?: string, regime?: Regime): number {
+  return combinedWeight(name, { variable, regime });
+}
+
+// Bestimmt den Vorhersage-Horizont eines Tages relativ zu jetzt (Tagesmitte 12:00 UTC als Anker).
+function horizonForDay(weather: any, dayIndex: number): Horizon {
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!dateStr) return "h48_plus";
+  const dayMid = new Date(`${dateStr}T12:00:00Z`).getTime();
+  const diffH = (dayMid - Date.now()) / 3_600_000;
+  if (diffH < 6) return "h0_12";       // heute, Tagesmitte schon nahe/vorbei
+  if (diffH < 18) return "h12_24";     // heute später Tag
+  if (diffH < 42) return "h24_48";     // morgen
+  return "h48_plus";
+}
+
+// Bestimmt den Horizont für eine konkrete Stunde (ISO-String).
+function horizonForHour(hourIso: string): Horizon {
+  const t = new Date(hourIso).getTime();
+  if (!Number.isFinite(t)) return "h48_plus";
+  const diffH = (t - Date.now()) / 3_600_000;
+  if (diffH < 12) return "h0_12";
+  if (diffH < 24) return "h12_24";
+  if (diffH < 48) return "h24_48";
+  return "h48_plus";
 }
 
 // Klassifiziert die Tages-Wetterlage aus bereits vorhandenen Daten.
@@ -942,15 +983,18 @@ function classifyUncertainty(spreadVal: number, scale: "temp" | "precip" | "wind
 
 function aggregate(
   perModel: Record<string, number>,
-  opts?: { variable?: string; regime?: Regime },
+  opts?: { variable?: string; regime?: Regime; horizon?: Horizon },
 ) {
-  const entries = Object.entries(perModel);
-  if (!entries.length) return null;
-  const vals = entries.map(([, v]) => v);
+  const allEntries = Object.entries(perModel);
+  if (!allEntries.length) return null;
+  // Modelle mit horizont-Gewicht 0 vollständig ausschliessen (auch aus min/max/spread).
+  const entries = allEntries.filter(([name]) => combinedWeight(name, opts) > 0);
+  const effEntries = entries.length ? entries : allEntries;
+  const vals = effEntries.map(([, v]) => v);
   let wSum = 0;
   let wTot = 0;
-  for (const [name, v] of entries) {
-    const w = regimeWeight(name, opts?.variable, opts?.regime);
+  for (const [name, v] of effEntries) {
+    const w = combinedWeight(name, opts);
     wSum += v * w;
     wTot += w;
   }
@@ -966,6 +1010,7 @@ function aggregate(
     p50: r1(percentile(sorted, 0.5)),
     p90: r1(percentile(sorted, 0.9)),
     by_model: perModel,
+    n_effective: effEntries.length,
   };
 }
 
@@ -1598,8 +1643,9 @@ function formatDayData(weather: any, dayIndex: number) {
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
   const regime = classifyRegime(weather, dayIndex);
+  const horizon = horizonForDay(weather, dayIndex);
   const agg = (varName: string, perModel: Record<string, number>) =>
-    aggregate(perModel, { variable: varName, regime });
+    aggregate(perModel, { variable: varName, regime, horizon });
 
   const cloudcover = agg("cloudcover_mean", collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
@@ -1613,7 +1659,7 @@ function formatDayData(weather: any, dayIndex: number) {
   if (!cloudcover && sunshine_h && typeof sunshine_h.avg === "number") {
     const ratio = Math.max(0, Math.min(1, sunshine_h.avg / 12));
     const derived = Math.round((1 - ratio) * 100);
-    cloudcoverFinal = { avg: derived, min: derived, max: derived, spread: 0, p10: derived, p50: derived, p90: derived, by_model: { derived } };
+    cloudcoverFinal = { avg: derived, min: derived, max: derived, spread: 0, p10: derived, p50: derived, p90: derived, by_model: { derived }, n_effective: 1 };
     cloudcover_source = "derived_from_sunshine";
   }
 
@@ -1645,6 +1691,7 @@ function formatDayData(weather: any, dayIndex: number) {
     models_used: Array.from(contributing).join(","),
     tier,
     regime,
+    horizon,
     tmax,
     tmin,
     precip,
@@ -1741,13 +1788,22 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
 
   const out = { ...day };
-  if (Object.keys(tminPerModel).length) out.tmin = aggregate(tminPerModel);
-  if (Object.keys(tmaxPerModel).length) out.tmax = aggregate(tmaxPerModel);
-  if (Object.keys(precPerModel).length) out.precip = aggregate(precPerModel);
-  if (Object.keys(probPerModel).length) out.precip_prob = aggregate(probPerModel);
-  if (Object.keys(windPerModel).length) out.wind_max = aggregate(windPerModel);
-  if (Object.keys(cloudPerModel).length) out.cloudcover = aggregate(cloudPerModel);
-  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggregate(sunHPerModel);
+  // Mittlere Stunde des Fensters für Horizont-Bestimmung
+  const midHour = Math.min(23, Math.floor((fromHour + 24) / 2));
+  const horizon = dateStr
+    ? horizonForHour(`${dateStr}T${String(midHour).padStart(2, "0")}:00:00Z`)
+    : (day?.horizon as Horizon | undefined);
+  const regime = day?.regime as Regime | undefined;
+  const aggH = (variable: string, perModel: Record<string, number>) =>
+    aggregate(perModel, { variable, regime, horizon });
+  if (Object.keys(tminPerModel).length) out.tmin = aggH("temperature_2m_min", tminPerModel);
+  if (Object.keys(tmaxPerModel).length) out.tmax = aggH("temperature_2m_max", tmaxPerModel);
+  if (Object.keys(precPerModel).length) out.precip = aggH("precipitation_sum", precPerModel);
+  if (Object.keys(probPerModel).length) out.precip_prob = aggH("precipitation_probability_max", probPerModel);
+  if (Object.keys(windPerModel).length) out.wind_max = aggH("windspeed_10m_max", windPerModel);
+  if (Object.keys(cloudPerModel).length) out.cloudcover = aggH("cloudcover_mean", cloudPerModel);
+  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggH("sunshine_duration", sunHPerModel);
+  if (horizon) out.horizon = horizon;
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
