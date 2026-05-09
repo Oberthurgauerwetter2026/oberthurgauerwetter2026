@@ -2121,19 +2121,19 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
   };
 
   const hourlyTemps = slice.map(({ i }) => hourAvg(tArrs, i)).filter((v): v is number => v != null);
-  const hourlyPrecs = slice.map(({ i }) => hourAvg(pArrs, i) ?? 0);
-  const hourWeightedWind = (i: number): number | null => {
+  const hourWeightedAvg = (arrs: Record<string, number[]>, i: number, weights: Record<string, number>): number | null => {
     const per: Record<string, number> = {};
-    for (const [m, arr] of Object.entries(wArrs)) {
+    for (const [m, arr] of Object.entries(arrs)) {
       const v = arr?.[i];
-      if (v != null && Number.isFinite(v) && m in WIND_WEIGHTS) per[m] = v;
+      if (v != null && Number.isFinite(v) && m in weights) per[m] = v;
     }
-    const w = weightedWindAvg(per);
-    return w ? w.avg : hourAvg(wArrs, i);
+    const w = weightedAvg(per, weights);
+    return w ? w.avg : hourAvg(arrs, i);
   };
-  const hourlyWinds = slice.map(({ i }) => hourWeightedWind(i)).filter((v): v is number => v != null);
-  const hourlyClouds = slice.map(({ i }) => hourAvg(cArrs, i)).filter((v): v is number => v != null);
-  const hourlySuns = slice.map(({ i }) => hourAvg(sArrs, i)).filter((v): v is number => v != null);
+  const hourlyPrecs = slice.map(({ i }) => hourWeightedAvg(pArrs, i, PRECIP_CLOUD_WEIGHTS) ?? 0);
+  const hourlyWinds = slice.map(({ i }) => hourWeightedAvg(wArrs, i, WIND_WEIGHTS)).filter((v): v is number => v != null);
+  const hourlyClouds = slice.map(({ i }) => hourWeightedAvg(cArrs, i, PRECIP_CLOUD_WEIGHTS)).filter((v): v is number => v != null);
+  const hourlySuns = slice.map(({ i }) => hourWeightedAvg(sArrs, i, PRECIP_CLOUD_WEIGHTS)).filter((v): v is number => v != null);
 
   if (!hourlyTemps.length) return null;
 
