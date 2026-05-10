@@ -1881,13 +1881,13 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
+    precip_distribution: dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null,
+    hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null,
     sky_pattern,
     fog_dissipation: fogDiss,
     wind_gusts: assessGusts(weather, dayIndex),
     thunderstorm,
-    humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
+    humidity: assessHumidity(weather, dayIndex, dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
 }
