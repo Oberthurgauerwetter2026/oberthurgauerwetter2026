@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { generatePressureMap } from "@/server/pressure-map.server";
+import { generatePressureMap, OpenMeteoRateLimitError } from "@/server/pressure-map.server";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 // Public cron endpoint — auth via Supabase anon apikey header (provided by pg_cron).
@@ -23,14 +23,18 @@ export const Route = createFileRoute("/api/public/hooks/generate-pressure-map")(
             .neq("id", "00000000-0000-0000-0000-000000000000");
           return Response.json(result);
         } catch (e: any) {
+          const isRateLimit = e instanceof OpenMeteoRateLimitError || /Tageslimit|rate.?limit|429/i.test(e?.message ?? "");
+          const status = isRateLimit
+            ? "Pausiert: Open-Meteo Tageslimit erreicht (auto-retry 00:00 UTC)"
+            : `Fehler (cron): ${e?.message ?? String(e)}`;
           await supabaseAdmin
             .from("app_settings")
             .update({
               pressure_map_last_run: new Date().toISOString(),
-              pressure_map_last_status: `Fehler (cron): ${e?.message ?? String(e)}`,
+              pressure_map_last_status: status,
             })
             .neq("id", "00000000-0000-0000-0000-000000000000");
-          return new Response(`Error: ${e?.message ?? String(e)}`, { status: 500 });
+          return new Response(status, { status: isRateLimit ? 429 : 500 });
         }
       },
     },
