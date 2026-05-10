@@ -39,8 +39,8 @@ function gridToPixel(gx: number, gy: number): [number, number] {
   return project(lon, lat);
 }
 
-type Grid = { values: number[]; cols: number; rows: number };
-type Grids = { pressure: Grid; t850: Grid; precip: Grid };
+export type Grid = { values: number[]; cols: number; rows: number };
+export type Grids = { pressure: Grid; t850: Grid; precip: Grid };
 
 // Custom error to signal Open-Meteo daily limit exhaustion (HTTP 429).
 export class OpenMeteoRateLimitError extends Error {
