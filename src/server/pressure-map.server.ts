@@ -19,8 +19,8 @@ const ROWS = Math.round((N - S) / STEP) + 1; // 28
 
 // Image dimensions
 const IMG_W = 1200;
-const IMG_H = 800;
-const PAD = { top: 60, right: 20, bottom: 40, left: 20 };
+const IMG_H = 840;
+const PAD = { top: 60, right: 20, bottom: 80, left: 20 };
 const PLOT_W = IMG_W - PAD.left - PAD.right;
 const PLOT_H = IMG_H - PAD.top - PAD.bottom;
 
@@ -477,15 +477,15 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
     const color = isH ? "#7f0000" : "#0d47a1";
     extremaSvg.push(
       `<g>
-        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="18" fill="white" fill-opacity="0.85" stroke="${color}" stroke-width="1.5" />
-        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="Georgia,serif" font-size="26" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text>
-        <text x="${x.toFixed(1)}" y="${(y + 28).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text>
+        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="22" fill="white" fill-opacity="0.85" stroke="${color}" stroke-width="1.5" />
+        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="Georgia,serif" font-size="34" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text>
+        <text x="${x.toFixed(1)}" y="${(y + 34).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text>
       </g>`
     );
   }
 
   // ── Legend: T850 (left) + Precipitation (right) ──
-  const lgY = IMG_H - 30, lgH = 10;
+  const lgY = IMG_H - 55, lgH = 10;
   // T850 bar
   const t850LgX = PAD.left + 12, t850LgW = 320;
   const t850Segs = 40;
@@ -535,7 +535,7 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
     <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#a8c8e0" />
     <path d="${oceanPath}" fill="#7fb0d4" stroke="none" />
     <!-- Land -->
-    <path d="${landPath}" fill="#e8e0c8" stroke="none" />
+    <path d="${landPath}" fill="#D3EAC2" stroke="none" />
     <!-- T850 Farbflächen (Warm-/Kaltluftmassen) -->
     <g opacity="0.62">
       ${t850Svg.join("\n      ")}
