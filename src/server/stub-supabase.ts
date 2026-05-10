@@ -1,1 +1,0 @@
-export const supabaseAdmin: any = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }), upsert: async () => ({}), update: () => ({ neq: async () => ({}) }) }), storage: { from: () => ({ upload: async () => ({}) }) } };
