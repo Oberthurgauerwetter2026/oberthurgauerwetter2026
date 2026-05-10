@@ -1,39 +1,30 @@
-## Ziel
-Der "Eingeschränkte Modus" soll exakt dann enden, wenn Open-Meteo seine Tagesquota zurücksetzt — also bei **UTC-Mitternacht**. Aktuell wird der Negativcache stur 1 h fixiert, dadurch bleibt der Modus auch nach dem realen Reset noch bis zu 60 min aktiv und kann je nach Klick-Zeitpunkt mehrfach verlängert werden.
+## Diagnose
 
-## Hintergrund
-- Open-Meteo zählt Calls pro UTC-Tag. Reset = 00:00 UTC (= 02:00 Zürich CEST / 01:00 CET).
-- In `src/server/forecast.functions.ts` (~Zeile 819–831) wird beim 429-Fehler ein Marker `om:ratelimit:<models>` mit fester TTL `Date.now() + 60*60*1000` in `weather_cache` geschrieben.
-- `fetchOpenMeteoOptional` (Zeile 795–808) prüft diesen Marker und überspringt den HTTP-Call, solange `expires_at` in der Zukunft liegt → führt zu der Banner-Meldung in Zeile 2656/2816.
+Der Fix ist im Code vorhanden, aber in der Datenbank liegen noch alte Rate-Limit-Marker von vor dem Fix:
 
-## Änderungen
+- `om:ratelimit:meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd` läuft erst um `10:11 UTC` ab
+- `om:ratelimit:meteoswiss_icon_ch2,arpege_europe` läuft erst um `10:11 UTC` ab
+- `om:ratelimit:ecmwf_ifs025,gfs_global` läuft erst um `10:11 UTC` ab
 
-**1. Neue Helper-Funktion `nextUtcMidnight()`** in `src/server/forecast.functions.ts`
-```ts
-function nextUtcMidnight(): string {
-  const d = new Date();
-  d.setUTCHours(24, 0, 0, 0); // = 00:00 UTC am Folgetag
-  return d.toISOString();
-}
-```
+Darum überspringt die App Open-Meteo weiterhin und erzeugt nur den eingeschränkten MOSMIX-Modus.
 
-**2. TTL des Rate-Limit-Markers anpassen** (Zeile ~822)
-```ts
-// vorher: const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-const expiresAt = nextUtcMidnight();
-```
-→ Marker läuft punktgenau zum Quota-Reset ab, nie länger, nie kürzer.
+## Plan
 
-**3. Sicherheitsnetz: Sanity-Cap**
-Falls `nextUtcMidnight()` durch Server-Clock-Drift mehr als 24 h in der Zukunft läge, auf `Date.now() + 24*60*60*1000` deckeln. (defensiv, einfacher `Math.min`).
+1. **Alte Rate-Limit-Marker löschen**
+   - Entferne einmalig alle `weather_cache`-Einträge mit `cache_key like 'om:ratelimit:%'`.
+   - Danach versucht die nächste Prognose Open-Meteo sofort wieder.
 
-**4. Log-Zeile** in `fetchOpenMeteoOptional` minimal anpassen, sodass im Log "rate-limit cache active until <UTC time>" klar als UTC erkennbar ist (kein funktionaler Change).
+2. **Robustheit im Code erhöhen**
+   - Passe `fetchOpenMeteoOptional` so an, dass veraltete 1-Stunden-Marker nicht mehr als „UTC-Reset-Marker“ behandelt werden.
+   - Wenn ein bestehender Rate-Limit-Marker nicht auf `00:00:00.000Z` endet, wird er ignoriert bzw. überschrieben.
+   - Neue 429-Marker laufen weiterhin sauber bis zur nächsten UTC-Mitternacht.
 
-## Nicht geändert
-- `getOrSetCache` / `nextMidnightZurich` für mid/long-Tier bleibt wie ist (positiver Cache an Zürich-Mitternacht ist korrekt, da nutzerseitig).
-- Frontend-Banner-Texte bleiben.
-- Keine UI-Änderung, kein manueller Reset-Button (gemäss Auswahl).
+3. **Validierung**
+   - Prüfe danach read-only, dass keine aktiven Altmarker mehr existieren.
+   - Eine neue Prognose sollte dann wieder Open-Meteo-Daten für Mittel-/Langfrist nutzen, sofern Open-Meteo nicht wirklich erneut 429 zurückgibt.
 
-## Verifikation
-- `weather_cache`-Eintrag `om:ratelimit:*` nach Auslösen prüfen → `expires_at` muss `T00:00:00.000Z` zeigen.
-- Nach UTC-Mitternacht erneuter Forecast-Aufruf darf wieder Open-Meteo treffen (Logs: kein "skipping … rate-limit cache active").
+## Technische Details
+
+- Datenänderung: nur `weather_cache`, nur `om:ratelimit:%` Marker.
+- Kein Schemawechsel, keine UI-Änderung.
+- Der bestehende UTC-Mitternacht-Fix bleibt erhalten; zusätzlich wird die Migration von alten Cache-Einträgen abgefedert.

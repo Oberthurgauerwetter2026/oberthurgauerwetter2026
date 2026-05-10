@@ -1,0 +1,1 @@
+DELETE FROM public.weather_cache WHERE cache_key LIKE 'om:ratelimit:%';
