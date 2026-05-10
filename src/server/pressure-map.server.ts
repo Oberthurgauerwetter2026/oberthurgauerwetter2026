@@ -477,9 +477,9 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
     const color = isH ? "#7f0000" : "#0d47a1";
     extremaSvg.push(
       `<g>
-        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="18" fill="white" fill-opacity="0.85" stroke="${color}" stroke-width="1.5" />
-        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="Georgia,serif" font-size="26" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text>
-        <text x="${x.toFixed(1)}" y="${(y + 28).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text>
+        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="22" fill="white" fill-opacity="0.85" stroke="${color}" stroke-width="1.5" />
+        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="Georgia,serif" font-size="34" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text>
+        <text x="${x.toFixed(1)}" y="${(y + 34).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text>
       </g>`
     );
   }
