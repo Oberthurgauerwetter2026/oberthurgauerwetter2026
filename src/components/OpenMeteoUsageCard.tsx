@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { getOpenMeteoUsage } from "@/lib/admin-stats.functions";
+import { useAuth } from "@/hooks/use-auth";
 import { AlertTriangle, CheckCircle2, Clock } from "lucide-react";
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -22,10 +23,15 @@ function formatTime(iso: string | null) {
 }
 
 export function OpenMeteoUsageCard() {
+  const { session } = useAuth();
   const { data, isLoading } = useQuery({
     queryKey: ["openmeteo-usage"],
-    queryFn: () => getOpenMeteoUsage(),
+    queryFn: () =>
+      getOpenMeteoUsage({
+        headers: { Authorization: `Bearer ${session!.access_token}` },
+      } as any),
     refetchInterval: 30_000,
+    enabled: !!session,
   });
 
   if (isLoading || !data) {
