@@ -812,8 +812,15 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
       .eq("cache_key", negKey)
       .maybeSingle();
     if (data?.expires_at && data.expires_at > new Date().toISOString()) {
-      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at} (UTC, = Open-Meteo quota reset)`);
-      return null;
+      // Ignoriere Alt-Marker, deren TTL nicht auf UTC-Mitternacht gesetzt wurde
+      // (Pre-Fix: fixe 1h-TTL). Nur Marker mit "T..00:00:00" UTC sind gültig.
+      const isUtcMidnight = /T00:00:00(\.0+)?Z$/.test(data.expires_at);
+      if (!isUtcMidnight) {
+        console.warn(`[open-meteo] ignoring stale rate-limit marker for ${models} (expires_at=${data.expires_at} is not UTC midnight)`);
+      } else {
+        console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at} (UTC, = Open-Meteo quota reset)`);
+        return null;
+      }
     }
   } catch (e) {
     // Cache lookup failed — proceed with the call.
