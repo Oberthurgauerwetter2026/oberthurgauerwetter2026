@@ -786,10 +786,19 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
   );
 }
 
-// Negative-cache marker for rate-limited model sets. Stored in weather_cache with 1h TTL.
-// Avoids hammering Open-Meteo when the daily quota is exhausted.
+// Negative-cache marker for rate-limited model sets. Stored in weather_cache until next UTC midnight
+// (= Open-Meteo daily quota reset). Avoids hammering Open-Meteo when the daily quota is exhausted.
 function rateLimitCacheKey(models: string) {
   return `om:ratelimit:${normalizeModels(models)}`;
+}
+
+// Open-Meteo zählt Calls pro UTC-Tag. Reset = 00:00 UTC.
+function nextUtcMidnightIso(): string {
+  const d = new Date();
+  d.setUTCHours(24, 0, 0, 0);
+  // Sanity-Cap: nie mehr als 24h voraus (Schutz gegen Clock-Drift).
+  const capped = Math.min(d.getTime(), Date.now() + 24 * 60 * 60 * 1000);
+  return new Date(capped).toISOString();
 }
 
 async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, includeHourly: boolean) {
@@ -803,7 +812,7 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
       .eq("cache_key", negKey)
       .maybeSingle();
     if (data?.expires_at && data.expires_at > new Date().toISOString()) {
-      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at}`);
+      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at} (UTC, = Open-Meteo quota reset)`);
       return null;
     }
   } catch (e) {
@@ -819,7 +828,7 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
     if (e instanceof OpenMeteoError && e.code === "RATE_LIMIT") {
       try {
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        const expiresAt = nextUtcMidnightIso();
         await supabaseAdmin.from("weather_cache").upsert({
           cache_key: rateLimitCacheKey(models),
           payload: { rate_limited: true, models },
