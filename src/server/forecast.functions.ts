@@ -1836,6 +1836,9 @@ function formatDayData(weather: any, dayIndex: number) {
   const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
   const thunderstorm = assessThunderstormRisk(weather, dayIndex, weathercode?.by_model);
 
+  // Tagesgang (Niederschlagsverteilung) für Tag 0–4 vorab berechnen, damit
+  // die Sky-Klassifikation den intraday-Verlauf berücksichtigen kann.
+  const precipDist = dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null;
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
   // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
   const skyClass = classifySky({
@@ -1844,6 +1847,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     precip_prob,
     thunderstorm,
+    precip_distribution: precipDist,
   });
   // Nebel-Auflösung als Sonderfall für Tag 0/1 — überschreibt Klassifikation
   const fogDiss = dayIndex <= 1
