@@ -9,6 +9,7 @@ import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-c
 import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type NowcastResult } from "./nowcast.server";
 import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
 import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
+import { fetchOpenMeteo as fetchOMTracked } from "./openmeteo-quota.server";
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
@@ -448,7 +449,7 @@ async function fetchElevationGrid(lat: number, lon: number, radiusKm: number): P
   url.searchParams.set("latitude", lats.join(","));
   url.searchParams.set("longitude", lons.join(","));
   try {
-    const res = await fetch(url.toString());
+    const res = await fetchOMTracked(url, "elevation");
     if (!res.ok) {
       console.warn(`Elevation API ${res.status}`);
       return null;
@@ -619,7 +620,7 @@ async function fetchStationModelHistory(lat: number, lon: number): Promise<Recor
   url.searchParams.set("daily", "temperature_2m_min,temperature_2m_max");
   // Verwende Best-Match (Default), reicht für Bias-Berechnung
   try {
-    const res = await fetch(url.toString());
+    const res = await fetchOMTracked(url, "historical_bias");
     if (!res.ok) return {};
     const data = await res.json();
     const out: Record<string, { tmin: number | null; tmax: number | null }> = {};
@@ -760,7 +761,7 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
   url.searchParams.set("models", normalizedModels);
   let lastError = "";
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(url.toString());
+    const res = await fetchOMTracked(url, "forecast");
     if (res.ok) return await res.json();
     lastError = await res.text().catch(() => "");
     // 429 with "limit exceeded" message = daily quota → don't retry, mark RATE_LIMIT
