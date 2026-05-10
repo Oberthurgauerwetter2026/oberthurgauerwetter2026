@@ -812,7 +812,7 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
       .eq("cache_key", negKey)
       .maybeSingle();
     if (data?.expires_at && data.expires_at > new Date().toISOString()) {
-      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at}`);
+      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at} (UTC, = Open-Meteo quota reset)`);
       return null;
     }
   } catch (e) {
