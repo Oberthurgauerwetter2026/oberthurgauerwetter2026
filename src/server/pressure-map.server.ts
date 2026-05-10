@@ -39,8 +39,8 @@ function gridToPixel(gx: number, gy: number): [number, number] {
   return project(lon, lat);
 }
 
-type Grid = { values: number[]; cols: number; rows: number };
-type Grids = { pressure: Grid; t850: Grid; precip: Grid };
+export type Grid = { values: number[]; cols: number; rows: number };
+export type Grids = { pressure: Grid; t850: Grid; precip: Grid };
 
 // Custom error to signal Open-Meteo daily limit exhaustion (HTTP 429).
 export class OpenMeteoRateLimitError extends Error {
@@ -376,7 +376,7 @@ function precipStyle(mm: number): { fill: string; opacity: number } | null {
   return { fill: "#4c1d95", opacity: 0.85 };
 }
 
-function buildSvg(grids: Grids, targetUtcIso: string): string {
+export function buildSvg(grids: Grids, targetUtcIso: string): string {
   const { pressure: grid, t850, precip } = grids;
 
   // ── T850 filled bands every 2.5 °C (warm/cold air masses) ──
