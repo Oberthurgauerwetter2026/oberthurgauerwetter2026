@@ -582,6 +582,9 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
   const lineCont = d3contours().size([grid.cols, grid.rows]).thresholds(lineThresholds);
   const linePolys = lineCont(grid.values);
 
+  // ── Fronts (from T850 gradient) ──
+  const frontSvg = buildFronts(t850);
+
   const date = new Date(targetUtcIso);
   const title = `Bodendruck Europa — ${date.toLocaleString("de-CH", {
     timeZone: "UTC",
