@@ -786,10 +786,19 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
   );
 }
 
-// Negative-cache marker for rate-limited model sets. Stored in weather_cache with 1h TTL.
-// Avoids hammering Open-Meteo when the daily quota is exhausted.
+// Negative-cache marker for rate-limited model sets. Stored in weather_cache until next UTC midnight
+// (= Open-Meteo daily quota reset). Avoids hammering Open-Meteo when the daily quota is exhausted.
 function rateLimitCacheKey(models: string) {
   return `om:ratelimit:${normalizeModels(models)}`;
+}
+
+// Open-Meteo zählt Calls pro UTC-Tag. Reset = 00:00 UTC.
+function nextUtcMidnightIso(): string {
+  const d = new Date();
+  d.setUTCHours(24, 0, 0, 0);
+  // Sanity-Cap: nie mehr als 24h voraus (Schutz gegen Clock-Drift).
+  const capped = Math.min(d.getTime(), Date.now() + 24 * 60 * 60 * 1000);
+  return new Date(capped).toISOString();
 }
 
 async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, includeHourly: boolean) {
