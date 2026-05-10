@@ -485,7 +485,7 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
   }
 
   // ── Legend: T850 (left) + Precipitation (right) ──
-  const lgY = IMG_H - 30, lgH = 10;
+  const lgY = IMG_H - 55, lgH = 10;
   // T850 bar
   const t850LgX = PAD.left + 12, t850LgW = 320;
   const t850Segs = 40;
