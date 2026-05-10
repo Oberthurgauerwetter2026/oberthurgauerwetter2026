@@ -535,7 +535,7 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
     <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#a8c8e0" />
     <path d="${oceanPath}" fill="#7fb0d4" stroke="none" />
     <!-- Land -->
-    <path d="${landPath}" fill="#e8e0c8" stroke="none" />
+    <path d="${landPath}" fill="#D3EAC2" stroke="none" />
     <!-- T850 Farbflächen (Warm-/Kaltluftmassen) -->
     <g opacity="0.62">
       ${t850Svg.join("\n      ")}
