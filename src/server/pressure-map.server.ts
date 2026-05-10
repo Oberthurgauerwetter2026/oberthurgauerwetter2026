@@ -376,7 +376,7 @@ function precipStyle(mm: number): { fill: string; opacity: number } | null {
   return { fill: "#4c1d95", opacity: 0.85 };
 }
 
-function buildSvg(grids: Grids, targetUtcIso: string): string {
+export function buildSvg(grids: Grids, targetUtcIso: string): string {
   const { pressure: grid, t850, precip } = grids;
 
   // ── T850 filled bands every 2.5 °C (warm/cold air masses) ──
