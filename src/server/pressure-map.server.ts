@@ -742,6 +742,8 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
     <!-- Isobaren -->
     ${contourSvg.join("\n    ")}
     ${labelSvg.join("\n    ")}
+    <!-- Fronten -->
+    ${frontSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
   </g>
 
