@@ -41,6 +41,52 @@ function gridToPixel(gx: number, gy: number): [number, number] {
 type Grid = { values: number[]; cols: number; rows: number };
 type Grids = { pressure: Grid; t850: Grid; precip: Grid };
 
+// Custom error to signal Open-Meteo daily limit exhaustion (HTTP 429).
+export class OpenMeteoRateLimitError extends Error {
+  constructor(message = "Open-Meteo Tageslimit erreicht") {
+    super(message);
+    this.name = "OpenMeteoRateLimitError";
+  }
+}
+
+const RATELIMIT_CACHE_KEY = "om:ratelimit:pressure-map";
+
+function nextUtcMidnightIso(now = new Date()): string {
+  const d = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0
+  ));
+  return d.toISOString();
+}
+
+async function isRateLimited(): Promise<boolean> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("weather_cache")
+      .select("expires_at")
+      .eq("cache_key", RATELIMIT_CACHE_KEY)
+      .maybeSingle();
+    if (!data?.expires_at) return false;
+    return new Date(data.expires_at).getTime() > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+async function setRateLimited(): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("weather_cache")
+      .upsert({
+        cache_key: RATELIMIT_CACHE_KEY,
+        payload: { reason: "Open-Meteo daily limit exceeded" },
+        expires_at: nextUtcMidnightIso(),
+        fetched_at: new Date().toISOString(),
+      }, { onConflict: "cache_key" });
+  } catch (e) {
+    console.warn("Could not set ratelimit marker:", e);
+  }
+}
+
 async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   const lats: number[] = [];
   const lons: number[] = [];
@@ -56,8 +102,13 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   const t850: number[] = new Array(lats.length).fill(NaN);
   const precip: number[] = new Array(lats.length).fill(NaN);
 
+  let consecutive429 = 0;
+  let total429 = 0;
+  let attempted = 0;
+
   for (let i = 0; i < lats.length; i += BATCH) {
     if (i > 0) await new Promise((r) => setTimeout(r, 250));
+    attempted++;
     const la = lats.slice(i, i + BATCH).join(",");
     const lo = lons.slice(i, i + BATCH).join(",");
     const url = new URL("https://api.open-meteo.com/v1/forecast");
@@ -71,11 +122,25 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     try {
       const res = await fetch(url);
       if (!res.ok) {
+        if (res.status === 429) {
+          consecutive429++;
+          total429++;
+          // Early abort: 3 consecutive 429s → daily limit is exhausted.
+          if (consecutive429 >= 3) {
+            console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive 429s (batch ${i})`);
+            await setRateLimited();
+            throw new OpenMeteoRateLimitError();
+          }
+        } else {
+          consecutive429 = 0;
+        }
         console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${await res.text()}`);
         continue;
       }
+      consecutive429 = 0;
       json = await res.json();
     } catch (err) {
+      if (err instanceof OpenMeteoRateLimitError) throw err;
       console.warn(`Open-Meteo batch ${i} threw:`, err);
       continue;
     }
@@ -103,6 +168,13 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
       }
     }
   }
+
+  // If majority of batches were 429 (but not 3 in a row), still treat as ratelimit.
+  if (total429 > 0 && total429 >= attempted / 2) {
+    await setRateLimited();
+    throw new OpenMeteoRateLimitError();
+  }
+
   return {
     pressure: { values: pressure, cols: COLS, rows: ROWS },
     t850: { values: t850, cols: COLS, rows: ROWS },
