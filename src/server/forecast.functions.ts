@@ -2439,6 +2439,12 @@ GEWITTER-PFLICHT: Wenn "thunderstorm.class" eines von "isolated", "scattered", "
 
 WENN "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: morgens Nebel-/Hochnebelfelder im Flachland (gerne mit "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), ab spätem Vormittag Auflösung, am Nachmittag verbreitet sonnig. Tagesmittel von "sunshine_h"/"cloudcover" dürfen in diesem Fall NICHT für eine pauschale "stark bewölkt"-Aussage genutzt werden — der Tagesgang aus dem Stundenprofil hat Vorrang.
 
+TAGESGANG (Pflicht): Wenn "precip_distribution" gesetzt ist, MUSST du die zeitliche Verteilung der Niederschläge im Wetterverlauf-Absatz abbilden. Pauschale 24-h-Aussagen wie "ganztags Schauer" sind verboten, wenn die Blöcke "blocks.morning/afternoon/evening" deutlich unterschiedliche mm-Summen zeigen (Faktor ≥ 2). Pflicht-Patterns:
+- "frueh_regen_dann_sonne" → "Anfangs noch Regen oder Schauer, danach Auflockerung und am Nachmittag zunehmend freundlich/sonnige Phasen."
+- "spaet_regen" → "Tagsüber meist trocken mit Aufhellungen, gegen Abend Regen oder Schauer."
+- "nachmittag_konvektiv" → "Vormittags freundlich, im Tagesverlauf zunehmende Quellbewölkung und am Nachmittag einzelne Schauer."
+Nutze die Blocknamen "Vormittag", "Nachmittag", "Abend" — KEINE exakten Uhrzeiten.
+
 Bei weathercode 45 oder 48 bei der MEHRHEIT der Modelle (in "weathercode.by_model"): Du MUSST "Nebel" oder "Hochnebel" verwenden. Die Begriffe "stark bewölkt", "bedeckt", "trübe" oder "grau in grau" sind in diesem Fall ABSOLUT VERBOTEN — auch wenn sunshine_h niedrig ist.
 
 Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwetterwolken", "vorüberziehende Wolkenfelder", "leichte Bewölkung" usw. ABSOLUT VERBOTEN.
