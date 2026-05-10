@@ -828,7 +828,7 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
     if (e instanceof OpenMeteoError && e.code === "RATE_LIMIT") {
       try {
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        const expiresAt = nextUtcMidnightIso();
         await supabaseAdmin.from("weather_cache").upsert({
           cache_key: rateLimitCacheKey(models),
           payload: { rate_limited: true, models },
