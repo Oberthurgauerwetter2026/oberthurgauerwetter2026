@@ -376,192 +376,6 @@ function precipStyle(mm: number): { fill: string; opacity: number } | null {
   return { fill: "#4c1d95", opacity: 0.85 };
 }
 
-// ── Front detection from T850 gradient ──
-type GradField = { dx: number[]; dy: number[]; mag: number[]; cols: number; rows: number };
-
-function computeGradient(g: Grid): GradField {
-  const dx = new Array(g.values.length).fill(0);
-  const dy = new Array(g.values.length).fill(0);
-  const mag = new Array(g.values.length).fill(0);
-  for (let r = 0; r < g.rows; r++) {
-    for (let c = 0; c < g.cols; c++) {
-      const i = r * g.cols + c;
-      const cE = Math.min(c + 1, g.cols - 1);
-      const cW = Math.max(c - 1, 0);
-      const rN = Math.max(r - 1, 0);
-      const rS = Math.min(r + 1, g.rows - 1);
-      // Gradient pointing toward warmer air (east/north positive)
-      const gx = (g.values[r * g.cols + cE] - g.values[r * g.cols + cW]) / 2;
-      const gy = (g.values[rN * g.cols + c] - g.values[rS * g.cols + c]) / 2;
-      dx[i] = gx;
-      dy[i] = gy;
-      mag[i] = Math.hypot(gx, gy);
-    }
-  }
-  return { dx, dy, mag, cols: g.cols, rows: g.rows };
-}
-
-// Sample gradient at a fractional grid coordinate (gx in [0..cols], gy in [0..rows])
-function sampleGrad(field: GradField, gx: number, gy: number): { dx: number; dy: number } {
-  const c = Math.max(0, Math.min(field.cols - 1, Math.round(gx)));
-  const r = Math.max(0, Math.min(field.rows - 1, Math.round(gy)));
-  const i = r * field.cols + c;
-  return { dx: field.dx[i], dy: field.dy[i] };
-}
-
-// Build smoothed pixel polyline from a contour ring (grid coords)
-function ringToSmoothedPixels(ring: number[][]): [number, number][] {
-  let pts: [number, number][] = ring.map(([gx, gy]) => gridToPixel(gx, gy));
-  if (pts.length < 4) return pts;
-  const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
-  const ringPts = closed ? pts.slice(0, -1) : pts;
-  const smoothed = chaikin(ringPts, 2, closed);
-  return closed ? [...smoothed, smoothed[0]] : smoothed;
-}
-
-function pixelsToPath(pts: [number, number][]): string {
-  if (pts.length < 2) return "";
-  const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
-  const n = closed ? pts.length - 1 : pts.length;
-  const get = (i: number): [number, number] => {
-    if (closed) return pts[((i % n) + n) % n];
-    return pts[Math.max(0, Math.min(pts.length - 1, i))];
-  };
-  let d = "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
-  const limit = closed ? n : pts.length - 1;
-  for (let i = 0; i < limit; i++) {
-    const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2);
-    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
-    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
-    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
-    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
-    d += "C" + c1x.toFixed(1) + "," + c1y.toFixed(1)
-      + " " + c2x.toFixed(1) + "," + c2y.toFixed(1)
-      + " " + p2[0].toFixed(1) + "," + p2[1].toFixed(1);
-  }
-  if (closed) d += "Z";
-  return d;
-}
-
-// Place markers (triangles or semicircles) along a polyline at fixed pixel spacing.
-// `side` = +1 places markers to the LEFT of travel direction, -1 to the RIGHT.
-function markersAlongPath(
-  pts: [number, number][],
-  spacing: number,
-  size: number,
-  type: "cold" | "warm",
-  color: string,
-  side: number
-): string {
-  if (pts.length < 2) return "";
-  // Compute cumulative length
-  const seg: { len: number; ax: number; ay: number; bx: number; by: number }[] = [];
-  let total = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
-    const len = Math.hypot(bx - ax, by - ay);
-    seg.push({ len, ax, ay, bx, by });
-    total += len;
-  }
-  if (total < spacing) return "";
-  const out: string[] = [];
-  let nextAt = spacing / 2;
-  let acc = 0;
-  for (const s of seg) {
-    while (acc + s.len >= nextAt) {
-      const t = (nextAt - acc) / s.len;
-      const x = s.ax + (s.bx - s.ax) * t;
-      const y = s.ay + (s.by - s.ay) * t;
-      // Tangent
-      const tx = (s.bx - s.ax) / s.len;
-      const ty = (s.by - s.ay) / s.len;
-      // Normal pointing to chosen side (left = (-ty, tx); right = (ty, -tx))
-      const nx = side > 0 ? -ty : ty;
-      const ny = side > 0 ? tx : -tx;
-      if (type === "cold") {
-        // Triangle: base on the line, apex on the side
-        const bx1 = x - tx * size * 0.5;
-        const by1 = y - ty * size * 0.5;
-        const bx2 = x + tx * size * 0.5;
-        const by2 = y + ty * size * 0.5;
-        const apx = x + nx * size * 0.9;
-        const apy = y + ny * size * 0.9;
-        out.push(`<polygon points="${bx1.toFixed(1)},${by1.toFixed(1)} ${bx2.toFixed(1)},${by2.toFixed(1)} ${apx.toFixed(1)},${apy.toFixed(1)}" fill="${color}" stroke="${color}" stroke-width="0.5" stroke-linejoin="round" />`);
-      } else {
-        // Semicircle bump on the side
-        const r = size * 0.55;
-        // Endpoints of the diameter on the line
-        const sxA = x - tx * r;
-        const syA = y - ty * r;
-        const sxB = x + tx * r;
-        const syB = y + ty * r;
-        const sweep = side > 0 ? 0 : 1;
-        out.push(`<path d="M${sxA.toFixed(1)},${syA.toFixed(1)} A${r.toFixed(1)},${r.toFixed(1)} 0 0 ${sweep} ${sxB.toFixed(1)},${syB.toFixed(1)}" fill="${color}" stroke="${color}" stroke-width="0.5" stroke-linejoin="round" />`);
-      }
-      nextAt += spacing;
-    }
-    acc += s.len;
-  }
-  return out.join("");
-}
-
-// Build front overlays (returns SVG snippets array)
-function buildFronts(t850: Grid): string[] {
-  const grad = computeGradient(t850);
-  // Threshold on |∇T| in °C per grid cell. ~1.5°C per 1.5° (~165km) is a moderate baroclinic zone.
-  const THRESH = 1.6;
-  const cont = d3contours().size([t850.cols, t850.rows]).thresholds([THRESH]);
-  const polys = cont(grad.mag);
-  const out: string[] = [];
-  for (const poly of polys) {
-    for (const ringGroup of poly.coordinates) {
-      for (const ring of ringGroup) {
-        if (ring.length < 8) continue;
-        // Compute average gradient direction at sampled points on the ring.
-        let sgx = 0, sgy = 0;
-        const sampleN = Math.min(ring.length, 24);
-        for (let i = 0; i < sampleN; i++) {
-          const [gx, gy] = ring[Math.floor((i / sampleN) * ring.length)];
-          const g = sampleGrad(grad, gx, gy);
-          sgx += g.dx;
-          sgy += g.dy;
-        }
-        // Gradient points from cold → warm (in grid coords: +dx east, +dy in temperature-grid sense).
-        // In computeGradient we used +y = north. Heuristic:
-        // - If average warm direction is roughly to the south (sgy < 0): cold air mass to the north pushing south → COLD FRONT.
-        // - Else: warm air pushing north → WARM FRONT.
-        const isCold = sgy < 0;
-        const color = isCold ? "#1d4ed8" : "#dc2626";
-        const pixels = ringToSmoothedPixels(ring);
-        const path = pixelsToPath(pixels);
-        if (!path) continue;
-        // Line itself
-        out.push(`<path d="${path}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" />`);
-        // Markers — place on the side of the warm air (i.e., direction of gradient).
-        // Ring orientation in d3-contour: outer rings are CCW, so "left of travel" = inside.
-        // We approximate: pick side that, on average, points along the gradient.
-        // Compute first segment normal (left side) and dot with gradient at start:
-        let side = 1;
-        if (pixels.length > 2) {
-          const [ax, ay] = pixels[0];
-          const [bx, by] = pixels[1];
-          const tx = bx - ax, ty = by - ay;
-          const len = Math.hypot(tx, ty) || 1;
-          const ntx = tx / len, nty = ty / len;
-          const leftNx = -nty, leftNy = ntx; // pixel-space (y down)
-          // gradient in pixel space: +dx east (right), but +dy north (UP), so pixel-y = -dy
-          const gxAvg = sgx / sampleN;
-          const gyAvgPx = -(sgy / sampleN);
-          const dot = leftNx * gxAvg + leftNy * gyAvgPx;
-          side = dot >= 0 ? 1 : -1;
-        }
-        out.push(markersAlongPath(pixels, 32, 9, isCold ? "cold" : "warm", color, side));
-      }
-    }
-  }
-  return out;
-}
-
 function buildSvg(grids: Grids, targetUtcIso: string): string {
   const { pressure: grid, t850, precip } = grids;
 
@@ -581,9 +395,6 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
   for (let p = 960; p <= 1050; p += 5) lineThresholds.push(p);
   const lineCont = d3contours().size([grid.cols, grid.rows]).thresholds(lineThresholds);
   const linePolys = lineCont(grid.values);
-
-  // ── Fronts (from T850 gradient) ──
-  const frontSvg = buildFronts(t850);
 
   const date = new Date(targetUtcIso);
   const title = `Bodendruck Europa — ${date.toLocaleString("de-CH", {
@@ -724,7 +535,7 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
     <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#a8c8e0" />
     <path d="${oceanPath}" fill="#7fb0d4" stroke="none" />
     <!-- Land -->
-    <path d="${landPath}" fill="#D3EAC2" stroke="none" />
+    <path d="${landPath}" fill="#e8e0c8" stroke="none" />
     <!-- T850 Farbflächen (Warm-/Kaltluftmassen) -->
     <g opacity="0.62">
       ${t850Svg.join("\n      ")}
@@ -742,8 +553,6 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
     <!-- Isobaren -->
     ${contourSvg.join("\n    ")}
     ${labelSvg.join("\n    ")}
-    <!-- Fronten -->
-    ${frontSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
   </g>
 
@@ -758,18 +567,6 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
   ${pItems.join("\n  ")}
   ${pLabels.join("\n  ")}
   <text x="${pLgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Niederschlag 6 h (mm)</text>
-
-  <!-- Legend: Fronts -->
-  <g transform="translate(${(t850LgX + 340).toFixed(1)}, ${lgY - 2})">
-    <line x1="0" y1="6" x2="40" y2="6" stroke="#1d4ed8" stroke-width="2.2" />
-    <polygon points="8,6 16,6 12,-1" fill="#1d4ed8" />
-    <polygon points="22,6 30,6 26,-1" fill="#1d4ed8" />
-    <text x="46" y="9" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#ffffff">Kaltfront</text>
-    <line x1="100" y1="6" x2="140" y2="6" stroke="#dc2626" stroke-width="2.2" />
-    <path d="M108,6 A4,4 0 0 1 116,6" fill="#dc2626" stroke="#dc2626" stroke-width="0.5" />
-    <path d="M122,6 A4,4 0 0 1 130,6" fill="#dc2626" stroke="#dc2626" stroke-width="0.5" />
-    <text x="146" y="9" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#ffffff">Warmfront</text>
-  </g>
 
   <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
 </svg>`;
