@@ -759,6 +759,18 @@ function buildSvg(grids: Grids, targetUtcIso: string): string {
   ${pLabels.join("\n  ")}
   <text x="${pLgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Niederschlag 6 h (mm)</text>
 
+  <!-- Legend: Fronts -->
+  <g transform="translate(${(t850LgX + 340).toFixed(1)}, ${lgY - 2})">
+    <line x1="0" y1="6" x2="40" y2="6" stroke="#1d4ed8" stroke-width="2.2" />
+    <polygon points="8,6 16,6 12,-1" fill="#1d4ed8" />
+    <polygon points="22,6 30,6 26,-1" fill="#1d4ed8" />
+    <text x="46" y="9" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#ffffff">Kaltfront</text>
+    <line x1="100" y1="6" x2="140" y2="6" stroke="#dc2626" stroke-width="2.2" />
+    <path d="M108,6 A4,4 0 0 1 116,6" fill="#dc2626" stroke="#dc2626" stroke-width="0.5" />
+    <path d="M122,6 A4,4 0 0 1 130,6" fill="#dc2626" stroke="#dc2626" stroke-width="0.5" />
+    <text x="146" y="9" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#ffffff">Warmfront</text>
+  </g>
+
   <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
 </svg>`;
 }
