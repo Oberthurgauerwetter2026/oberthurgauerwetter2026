@@ -1,21 +1,46 @@
-# Testbild mit synthetischen Werten
+# Tag 2 – Tagesverlauf von Bewölkung und Niederschlag berücksichtigen
 
-Da Open-Meteo bis 00:00 UTC gesperrt ist und keine echten Gitterwerte vorliegen, rendere ich ein **Demo-Bild mit synthetischen, aber realistisch wirkenden Druck-/T850-/Niederschlag-Feldern** (1 Hoch über Mitteleuropa, 1 Tief über dem Nordatlantik), damit die Styling-Änderungen geprüft werden können.
+## Befund
 
-## Vorgehen
+`weather.hourly` enthält Stundendaten der CH-Modelle (ICON-CH2 reicht ~5 Tage), wäre also für Tag 2 vorhanden. **Aber:** in `formatDayData` (Z. 1884–1885) sind `precip_distribution` und `hourly_profile` hart auf `dayIndex <= 1` begrenzt. Für Tag 2 ist beides `null` → die KI hat keinerlei Tagesgang-Information und produziert eine pauschale „stark bewölkt mit Schauern"-Aussage über 24 h.
 
-1. Kleines Node-Skript `/tmp/render-pressure-test.ts` schreiben, das `buildSvg` aus `src/server/pressure-map.server.ts` importiert. Dafür `buildSvg` und Typ `Grids` temporär exportieren (rein additiv, kein Verhaltens­wechsel).
-2. Synthetische Grids erzeugen:
-   - Druck (MSL): Basis 1013 hPa + Gauss-„Hoch" 1030 hPa über Alpen + Gauss-„Tief" 985 hPa über Island.
-   - T850: linearer Süd-Nord-Gradient von +15 °C bis −20 °C, leicht moduliert.
-   - Niederschlag: schmales Frontband entlang Tiefachse, Spitze 12 mm/6 h.
-3. SVG generieren, nach `/mnt/documents/europe-pressure-demo.svg` schreiben und als Artifact ausliefern.
-4. Visuell prüfen: Landfarbe `#D3EAC2`, H/T grösser, Niederschlag-Legende und Quellenangabe ohne Überlappung.
+## Änderungen
 
-## Hinweis
+### 1. `src/server/forecast.functions.ts` – Stundenprofil bis Tag 4 freischalten
+- Zeile 1884: `precip_distribution: dayIndex <= 1 ? …` → `dayIndex <= 4 ? …`
+- Zeile 1885: `hourly_profile: dayIndex <= 1 ? …` → `dayIndex <= 4 ? …`
+- Zeile 1890: `humidity` analog auf `dayIndex <= 4` erweitern.
 
-Daten sind **frei erfunden** und dienen nur der Layout-/Styling-Kontrolle. Die echte Tageskarte folgt automatisch nach Reset des Open-Meteo-Limits (00:00 UTC).
+(ICON-CH2 hourly reicht ~120 h. Ab Tag 5 keine sinnvolle Auflösung mehr → bleibt `null`.)
+
+### 2. `src/server/forecast.functions.ts` – `classifySky` um Tagesgang-Logik ergänzen
+Neuer Schritt **vor** Regel 2 (Schauer-dominant): wenn `precip_distribution.blocks` vorliegt, prüfe Verteilung über die 4 Blöcke (night / morning / afternoon / evening).
+
+- **Frühabbruch der Niederschläge** (morning hat ≥ 60 % der Tagessumme, afternoon + evening je < 1 mm, sun ≥ 5 h):
+  → `sky_label`: „Anfangs Regen oder Schauer, später trocken und freundlicher"
+  → `sky_pattern`: `frueh_regen_dann_sonne`
+- **Niederschlag erst spät** (evening ≥ 60 %, morning + afternoon trocken):
+  → `sky_label`: „Tagsüber meist trocken, gegen Abend Regen oder Schauer"
+  → `sky_pattern`: `spaet_regen`
+- **Mittagsschauer / Konvektiv** (afternoon dominant, morning + evening klar, sun ≥ 6 h):
+  → `sky_label`: „Vormittags freundlich, am Nachmittag einzelne Schauer"
+  → `sky_pattern`: `nachmittag_konvektiv`
+- Sonst: bestehende Regel 2 / 3 / 4 wie bisher.
+
+### 3. `DEFAULT_SKY_RULES` erweitern
+Neue `sky_pattern`-Werte ergänzen (`frueh_regen_dann_sonne`, `spaet_regen`, `nachmittag_konvektiv`) mit Pflichtformulierungen, sodass die KI den Tagesgang explizit benennt.
+
+Zusätzliche Regel: **Wenn `precip_distribution` gesetzt ist, MUSS der Wetterverlauf-Absatz die zeitliche Verteilung benennen** (z. B. „am Vormittag … nachmittags …"). Pauschalaussagen über 24 h sind verboten.
+
+### 4. Bestehende Regel 2 unverändert lassen
+Die Schauer-dominant-Regel bleibt für Tage mit gleichmässig verteiltem Niederschlag (alle 4 Blöcke nass) bestehen.
+
+## Erwartetes Ergebnis Tag 2 (12.05.)
+Die Daten von ICON-CH2 zeigen voraussichtlich Niederschlag-Schwerpunkt im Vormittag (Frontdurchgang Westwind 270°). Mit dem neuen Code ergibt sich z. B.:
+- `sky_label` → „Anfangs Regen oder Schauer, später trocken und freundlicher"
+- KI-Text → „Anfangs noch etwas Regen oder einzelne Schauer, danach Auflockerung mit zunehmend sonnigen Phasen am Nachmittag."
 
 ## Geänderte Dateien
-- `src/server/pressure-map.server.ts` (nur `export buildSvg` und Typ-Export hinzufügen)
-- `/tmp/render-pressure-test.ts` (Hilfsskript, kein Repo-Commit)
+- `src/server/forecast.functions.ts`
+
+Anschliessend Forecast für 12.05. neu generieren.

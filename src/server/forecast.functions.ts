@@ -213,10 +213,52 @@ function classifySky(data: any): { sky_label: string; sky_pattern: string } {
   const pp = typeof data?.precip_prob?.avg === "number" ? data.precip_prob.avg : null;
   const thunder = data?.thunderstorm?.class;
   const thunderActive = thunder && thunder !== "none";
+  const dist = data?.precip_distribution;
+  const blocks = dist?.blocks ?? null;
 
   // 1. Sonnig & wolkenlos
   if (cloud != null && sun != null && cloud <= 5 && sun >= 10) {
     return { sky_label: "Sonnig und wolkenlos", sky_pattern: "sonnig_klar" };
+  }
+
+  // 1b. Tagesgang aus Niederschlagsverteilung — VOR der pauschalen Schauer-Regel.
+  // Nur sinnvoll, wenn nennenswerter Tagesniederschlag (≥ 1.5 mm) vorhanden ist.
+  if (blocks) {
+    const mm = (k: string) => blocks[k]?.precip_mm ?? 0;
+    const total = mm("night") + mm("morning") + mm("afternoon") + mm("evening");
+    if (total >= 1.5) {
+      const morn = mm("morning"), aft = mm("afternoon"), eve = mm("evening"), night = mm("night");
+      const mornFrac = morn / total;
+      const aftFrac = aft / total;
+      const eveFrac = eve / total;
+      // Frühabbruch: Niederschlag vor allem nachts/morgens, danach trocken
+      if ((mornFrac + (night / total)) >= 0.6 && aft < 1 && eve < 1 && (sun == null || sun >= 4)) {
+        return {
+          sky_label: thunderActive
+            ? "Anfangs Regen oder Schauer, später Auflockerung mit lokaler Gewitterneigung"
+            : "Anfangs Regen oder Schauer, später trocken und freundlicher",
+          sky_pattern: "frueh_regen_dann_sonne",
+        };
+      }
+      // Niederschlag erst am Abend
+      if (eveFrac >= 0.6 && morn < 1 && aft < 1) {
+        return {
+          sky_label: thunderActive
+            ? "Tagsüber meist trocken, gegen Abend Schauer oder Gewitter"
+            : "Tagsüber meist trocken, gegen Abend Regen oder Schauer",
+          sky_pattern: "spaet_regen",
+        };
+      }
+      // Konvektive Nachmittags-Schauer
+      if (aftFrac >= 0.55 && morn < 1 && (sun == null || sun >= 5)) {
+        return {
+          sky_label: thunderActive
+            ? "Vormittags freundlich, am Nachmittag einzelne Schauer oder Gewitter"
+            : "Vormittags freundlich, am Nachmittag einzelne Schauer",
+          sky_pattern: "nachmittag_konvektiv",
+        };
+      }
+    }
   }
 
   // 2. Schauer-dominant (kräftiger Niederschlag)
@@ -1836,6 +1878,9 @@ function formatDayData(weather: any, dayIndex: number) {
   const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
   const thunderstorm = assessThunderstormRisk(weather, dayIndex, weathercode?.by_model);
 
+  // Tagesgang (Niederschlagsverteilung) für Tag 0–4 vorab berechnen, damit
+  // die Sky-Klassifikation den intraday-Verlauf berücksichtigen kann.
+  const precipDist = dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null;
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
   // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
   const skyClass = classifySky({
@@ -1844,6 +1889,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     precip_prob,
     thunderstorm,
+    precip_distribution: precipDist,
   });
   // Nebel-Auflösung als Sonderfall für Tag 0/1 — überschreibt Klassifikation
   const fogDiss = dayIndex <= 1
@@ -1881,13 +1927,13 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 1 ? computePrecipDistribution(weather, dayIndex) : null,
-    hourly_profile: dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null,
+    precip_distribution: precipDist,
+    hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null,
     sky_pattern,
     fog_dissipation: fogDiss,
     wind_gusts: assessGusts(weather, dayIndex),
     thunderstorm,
-    humidity: assessHumidity(weather, dayIndex, dayIndex <= 1 ? buildHourlyProfile(weather, dayIndex) : null),
+    humidity: assessHumidity(weather, dayIndex, dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
 }
@@ -2392,6 +2438,12 @@ KONSISTENZ-REGEL: Wenn der Wind-Absatz "in Schauernähe" oder "stürmische Böen
 GEWITTER-PFLICHT: Wenn "thunderstorm.class" eines von "isolated", "scattered", "widespread" ist, MUSS der Sky-Absatz "Gewitterneigung", "lokale Gewitter" oder "Gewitter" enthalten.
 
 WENN "sky_pattern" = "nebel_aufloesung" gesetzt ist, MUSS die Beschreibung den Verlauf abbilden: morgens Nebel-/Hochnebelfelder im Flachland (gerne mit "mit Blick nach Baden-Württemberg/Alpstein bereits sonnig"), ab spätem Vormittag Auflösung, am Nachmittag verbreitet sonnig. Tagesmittel von "sunshine_h"/"cloudcover" dürfen in diesem Fall NICHT für eine pauschale "stark bewölkt"-Aussage genutzt werden — der Tagesgang aus dem Stundenprofil hat Vorrang.
+
+TAGESGANG (Pflicht): Wenn "precip_distribution" gesetzt ist, MUSST du die zeitliche Verteilung der Niederschläge im Wetterverlauf-Absatz abbilden. Pauschale 24-h-Aussagen wie "ganztags Schauer" sind verboten, wenn die Blöcke "blocks.morning/afternoon/evening" deutlich unterschiedliche mm-Summen zeigen (Faktor ≥ 2). Pflicht-Patterns:
+- "frueh_regen_dann_sonne" → "Anfangs noch Regen oder Schauer, danach Auflockerung und am Nachmittag zunehmend freundlich/sonnige Phasen."
+- "spaet_regen" → "Tagsüber meist trocken mit Aufhellungen, gegen Abend Regen oder Schauer."
+- "nachmittag_konvektiv" → "Vormittags freundlich, im Tagesverlauf zunehmende Quellbewölkung und am Nachmittag einzelne Schauer."
+Nutze die Blocknamen "Vormittag", "Nachmittag", "Abend" — KEINE exakten Uhrzeiten.
 
 Bei weathercode 45 oder 48 bei der MEHRHEIT der Modelle (in "weathercode.by_model"): Du MUSST "Nebel" oder "Hochnebel" verwenden. Die Begriffe "stark bewölkt", "bedeckt", "trübe" oder "grau in grau" sind in diesem Fall ABSOLUT VERBOTEN — auch wenn sunshine_h niedrig ist.
 
