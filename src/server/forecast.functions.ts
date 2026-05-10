@@ -1885,7 +1885,7 @@ function formatDayData(weather: any, dayIndex: number) {
     cloudcover_source,
     weathercode,
     sunshine_h,
-    precip_distribution: dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null,
+    precip_distribution: precipDist,
     hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null,
     sky_pattern,
     fog_dissipation: fogDiss,
