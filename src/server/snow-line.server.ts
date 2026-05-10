@@ -1,6 +1,7 @@
 // Schneefallgrenze aus Open-Meteo `freezing_level_height` (Hourly).
 // Tagesweise min/avg/max; Schneefallgrenze ≈ Nullgradgrenze − 200 m.
 import { getOrSetCache } from "./weather-cache.server";
+import { fetchOpenMeteo } from "./openmeteo-quota.server";
 
 export type SnowLineClass = "none" | "high_terrain_only" | "low";
 
@@ -29,7 +30,7 @@ export async function fetchSnowLine(lat: number, lon: number): Promise<DaySnowLi
     url.searchParams.set("hourly", "freezing_level_height");
     url.searchParams.set("forecast_days", "7");
     url.searchParams.set("timezone", "Europe/Zurich");
-    const res = await fetch(url.toString());
+    const res = await fetchOpenMeteo(url, "snow_line");
     if (!res.ok) {
       console.warn("snow-line fetch failed", res.status);
       return [];

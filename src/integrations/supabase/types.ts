@@ -256,6 +256,33 @@ export type Database = {
         }
         Relationships: []
       }
+      openmeteo_usage: {
+        Row: {
+          by_source: Json
+          day: string
+          last_429_at: string | null
+          last_429_source: string | null
+          total: number
+          updated_at: string
+        }
+        Insert: {
+          by_source?: Json
+          day: string
+          last_429_at?: string | null
+          last_429_source?: string | null
+          total?: number
+          updated_at?: string
+        }
+        Update: {
+          by_source?: Json
+          day?: string
+          last_429_at?: string | null
+          last_429_source?: string | null
+          total?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -336,6 +363,15 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      increment_om_usage: {
+        Args: {
+          _amount: number
+          _day: string
+          _is_429: boolean
+          _source: string
+        }
+        Returns: undefined
       }
       is_staff: { Args: { _user_id: string }; Returns: boolean }
     }

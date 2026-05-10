@@ -12,6 +12,7 @@
 import { fetchSmnRecent, type SmnHourly } from "./swissmetnet.server";
 import { fetchRadarSnapshot, type RadarSnapshot } from "./radar.server";
 import { getOrSetCache } from "./weather-cache.server";
+import { fetchOpenMeteo } from "./openmeteo-quota.server";
 
 // ===== Konfiguration =====
 const OBS_FULL_WEIGHT_HOURS = 2;   // 0–2 h: Beobachtung dominiert vollständig
@@ -34,7 +35,7 @@ async function fetchOMCurrent(lat: number, lon: number) {
     url.searchParams.set("longitude", String(lon));
     url.searchParams.set("current", "temperature_2m,dewpoint_2m,cloudcover,windspeed_10m");
     url.searchParams.set("timezone", "UTC");
-    const res = await fetch(url.toString());
+    const res = await fetchOpenMeteo(url, "nowcast");
     if (!res.ok) return null;
     const j = await res.json() as any;
     const c = j?.current;

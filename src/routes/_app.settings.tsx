@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { updateSettings, listUsers, inviteUser, setUserRole, deleteUser, getPromptDefaults } from "@/server/forecast.functions";
+import { OpenMeteoUsageCard } from "@/components/OpenMeteoUsageCard";
 import { toast } from "sonner";
 import { Loader2, Trash2, UserPlus } from "lucide-react";
 
@@ -192,6 +193,8 @@ function SettingsPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Einstellungen</h1>
+
+      <OpenMeteoUsageCard />
 
       <Card>
         <CardHeader>
