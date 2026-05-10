@@ -10,6 +10,7 @@
 // das die Radar-Assimilation der MeteoSchweiz nutzt.
 
 import { getOrSetCache } from "./weather-cache.server";
+import { fetchOpenMeteo } from "./openmeteo-quota.server";
 
 export type RadarSnapshot = {
   fetched_at: string;
@@ -36,7 +37,7 @@ async function fetchOMPrecip(lat: number, lon: number) {
   url.searchParams.set("past_hours", "3");
   url.searchParams.set("forecast_hours", "6");
   url.searchParams.set("models", "meteoswiss_icon_ch1");
-  const res = await fetch(url.toString());
+  const res = await fetchOpenMeteo(url, "radar");
   if (!res.ok) throw new Error(`Open-Meteo radar proxy ${res.status}`);
   return res.json();
 }
@@ -53,7 +54,7 @@ async function fetchOMModelExpectedPast(lat: number, lon: number) {
   url.searchParams.set("past_hours", "3");
   url.searchParams.set("forecast_hours", "1");
   url.searchParams.set("models", "icon_d2");
-  const res = await fetch(url.toString());
+  const res = await fetchOpenMeteo(url, "radar");
   if (!res.ok) return null;
   return res.json();
 }

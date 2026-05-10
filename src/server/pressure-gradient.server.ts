@@ -27,6 +27,8 @@ export type DayPressure = {
   label: string;
 };
 
+import { fetchOpenMeteo } from "./openmeteo-quota.server";
+
 async function fetchPressureSeries(p: Point) {
   const url = new URL("https://api.open-meteo.com/v1/forecast");
   url.searchParams.set("latitude", String(p.lat));
@@ -34,7 +36,7 @@ async function fetchPressureSeries(p: Point) {
   url.searchParams.set("hourly", "pressure_msl");
   url.searchParams.set("forecast_days", "7");
   url.searchParams.set("timezone", "Europe/Zurich");
-  const res = await fetch(url.toString());
+  const res = await fetchOpenMeteo(url, "pressure_gradient");
   if (!res.ok) throw new Error(`Pressure fetch ${p.name} ${res.status}`);
   const j = (await res.json()) as { hourly?: { time?: string[]; pressure_msl?: number[] } };
   return j.hourly ?? { time: [], pressure_msl: [] };

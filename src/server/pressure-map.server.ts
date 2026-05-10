@@ -9,6 +9,7 @@ import europeCountries from "@/data/europe-countries.json";
 import europeOcean from "@/data/europe-ocean.json";
 import europeLakes from "@/data/europe-lakes.json";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { fetchOpenMeteo } from "./openmeteo-quota.server";
 
 // Map extent
 const W = -25, E = 45, S = 30, N = 70;
@@ -120,7 +121,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     url.searchParams.set("timezone", "UTC");
     let json: any;
     try {
-      const res = await fetch(url);
+      const res = await fetchOpenMeteo(url, "pressure_map");
       if (!res.ok) {
         if (res.status === 429) {
           consecutive429++;
