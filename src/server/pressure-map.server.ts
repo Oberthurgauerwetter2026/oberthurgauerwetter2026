@@ -610,6 +610,9 @@ function fillAndSmooth(g: Grid, fallback: number, smoothPasses = 3): Grid {
 export async function generatePressureMap(): Promise<{ url: string; targetUtc: string; bytes: number }> {
   const targetUtc = pickTargetTime();
   const targetUtcIso = `${targetUtc}`; // matches Open-Meteo "YYYY-MM-DDTHH:MM"
+  if (await isRateLimited()) {
+    throw new OpenMeteoRateLimitError();
+  }
   const raw = await fetchGrids(targetUtcIso);
   const validCount = raw.pressure.values.filter((v: number) => Number.isFinite(v)).length;
   console.log(`Pressure grid: ${validCount}/${raw.pressure.values.length} valid points`);
