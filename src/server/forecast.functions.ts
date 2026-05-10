@@ -213,10 +213,52 @@ function classifySky(data: any): { sky_label: string; sky_pattern: string } {
   const pp = typeof data?.precip_prob?.avg === "number" ? data.precip_prob.avg : null;
   const thunder = data?.thunderstorm?.class;
   const thunderActive = thunder && thunder !== "none";
+  const dist = data?.precip_distribution;
+  const blocks = dist?.blocks ?? null;
 
   // 1. Sonnig & wolkenlos
   if (cloud != null && sun != null && cloud <= 5 && sun >= 10) {
     return { sky_label: "Sonnig und wolkenlos", sky_pattern: "sonnig_klar" };
+  }
+
+  // 1b. Tagesgang aus Niederschlagsverteilung — VOR der pauschalen Schauer-Regel.
+  // Nur sinnvoll, wenn nennenswerter Tagesniederschlag (≥ 1.5 mm) vorhanden ist.
+  if (blocks) {
+    const mm = (k: string) => blocks[k]?.precip_mm ?? 0;
+    const total = mm("night") + mm("morning") + mm("afternoon") + mm("evening");
+    if (total >= 1.5) {
+      const morn = mm("morning"), aft = mm("afternoon"), eve = mm("evening"), night = mm("night");
+      const mornFrac = morn / total;
+      const aftFrac = aft / total;
+      const eveFrac = eve / total;
+      // Frühabbruch: Niederschlag vor allem nachts/morgens, danach trocken
+      if ((mornFrac + (night / total)) >= 0.6 && aft < 1 && eve < 1 && (sun == null || sun >= 4)) {
+        return {
+          sky_label: thunderActive
+            ? "Anfangs Regen oder Schauer, später Auflockerung mit lokaler Gewitterneigung"
+            : "Anfangs Regen oder Schauer, später trocken und freundlicher",
+          sky_pattern: "frueh_regen_dann_sonne",
+        };
+      }
+      // Niederschlag erst am Abend
+      if (eveFrac >= 0.6 && morn < 1 && aft < 1) {
+        return {
+          sky_label: thunderActive
+            ? "Tagsüber meist trocken, gegen Abend Schauer oder Gewitter"
+            : "Tagsüber meist trocken, gegen Abend Regen oder Schauer",
+          sky_pattern: "spaet_regen",
+        };
+      }
+      // Konvektive Nachmittags-Schauer
+      if (aftFrac >= 0.55 && morn < 1 && (sun == null || sun >= 5)) {
+        return {
+          sky_label: thunderActive
+            ? "Vormittags freundlich, am Nachmittag einzelne Schauer oder Gewitter"
+            : "Vormittags freundlich, am Nachmittag einzelne Schauer",
+          sky_pattern: "nachmittag_konvektiv",
+        };
+      }
+    }
   }
 
   // 2. Schauer-dominant (kräftiger Niederschlag)
