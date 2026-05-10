@@ -5,9 +5,9 @@
 // SVG is the simplest deployable format on Cloudflare Workers — no WASM needed.
 
 import { contours as d3contours } from "d3-contour";
-import europeCountries from "/dev-serve/dev-server/src/data/europe-countries.json";
-import europeOcean from "/dev-serve/dev-server/src/data/europe-ocean.json";
-import europeLakes from "/dev-serve/dev-server/src/data/europe-lakes.json";
+import europeCountries from "@/data/europe-countries.json";
+import europeOcean from "@/data/europe-ocean.json";
+import europeLakes from "@/data/europe-lakes.json";
 import { supabaseAdmin } from "./stub-supabase";
 import { fetchOpenMeteo } from "./stub-quota";
 
