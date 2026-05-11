@@ -27,16 +27,22 @@ export const triggerPressureMap = createServerFn({ method: "POST" })
           pressure_map_last_status: `OK · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB`,
         })
         .neq("id", "00000000-0000-0000-0000-000000000000");
-      return result;
+      return { ok: true as const, ...result };
     } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      const isRateLimit = e?.name === "OpenMeteoRateLimitError" || /Tageslimit|rate.?limit|429/i.test(msg);
+      const status = isRateLimit
+        ? "Pausiert: Open-Meteo Rate-Limit (auto-retry sobald frei)"
+        : `Fehler: ${msg}`;
       await supabaseAdmin
         .from("app_settings")
         .update({
           pressure_map_last_run: new Date().toISOString(),
-          pressure_map_last_status: `Fehler: ${e?.message ?? String(e)}`,
+          pressure_map_last_status: status,
         })
         .neq("id", "00000000-0000-0000-0000-000000000000");
-      throw e;
+      // Return structured error instead of throwing — avoids blank-screen on the client.
+      return { ok: false as const, error: isRateLimit ? "RATE_LIMITED" : "FAILED", message: status };
     }
   });
 
