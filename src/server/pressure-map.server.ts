@@ -136,22 +136,27 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     url.searchParams.set("forecast_days", "2");
     url.searchParams.set("timezone", "UTC");
     let json: any;
+    let lastBody = "";
+    let lastTier: RateLimitTier = "minutely";
     try {
       const res = await fetchOpenMeteo(url, "pressure_map");
       if (!res.ok) {
+        const body = await res.text().catch(() => "");
         if (res.status === 429) {
           consecutive429++;
           total429++;
-          // Early abort: 3 consecutive 429s → daily limit is exhausted.
-          if (consecutive429 >= 3) {
-            console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive 429s (batch ${i})`);
-            await setRateLimited();
+          lastBody = body;
+          lastTier = classify429Body(body);
+          // Early abort only on real DAILY limits, otherwise keep trying.
+          if (lastTier === "daily" && consecutive429 >= 3) {
+            console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive DAILY 429s (batch ${i})`);
+            await setRateLimited("daily", body);
             throw new OpenMeteoRateLimitError();
           }
         } else {
           consecutive429 = 0;
         }
-        console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${await res.text()}`);
+        console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${body.slice(0, 200)}`);
         continue;
       }
       consecutive429 = 0;
