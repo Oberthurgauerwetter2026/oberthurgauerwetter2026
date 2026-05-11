@@ -553,6 +553,7 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
 }
 
 import { generateTextNominal as runNominal } from "./nominal-style.server";
+import { enforceFrostWarning } from "./forecast.functions";
 
 async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
   return runNominal(systemPrompt, userPrompt, generateText);
