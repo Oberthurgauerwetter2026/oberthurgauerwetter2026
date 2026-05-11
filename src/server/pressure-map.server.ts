@@ -122,6 +122,8 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   let consecutive429 = 0;
   let total429 = 0;
   let attempted = 0;
+  let lastBody = "";
+  let lastTier: RateLimitTier = "minutely";
 
   for (let i = 0; i < lats.length; i += BATCH) {
     if (i > 0) await new Promise((r) => setTimeout(r, 250));
