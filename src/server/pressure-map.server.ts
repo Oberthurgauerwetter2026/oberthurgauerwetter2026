@@ -73,14 +73,30 @@ async function isRateLimited(): Promise<boolean> {
   }
 }
 
-async function setRateLimited(): Promise<void> {
+type RateLimitTier = "daily" | "hourly" | "minutely";
+
+function classify429Body(body: string): RateLimitTier {
+  if (/daily/i.test(body)) return "daily";
+  if (/hourly/i.test(body)) return "hourly";
+  return "minutely";
+}
+
+function ttlIsoForTier(tier: RateLimitTier, now = new Date()): string {
+  if (tier === "daily") return nextUtcMidnightIso(now);
+  const ms = tier === "hourly" ? 30 * 60 * 1000 : 2 * 60 * 1000;
+  return new Date(now.getTime() + ms).toISOString();
+}
+
+async function setRateLimited(tier: RateLimitTier = "daily", body = ""): Promise<void> {
   try {
+    const expiresAt = ttlIsoForTier(tier);
+    console.warn(`[pressure-map] negative-cache ${tier} → expires ${expiresAt} (body: ${body.slice(0, 200)})`);
     await supabaseAdmin
       .from("weather_cache")
       .upsert({
         cache_key: RATELIMIT_CACHE_KEY,
-        payload: { reason: "Open-Meteo daily limit exceeded" },
-        expires_at: nextUtcMidnightIso(),
+        payload: { reason: `Open-Meteo ${tier} limit exceeded`, tier },
+        expires_at: expiresAt,
         fetched_at: new Date().toISOString(),
       }, { onConflict: "cache_key" });
   } catch (e) {
