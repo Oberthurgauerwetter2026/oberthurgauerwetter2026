@@ -552,6 +552,12 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
   return { firstData, firstTitle, windowHint, hour };
 }
 
+import { generateTextNominal as runNominal } from "./nominal-style.server";
+
+async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
+  return runNominal(systemPrompt, userPrompt, generateText);
+}
+
 async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
