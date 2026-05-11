@@ -630,9 +630,29 @@ function fillAndSmooth(g: Grid, fallback: number, smoothPasses = 3): Grid {
   return cur;
 }
 
-export async function generatePressureMap(): Promise<{ url: string; targetUtc: string; bytes: number }> {
+export async function generatePressureMap(): Promise<{ url: string; targetUtc: string; bytes: number; skipped?: boolean }> {
   const targetUtc = pickTargetTime();
   const targetUtcIso = `${targetUtc}`; // matches Open-Meteo "YYYY-MM-DDTHH:MM"
+  const targetDay = targetUtc.slice(0, 10);
+
+  // Idempotency: skip if we already produced today's map for the same target day.
+  try {
+    const { data: settings } = await supabaseAdmin
+      .from("app_settings")
+      .select("pressure_map_last_status")
+      .limit(1)
+      .maybeSingle();
+    const lastStatus = settings?.pressure_map_last_status ?? "";
+    if (/^OK\b/i.test(lastStatus) && lastStatus.includes(targetDay)) {
+      console.log(`[pressure-map] Skip — already up-to-date for ${targetDay}`);
+      const supabaseUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
+      const url = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/weather-maps/europe-pressure-latest.svg`;
+      return { url, targetUtc: targetUtcIso, bytes: 0, skipped: true };
+    }
+  } catch (e) {
+    console.warn("[pressure-map] Idempotency check failed, proceeding:", e);
+  }
+
   if (await isRateLimited()) {
     throw new OpenMeteoRateLimitError();
   }
