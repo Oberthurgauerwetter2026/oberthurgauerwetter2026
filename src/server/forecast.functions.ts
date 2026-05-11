@@ -424,6 +424,38 @@ async function generateTextNominal(systemPrompt: string, userPrompt: string): Pr
   return runNominal(systemPrompt, userPrompt, generateText);
 }
 
+// Frostwarnung deterministisch erzwingen.
+// Bei tmin ≤ 0 °C → " - Frostgefahr in den Senken." anhängen.
+// Bei tmin ≤ 4 °C → " - Bodenfrostgefahr." anhängen.
+// Quelle (Priorität): stations.BIZ.corrected_tmin → topography.tmin_cold → tmin.avg
+export function enforceFrostWarning(text: string, weatherData: any): string {
+  if (!text || !weatherData) return text;
+  const candidates: Array<number | null | undefined> = [
+    weatherData?.stations?.stations?.BIZ?.corrected_tmin,
+    weatherData?.stations?.BIZ?.corrected_tmin,
+    weatherData?.topography?.tmin_cold,
+    weatherData?.tmin?.avg,
+  ];
+  let tmin: number | null = null;
+  for (const c of candidates) {
+    if (typeof c === "number" && Number.isFinite(c)) { tmin = c; break; }
+  }
+  if (tmin == null) return text;
+  let suffix: string | null = null;
+  if (tmin <= 0) suffix = " - Frostgefahr in den Senken.";
+  else if (tmin <= 4) suffix = " - Bodenfrostgefahr.";
+  if (!suffix) return text;
+  // Schon vorhanden?
+  if (/Bodenfrostgefahr\.|Frostgefahr in den Senken\./i.test(text)) return text;
+  // Ersten Tiefstwerte-Satz finden und anhängen.
+  const re = /((?:Tiefstwerte?|Tiefste Werte)[^.!?]*?)(\.)(\s|$)/;
+  const m = text.match(re);
+  if (!m) return text;
+  const replaced = text.replace(re, `$1${suffix}$3`);
+  console.log(`frost-enforce: appended "${suffix.trim()}" for tmin=${tmin}`);
+  return replaced;
+}
+
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ===== Topography (elevation grid around Amriswil) =====
@@ -2722,7 +2754,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
-        body: degradedNote + stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle),
+        body: degradedNote + enforceFrostWarning(stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle), firstData),
         weather_data: firstData,
       })));
     }
@@ -2740,7 +2772,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
-        position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day,
+        position: pos, entry_date: day.date, title, body: enforceFrostWarning(enforceSkyConsistency(body, day), day), weather_data: day,
       })));
     }
 
@@ -2882,7 +2914,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
-        body: degradedNote + stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle),
+        body: degradedNote + enforceFrostWarning(stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle), firstData),
         weather_data: firstData, forecast_id: data.forecastId,
       })));
     }
@@ -2900,7 +2932,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
-        position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
+        position: pos, entry_date: day.date, title, body: enforceFrostWarning(enforceSkyConsistency(body, day), day), weather_data: day, forecast_id: data.forecastId,
       })));
     }
 
@@ -2963,9 +2995,12 @@ export const regenerateEntry = createServerFn({ method: "POST" })
       ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
       : "";
     const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data, tempHint);
-    const body = stripTiefstwerteForAfternoon(
-      enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data),
-      entry.title,
+    const body = enforceFrostWarning(
+      stripTiefstwerteForAfternoon(
+        enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data),
+        entry.title,
+      ),
+      entry.weather_data,
     );
     const { error: uErr } = await supabase
       .from("forecast_entries")

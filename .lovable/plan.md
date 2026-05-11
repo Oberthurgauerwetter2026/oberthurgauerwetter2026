@@ -1,50 +1,46 @@
 ## Problem
 
-Der Nominal-/Telegrammstil wird inkonsistent durchgesetzt. Zwei konkrete Lücken:
+Im aktuellen Forecast (Mittwoch, 13. Mai) steht:
 
-1. **`forecast.auto.ts` (Cron-Auto-Generierung) umgeht den Nominal-Check komplett.** Die Datei ruft `generateText()` direkt auf (3×, Zeilen 852, 864, 870) und nicht den Wrapper `generateTextNominal()`. Der existiert nur in `forecast.functions.ts`.
+> „Tiefstwerte zwischen 1 und 4 Grad, im Aach- und Sittertal um 1 Grad. Höchstwerte um 15 Grad."
 
-2. **Retry-Schwelle zu hoch.** In `forecast.functions.ts` (Z. 452) wird nur retryt, wenn **≥ 2** Verstöße erkannt werden — Einzel-Verstöße („es regnet" allein, „der Wind weht" allein) rutschen durch.
+Laut Prompt-Regel müsste der Tiefstwerte-Satz hier zwingend mit `" - Bodenfrostgefahr."` enden (bei ≤ 4 Grad), bei ≤ 0 Grad mit `" - Frostgefahr in den Senken."`. Die Regel steht zwar im System-Prompt (`forecast.functions.ts` Z. 2445/2460/2461), wird aber **nicht deterministisch erzwungen** — das LLM lässt den Anhang gelegentlich weg, wie der aktuelle Eintrag zeigt.
 
-3. **Pattern-Liste deckt typische Fälle nicht ab.** Es fehlen u.a. „Temperatur steigt/sinkt/fällt", „Wolken ziehen", „Niederschlag fällt", „Schneefallgrenze sinkt/steigt" (statt „sinkend/steigend"), „die Sonne zeigt sich", Hilfsverb-Konstruktionen wie „bleibt", „kommt auf".
+Anders formuliert: Es gibt aktuell **keine Frostwarn-Enforcement-Schicht** analog zum Nominalstil-Check.
 
 ## Lösung
 
-### 1. Shared Helper extrahieren
+Eine deterministische Post-Processing-Schicht ergänzen, die nach jeder Generierung prüft, ob ein Tiefstwerte-Satz vorhanden ist und ob der berechnete Tmin (aus `weatherData`) eine Frostwarnung erfordert. Falls ja und der Anhang fehlt → automatisch ergänzen.
 
-Neue Datei `src/server/nominal-style.server.ts` mit:
-- `enforceNominalStyle(text)` — erweiterte Pattern-Liste (siehe unten)
-- `generateTextNominal(systemPrompt, userPrompt, generateFn)` — nimmt die Generator-Funktion als Parameter (damit `forecast.auto.ts` und `forecast.functions.ts` ihre eigenen `generateText`-Implementierungen weiterverwenden können)
+### 1. Neuer Helper `enforceFrostWarning(text, weatherData)` in `forecast.functions.ts`
 
-### 2. `forecast.auto.ts` umstellen
+Logik:
+- Tmin-Quelle: bevorzugt `weatherData.day.tmin_cold` (topografisch korrigierter Senken-Wert), Fallback `weatherData.day.corrected_tmin` bzw. `weatherData.day.tmin.avg`.
+- Schwellen:
+  - `tmin ≤ 0` → Anhang `" - Frostgefahr in den Senken."`
+  - `tmin ≤ 4` → Anhang `" - Bodenfrostgefahr."`
+  - sonst: keine Änderung; falls fälschlich vorhanden, **nicht** entfernen (konservativ).
+- Im Body den ersten Satz finden, der mit „Tiefstwerte"/„Tiefste Werte" beginnt. Wenn er bereits mit `Bodenfrostgefahr.` oder `Frostgefahr in den Senken.` endet → keine Änderung. Sonst: den abschliessenden Punkt durch ` - <Anhang>` ersetzen.
+- Wenn gar kein Tiefstwerte-Satz vorhanden ist (z. B. Tag-0-Nachmittag, der sie absichtlich weglässt) → keine Änderung.
 
-Die drei direkten `generateText(...)`-Aufrufe (Zeilen 852, 864, 870) durch `generateTextNominal(promptTemplate, userPrompt, generateText)` ersetzen.
+### 2. Aufruf-Stellen
 
-### 3. `forecast.functions.ts` anpassen
+`enforceFrostWarning` direkt nach `generateTextNominal(...)` und vor dem Speichern aufrufen — analog zu `enforceSkyConsistency` / `stripTiefstwerteForAfternoon`. Betroffen sind dieselben Generierungspfade in:
+- `src/server/forecast.functions.ts` (manuelle Generierung, ~Z. 2700–2970, drei Stellen)
+- `src/server/forecast.auto.ts` (Cron-Auto, drei `generateTextNominal`-Aufrufe)
 
-- Lokales `generateTextNominal` und `enforceNominalStyle` durch Import aus dem neuen Helper ersetzen.
-- Schwelle von `< 2` auf **`< 1`** senken — jeder einzelne Verstoß löst Retry aus.
+Reihenfolge: `nominal → strip-Tiefst-für-Tag-0-Nachmittag → frost-warn → sky-consistency` (Frost vor Sky, weil Sky den ersten Absatz ersetzt und Tiefstwerte typischerweise im zweiten Absatz stehen — unabhängig).
 
-### 4. Pattern-Liste erweitern
+### 3. Logging
 
-Zusätzlich zu den bestehenden 11 Mustern:
-- `\btemperatur(en)?\s+(steigt|sinkt|fällt|fallen|steigen)\b` → „Temperatur steigt/sinkt"
-- `\bwolken\s+ziehen\b` → „Wolken ziehen"
-- `\bniederschlag\s+(fällt|fallen)\b` → „Niederschlag fällt"
-- `\bschneefallgrenze\s+(sinkt|steigt|fällt)\b` → muss „sinkend/steigend" sein
-- `\bdie\s+sonne\s+zeigt\s+sich\b`
-- `\bnullgradgrenze\s+(steigt|sinkt|fällt)\b`
-- `\b(es|der himmel)\s+bleibt\b`
-- `\bkommt?\s+\w+\s+auf\b` → „kommt Wind auf"
-- `\bsetzt?\s+\w+\s+ein\b` → „setzt Regen ein"
-- Hilfsverb-Konstruktionen ohne ergänzendes Adjektiv: `\bdas\s+wetter\s+(ist|wird|bleibt)\b`
+- Bei jeder Ergänzung `console.log("frost-enforce: appended X for tmin=Y")` — damit man im Log nachvollziehen kann, wann die KI patzte.
 
-### 5. Logging
+### 4. Test am aktuellen Eintrag
 
-Bei jedem Retry weiterhin loggen, welche Verstöße erkannt wurden (existiert schon). Zusätzlich: wenn auch der Retry noch Verstöße enthält, eine Warnung loggen — damit man sieht, dass das Modell den Stil nicht halten kann und die Pattern-Liste oder der System-Prompt nachgeschärft werden müssen.
+Nach Implementierung den Mittwoch-Eintrag (13. Mai, Tmin 1 Grad) neu generieren und prüfen, dass der Anhang `" - Bodenfrostgefahr."` automatisch erscheint, auch wenn die KI ihn weglässt.
 
 ## Außerhalb des Umfangs
 
-- Keine Änderung am System-Prompt (DEFAULT_GENERAL_STYLE) — der ist bereits ausführlich und führt das gewünschte Beispiel an.
-- Keine Änderung am Modell (bleibt `google/gemini-2.5-flash`).
-- Keine UI-Änderungen.
+- Keine Prompt-Änderung (die Regel ist bereits klar formuliert, das LLM hält sie nur nicht zuverlässig ein).
+- Keine UI-Änderung in den Settings.
+- Keine Anpassung der Schwellenwerte (4 °C / 0 °C bleiben).
