@@ -686,8 +686,12 @@ function PressureMapCard({ session }: { session: any }) {
     setRunning(true);
     try {
       const { triggerPressureMap } = await import("@/lib/pressure-map.functions");
-      await triggerPressureMap({ headers: { Authorization: `Bearer ${session.access_token}` } } as any);
-      toast.success("Karte neu erzeugt");
+      const res: any = await triggerPressureMap({ headers: { Authorization: `Bearer ${session.access_token}` } } as any);
+      if (res?.ok === false) {
+        toast.error(res.message ?? "Karte konnte nicht erzeugt werden");
+      } else {
+        toast.success("Karte neu erzeugt");
+      }
       setBust(Date.now());
       await load();
     } catch (e: any) { toast.error(e.message); } finally { setRunning(false); }
