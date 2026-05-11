@@ -830,11 +830,13 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
     const res = await fetchOMTracked(url, "forecast");
     if (res.ok) return await res.json();
     lastError = await res.text().catch(() => "");
-    // 429 with "limit exceeded" message = daily quota → don't retry, mark RATE_LIMIT
-    if (res.status === 429 && /limit exceeded|quota/i.test(lastError)) {
+    // 429 → classify as daily/hourly/minutely; don't retry, mark with appropriate TTL
+    if (res.status === 429) {
+      const code = classify429(lastError);
+      console.warn(`[open-meteo] 429 ${code} (models=${normalizedModels}) — body: ${lastError.slice(0, 200)}`);
       throw new OpenMeteoError(
-        `Open-Meteo Tageslimit erreicht (models=${normalizedModels}): ${lastError}`,
-        "RATE_LIMIT",
+        `Open-Meteo Rate-Limit (${code}, models=${normalizedModels}): ${lastError}`,
+        code,
       );
     }
     const retryable = res.status === 429 || res.status >= 500;
