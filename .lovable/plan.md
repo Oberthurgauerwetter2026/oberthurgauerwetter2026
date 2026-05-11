@@ -1,40 +1,50 @@
-## Ziel
+## Problem
 
-Die Bodendruckkarte soll **genau einmal pro Tag** für den Folgetag (12:00 UTC) erzeugt werden — täglich um **04:30 UTC**, mit Schutz gegen versehentliche Doppel-Läufe (manueller Button + Cron + Remix-Reste).
+Der Nominal-/Telegrammstil wird inkonsistent durchgesetzt. Zwei konkrete Lücken:
 
-## Änderungen
+1. **`forecast.auto.ts` (Cron-Auto-Generierung) umgeht den Nominal-Check komplett.** Die Datei ruft `generateText()` direkt auf (3×, Zeilen 852, 864, 870) und nicht den Wrapper `generateTextNominal()`. Der existiert nur in `forecast.functions.ts`.
 
-### 1. Cron-Job auf 04:30 UTC fixieren (Supabase, via SQL-Insert)
+2. **Retry-Schwelle zu hoch.** In `forecast.functions.ts` (Z. 452) wird nur retryt, wenn **≥ 2** Verstöße erkannt werden — Einzel-Verstöße („es regnet" allein, „der Wind weht" allein) rutschen durch.
 
-- Bestehende `pg_cron`-Jobs auflisten und alle alten/zusätzlichen Pressure-Map-Schedules entfernen (`cron.unschedule(...)`).
-- Neuen Job anlegen:
-  - Name: `pressure-map-daily-0430`
-  - Schedule: `30 4 * * *`
-  - Body: `{}`
-  - URL: `https://project--e38eb7cd-9a65-493a-b3eb-f8b0eb5a851d.lovable.app/api/public/hooks/generate-pressure-map`
-  - Header: `apikey: <anon-key>` (vom Hook bereits geprüft)
+3. **Pattern-Liste deckt typische Fälle nicht ab.** Es fehlen u.a. „Temperatur steigt/sinkt/fällt", „Wolken ziehen", „Niederschlag fällt", „Schneefallgrenze sinkt/steigt" (statt „sinkend/steigend"), „die Sonne zeigt sich", Hilfsverb-Konstruktionen wie „bleibt", „kommt auf".
 
-Wird per Supabase-Insert-Tool ausgeführt (nicht als Migration, da keine Strukturänderung).
+## Lösung
 
-### 2. Server-seitige Idempotenz in `generatePressureMap()`
+### 1. Shared Helper extrahieren
 
-In `src/server/pressure-map.server.ts`:
-- Vor `fetchGrids()` `app_settings.pressure_map_last_status` lesen.
-- Wenn Status mit `OK` beginnt **und** den heutigen Ziel-Tag (`pickTargetTime().slice(0,10)`) enthält → früh zurückkehren mit `{ skipped: true, targetUtc, bytes: 0 }` statt erneut zu rendern.
-- Verhindert Doppel-Läufe bei: manueller Button-Klick nach Cron, Cron + alter Schedule, versehentlich erneuter Aufruf.
+Neue Datei `src/server/nominal-style.server.ts` mit:
+- `enforceNominalStyle(text)` — erweiterte Pattern-Liste (siehe unten)
+- `generateTextNominal(systemPrompt, userPrompt, generateFn)` — nimmt die Generator-Funktion als Parameter (damit `forecast.auto.ts` und `forecast.functions.ts` ihre eigenen `generateText`-Implementierungen weiterverwenden können)
 
-### 3. Hook-Route Rückgabe anpassen
+### 2. `forecast.auto.ts` umstellen
 
-In `src/routes/api/public/hooks/generate-pressure-map.ts`:
-- Wenn `result.skipped === true` → Status `"Skip (cron) · bereits aktuell für ${targetUtc}"` schreiben statt „OK (cron)".
-- Gleiche Logik in `src/lib/pressure-map.functions.ts` (`triggerPressureMap`) für den manuellen Button.
+Die drei direkten `generateText(...)`-Aufrufe (Zeilen 852, 864, 870) durch `generateTextNominal(promptTemplate, userPrompt, generateText)` ersetzen.
 
-### 4. UI-Hinweis (optional, klein)
+### 3. `forecast.functions.ts` anpassen
 
-In `src/routes/_app.settings.tsx` neben dem „Druckkarte jetzt aktualisieren"-Button kurzer Hinweistext: *„Cron-Lauf täglich um 04:30 UTC für den Folgetag · manuelle Auslösung überspringt, wenn bereits aktuell."*
+- Lokales `generateTextNominal` und `enforceNominalStyle` durch Import aus dem neuen Helper ersetzen.
+- Schwelle von `< 2` auf **`< 1`** senken — jeder einzelne Verstoß löst Retry aus.
+
+### 4. Pattern-Liste erweitern
+
+Zusätzlich zu den bestehenden 11 Mustern:
+- `\btemperatur(en)?\s+(steigt|sinkt|fällt|fallen|steigen)\b` → „Temperatur steigt/sinkt"
+- `\bwolken\s+ziehen\b` → „Wolken ziehen"
+- `\bniederschlag\s+(fällt|fallen)\b` → „Niederschlag fällt"
+- `\bschneefallgrenze\s+(sinkt|steigt|fällt)\b` → muss „sinkend/steigend" sein
+- `\bdie\s+sonne\s+zeigt\s+sich\b`
+- `\bnullgradgrenze\s+(steigt|sinkt|fällt)\b`
+- `\b(es|der himmel)\s+bleibt\b`
+- `\bkommt?\s+\w+\s+auf\b` → „kommt Wind auf"
+- `\bsetzt?\s+\w+\s+ein\b` → „setzt Regen ein"
+- Hilfsverb-Konstruktionen ohne ergänzendes Adjektiv: `\bdas\s+wetter\s+(ist|wird|bleibt)\b`
+
+### 5. Logging
+
+Bei jedem Retry weiterhin loggen, welche Verstöße erkannt wurden (existiert schon). Zusätzlich: wenn auch der Retry noch Verstöße enthält, eine Warnung loggen — damit man sieht, dass das Modell den Stil nicht halten kann und die Pattern-Liste oder der System-Prompt nachgeschärft werden müssen.
 
 ## Außerhalb des Umfangs
 
-- Keine Änderung an der Karten-Rendering-Logik selbst.
-- Keine Änderung am 429-Handling (wurde bereits separat erledigt).
-- Keine Änderung am Ziel-Zeitpunkt (bleibt morgen 12:00 UTC).
+- Keine Änderung am System-Prompt (DEFAULT_GENERAL_STYLE) — der ist bereits ausführlich und führt das gewünschte Beispiel an.
+- Keine Änderung am Modell (bleibt `google/gemini-2.5-flash`).
+- Keine UI-Änderungen.
