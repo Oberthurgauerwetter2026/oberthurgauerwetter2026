@@ -709,8 +709,9 @@ function PressureMapCard({ session }: { session: any }) {
         <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
         <CardDescription>
           Tägliche Vorhersagekarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
-          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Wird automatisch täglich neu erzeugt;
-          die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
+          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Cron-Lauf täglich um 04:30 UTC für den
+          Folgetag — manuelle Auslösung wird übersprungen, wenn die Karte bereits aktuell ist.
+          Die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
