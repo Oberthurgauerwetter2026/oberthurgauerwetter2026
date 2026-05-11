@@ -839,7 +839,7 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
         code,
       );
     }
-    const retryable = res.status === 429 || res.status >= 500;
+    const retryable = res.status >= 500;
     if (!retryable || attempt === 2) {
       throw new OpenMeteoError(
         `Open-Meteo Fehler ${res.status} (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`,
