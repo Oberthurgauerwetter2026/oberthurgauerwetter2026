@@ -191,9 +191,10 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     }
   }
 
-  // If majority of batches were 429 (but not 3 in a row), still treat as ratelimit.
+  // If majority of batches were 429 (but not 3 daily in a row), still treat as ratelimit
+  // — but with the actual tier so a minutely burst doesn't lock us out for the whole day.
   if (total429 > 0 && total429 >= attempted / 2) {
-    await setRateLimited();
+    await setRateLimited(lastTier, lastBody);
     throw new OpenMeteoRateLimitError();
   }
 
