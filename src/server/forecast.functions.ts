@@ -781,13 +781,37 @@ function applyStationBias(day: { date?: string; tmin?: { avg?: number } | null; 
   };
 }
 
-// Typed Open-Meteo error: distinguishes daily quota (429 with quota text) from
-// transient errors. Callers can react differently (skip retries, set negative cache).
+// Typed Open-Meteo error: distinguishes daily/hourly/minutely quota from
+// transient errors. Callers react with different negative-cache TTLs.
+export type OpenMeteoErrorCode =
+  | "RATE_LIMIT_DAILY"
+  | "RATE_LIMIT_HOURLY"
+  | "RATE_LIMIT_MINUTELY"
+  | "OTHER";
 class OpenMeteoError extends Error {
-  code: "RATE_LIMIT" | "OTHER";
-  constructor(message: string, code: "RATE_LIMIT" | "OTHER") {
+  code: OpenMeteoErrorCode;
+  constructor(message: string, code: OpenMeteoErrorCode) {
     super(message);
     this.code = code;
+  }
+}
+
+// Classify an Open-Meteo 429 response body into the correct rate-limit tier.
+// Open-Meteo returns "Minutely|Hourly|Daily API request limit exceeded".
+function classify429(body: string): OpenMeteoErrorCode {
+  if (/daily/i.test(body)) return "RATE_LIMIT_DAILY";
+  if (/hourly/i.test(body)) return "RATE_LIMIT_HOURLY";
+  // Treat unknown 429 ("limit exceeded" without scope, or generic) as minutely burst.
+  return "RATE_LIMIT_MINUTELY";
+}
+
+function ttlForRateLimit(code: OpenMeteoErrorCode): number {
+  // milliseconds
+  switch (code) {
+    case "RATE_LIMIT_DAILY":   return -1; // sentinel → use UTC midnight
+    case "RATE_LIMIT_HOURLY":  return 30 * 60 * 1000;
+    case "RATE_LIMIT_MINUTELY": return 2 * 60 * 1000;
+    default: return 2 * 60 * 1000;
   }
 }
 
@@ -806,14 +830,16 @@ async function fetchOpenMeteo(lat: number, lon: number, models: string, includeH
     const res = await fetchOMTracked(url, "forecast");
     if (res.ok) return await res.json();
     lastError = await res.text().catch(() => "");
-    // 429 with "limit exceeded" message = daily quota → don't retry, mark RATE_LIMIT
-    if (res.status === 429 && /limit exceeded|quota/i.test(lastError)) {
+    // 429 → classify as daily/hourly/minutely; don't retry, mark with appropriate TTL
+    if (res.status === 429) {
+      const code = classify429(lastError);
+      console.warn(`[open-meteo] 429 ${code} (models=${normalizedModels}) — body: ${lastError.slice(0, 200)}`);
       throw new OpenMeteoError(
-        `Open-Meteo Tageslimit erreicht (models=${normalizedModels}): ${lastError}`,
-        "RATE_LIMIT",
+        `Open-Meteo Rate-Limit (${code}, models=${normalizedModels}): ${lastError}`,
+        code,
       );
     }
-    const retryable = res.status === 429 || res.status >= 500;
+    const retryable = res.status >= 500;
     if (!retryable || attempt === 2) {
       throw new OpenMeteoError(
         `Open-Meteo Fehler ${res.status} (models=${normalizedModels})${lastError ? `: ${lastError}` : ""}`,
@@ -855,15 +881,8 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
       .eq("cache_key", negKey)
       .maybeSingle();
     if (data?.expires_at && data.expires_at > new Date().toISOString()) {
-      // Ignoriere Alt-Marker, deren TTL nicht auf UTC-Mitternacht gesetzt wurde
-      // (Pre-Fix: fixe 1h-TTL). Nur Marker mit "T..00:00:00" UTC sind gültig.
-      const isUtcMidnight = /T00:00:00(\.0+)?Z$/.test(data.expires_at);
-      if (!isUtcMidnight) {
-        console.warn(`[open-meteo] ignoring stale rate-limit marker for ${models} (expires_at=${data.expires_at} is not UTC midnight)`);
-      } else {
-        console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at} (UTC, = Open-Meteo quota reset)`);
-        return null;
-      }
+      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at}`);
+      return null;
     }
   } catch (e) {
     // Cache lookup failed — proceed with the call.
@@ -873,15 +892,23 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
     return await fetchOpenMeteo(lat, lon, models, includeHourly);
   } catch (e) {
     console.warn(e instanceof Error ? e.message : e);
-    // On daily-quota errors, set a 1h negative-cache marker so subsequent calls
-    // (within the same generation, or from the user clicking again) bail out fast.
-    if (e instanceof OpenMeteoError && e.code === "RATE_LIMIT") {
+    // On rate-limit errors, set a negative-cache marker with TTL based on tier:
+    //  daily → bis 00:00 UTC, hourly → 30 min, minutely → 2 min.
+    if (
+      e instanceof OpenMeteoError &&
+      (e.code === "RATE_LIMIT_DAILY" ||
+        e.code === "RATE_LIMIT_HOURLY" ||
+        e.code === "RATE_LIMIT_MINUTELY")
+    ) {
       try {
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const expiresAt = nextUtcMidnightIso();
+        const ttlMs = ttlForRateLimit(e.code);
+        const expiresAt =
+          ttlMs < 0 ? nextUtcMidnightIso() : new Date(Date.now() + ttlMs).toISOString();
+        console.warn(`[open-meteo] negative-cache ${e.code} for ${models} → expires ${expiresAt}`);
         await supabaseAdmin.from("weather_cache").upsert({
           cache_key: rateLimitCacheKey(models),
-          payload: { rate_limited: true, models },
+          payload: { rate_limited: true, models, code: e.code },
           fetched_at: new Date().toISOString(),
           expires_at: expiresAt,
         });

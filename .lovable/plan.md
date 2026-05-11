@@ -1,47 +1,51 @@
-# ICON-EU ab Tag 5 aufnehmen
+## Problem
 
-## Befund
+Open-Meteo gibt **drei verschiedene 429-Fehler** zurück: pro Minute, pro Stunde, pro Tag. Der aktuelle Code behandelt **jedes 429** als Tageslimit und sperrt die jeweilige Modellgruppe **bis 00:00 UTC** — auch wenn nur ein kurzer Burst-Limit (Minutenlimit) ausgelöst wurde.
 
-Aktuelle Konfiguration in `app_settings`:
-- `models_longterm = "ecmwf_ifs025,gfs_global"` (greift ab Tag > 5, d. h. Tag 6+)
-- `models_midterm = "meteoswiss_icon_ch2,arpege_europe"` (Tag 2–5)
+In der Datenbank sind aktuell vier solche „bis Mitternacht"-Marker gesetzt, alle vom 03:23–03:24 UTC heute Morgen — vermutlich durch einen Burst beim parallelen Abruf von Forecast + Druckkarte:
 
-Der Code-Default in `src/server/forecast.functions.ts` Zeile 902 ist identisch (`longModels = "ecmwf_ifs025,gfs_global"`).
+```
+om:ratelimit:pressure-map                                       → bis 2026-05-12 00:00 UTC
+om:ratelimit:ecmwf_ifs025,gfs_global,icon_eu                    → bis 2026-05-12 00:00 UTC
+om:ratelimit:meteoswiss_icon_ch2,arpege_europe                  → bis 2026-05-12 00:00 UTC
+om:ratelimit:meteoswiss_icon_ch1,...,meteofrance_arome_france_hd → bis 2026-05-12 00:00 UTC
+```
 
-**Hinweis zur Reichweite:** ICON-EU (Open-Meteo `icon_eu`) liefert Stunden­werte bis ca. +120 h und Tageswerte bis ~Tag 5/6. Genau ab Tag 5 ist es also noch sinnvoll dabei, ab Tag 7 liefert es nichts mehr — das Tier-Mixing ignoriert leere Werte automatisch, daher unproblematisch.
+Folge: Forecast geht in „Eingeschränkter Modus" (MOSMIX-only), obwohl erst **16/10000** Tagescalls verbraucht sind.
 
-## Änderungen
+## Lösung
 
-### 1. Datenbank: `app_settings.models_longterm` erweitern
+### 1. Klassifizierung verfeinern (`forecast.functions.ts`, `fetchOpenMeteo`)
 
+Aktuell: `if (status === 429 && /limit exceeded|quota/i.test(body)) → RATE_LIMIT`.
+Open-Meteo-Texte: `Minutely`, `Hourly`, `Daily API request limit exceeded`. Alle matchen → falsch klassifiziert.
+
+Neuer Error-Typ mit drei Stufen:
+- `RATE_LIMIT_DAILY` — body matcht `/daily.*limit/i` → Marker bis 00:00 UTC (wie bisher)
+- `RATE_LIMIT_HOURLY` — body matcht `/hourly.*limit/i` → Marker für **30 Min**
+- `RATE_LIMIT_MINUTELY` — body matcht `/minutely.*limit/i` oder generisches 429 → Marker für **2 Min**, zusätzlich kurz retryen (wie heute, mit `Retry-After`)
+
+### 2. TTL-abhängiger Negative-Cache (`fetchOpenMeteoOptional`)
+
+`expires_at` für den Marker je nach Stufe setzen statt immer `nextUtcMidnightIso()`. Das bestehende Sicherheits-Filter „nur akzeptieren wenn auf 00:00 UTC" muss weg bzw. durch generisches `expires_at > now()` ersetzt werden, damit kürzere TTLs auch greifen.
+
+### 3. Gleiches für Druckkarte (`pressure-map.server.ts`)
+
+`setRateLimited()` aktuell hardcoded `nextUtcMidnightIso()`. Parametrisieren: nur bei „Daily" bis Mitternacht, sonst kurze TTL. Die Erkennung muss in den Batch-Loop wo 429 gezählt wird (Zeile ~173) — dort den Body inspizieren statt nur den Status.
+
+### 4. Bestehende falsche Marker sofort löschen
+
+Damit der User nicht bis 00:00 UTC warten muss:
 ```sql
-update app_settings
-set models_longterm = 'ecmwf_ifs025,gfs_global,icon_eu',
-    updated_at = now();
+DELETE FROM weather_cache WHERE cache_key LIKE 'om:ratelimit:%';
 ```
+Wird als Migration ausgeführt.
 
-### 2. Code-Default angleichen (`src/server/forecast.functions.ts`, Z. 902)
+### 5. Logging
 
-```ts
-longModels = "ecmwf_ifs025,gfs_global,icon_eu"
-```
+Bei jedem 429 die erkannte Stufe + Body-Snippet + gesetzte TTL loggen, damit zukünftige Vorfälle leichter zu diagnostizieren sind.
 
-Damit greift der gleiche Wert, falls `app_settings` einmal leer ist.
+## Nicht im Umfang
 
-### 3. Keine weiteren Anpassungen nötig
-
-- `HOURLY_LONGRANGE_BLOCKLIST` (Z. 2057) muss **nicht** ergänzt werden — ICON-EU hat brauchbare Stundendaten bis +120 h und darf bei Tag 5 mit Stundenprofil beitragen.
-- Das Tier-Modell mischt ICON-EU automatisch ab Tag 6 (Langfrist) und als Fallback bei Tag 5 (über `collectModelValuesTiered`).
-
-## Erwartetes Ergebnis
-
-| Tag | Modelle |
-|---|---|
-| Tag 5 | ECMWF-IFS, GFS-Global, **ICON-EU** (über Mid→Long Fallback wenn nötig) |
-| Tag 6 | ECMWF-IFS, GFS-Global, **ICON-EU** (sofern noch Daten vorhanden) |
-| Tag 7+ | ECMWF-IFS, GFS-Global (ICON-EU außerhalb Reichweite) |
-
-## Geänderte Dateien
-
-- DB-Migration auf `app_settings`
-- `src/server/forecast.functions.ts` (1 Zeile)
+- Keine Änderung an `OpenMeteoUsageCard` — der zeigt korrekt den `om:ratelimit:pressure-map`-Marker. Sobald der gelöscht ist und nur noch bei echten Tageslimits gesetzt wird, verschwindet auch das rote Badge.
+- Keine Änderung am Quota-Counter (`openmeteo_usage`) — der ist korrekt.

@@ -73,14 +73,30 @@ async function isRateLimited(): Promise<boolean> {
   }
 }
 
-async function setRateLimited(): Promise<void> {
+type RateLimitTier = "daily" | "hourly" | "minutely";
+
+function classify429Body(body: string): RateLimitTier {
+  if (/daily/i.test(body)) return "daily";
+  if (/hourly/i.test(body)) return "hourly";
+  return "minutely";
+}
+
+function ttlIsoForTier(tier: RateLimitTier, now = new Date()): string {
+  if (tier === "daily") return nextUtcMidnightIso(now);
+  const ms = tier === "hourly" ? 30 * 60 * 1000 : 2 * 60 * 1000;
+  return new Date(now.getTime() + ms).toISOString();
+}
+
+async function setRateLimited(tier: RateLimitTier = "daily", body = ""): Promise<void> {
   try {
+    const expiresAt = ttlIsoForTier(tier);
+    console.warn(`[pressure-map] negative-cache ${tier} → expires ${expiresAt} (body: ${body.slice(0, 200)})`);
     await supabaseAdmin
       .from("weather_cache")
       .upsert({
         cache_key: RATELIMIT_CACHE_KEY,
-        payload: { reason: "Open-Meteo daily limit exceeded" },
-        expires_at: nextUtcMidnightIso(),
+        payload: { reason: `Open-Meteo ${tier} limit exceeded`, tier },
+        expires_at: expiresAt,
         fetched_at: new Date().toISOString(),
       }, { onConflict: "cache_key" });
   } catch (e) {
@@ -106,6 +122,8 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   let consecutive429 = 0;
   let total429 = 0;
   let attempted = 0;
+  let lastBody = "";
+  let lastTier: RateLimitTier = "minutely";
 
   for (let i = 0; i < lats.length; i += BATCH) {
     if (i > 0) await new Promise((r) => setTimeout(r, 250));
@@ -123,19 +141,22 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     try {
       const res = await fetchOpenMeteo(url, "pressure_map");
       if (!res.ok) {
+        const body = await res.text().catch(() => "");
         if (res.status === 429) {
           consecutive429++;
           total429++;
-          // Early abort: 3 consecutive 429s → daily limit is exhausted.
-          if (consecutive429 >= 3) {
-            console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive 429s (batch ${i})`);
-            await setRateLimited();
+          lastBody = body;
+          lastTier = classify429Body(body);
+          // Early abort only on real DAILY limits, otherwise keep trying.
+          if (lastTier === "daily" && consecutive429 >= 3) {
+            console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive DAILY 429s (batch ${i})`);
+            await setRateLimited("daily", body);
             throw new OpenMeteoRateLimitError();
           }
         } else {
           consecutive429 = 0;
         }
-        console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${await res.text()}`);
+        console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${body.slice(0, 200)}`);
         continue;
       }
       consecutive429 = 0;
@@ -170,9 +191,10 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     }
   }
 
-  // If majority of batches were 429 (but not 3 in a row), still treat as ratelimit.
+  // If majority of batches were 429 (but not 3 daily in a row), still treat as ratelimit
+  // — but with the actual tier so a minutely burst doesn't lock us out for the whole day.
   if (total429 > 0 && total429 >= attempted / 2) {
-    await setRateLimited();
+    await setRateLimited(lastTier, lastBody);
     throw new OpenMeteoRateLimitError();
   }
 
