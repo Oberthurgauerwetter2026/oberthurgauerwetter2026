@@ -781,13 +781,37 @@ function applyStationBias(day: { date?: string; tmin?: { avg?: number } | null; 
   };
 }
 
-// Typed Open-Meteo error: distinguishes daily quota (429 with quota text) from
-// transient errors. Callers can react differently (skip retries, set negative cache).
+// Typed Open-Meteo error: distinguishes daily/hourly/minutely quota from
+// transient errors. Callers react with different negative-cache TTLs.
+export type OpenMeteoErrorCode =
+  | "RATE_LIMIT_DAILY"
+  | "RATE_LIMIT_HOURLY"
+  | "RATE_LIMIT_MINUTELY"
+  | "OTHER";
 class OpenMeteoError extends Error {
-  code: "RATE_LIMIT" | "OTHER";
-  constructor(message: string, code: "RATE_LIMIT" | "OTHER") {
+  code: OpenMeteoErrorCode;
+  constructor(message: string, code: OpenMeteoErrorCode) {
     super(message);
     this.code = code;
+  }
+}
+
+// Classify an Open-Meteo 429 response body into the correct rate-limit tier.
+// Open-Meteo returns "Minutely|Hourly|Daily API request limit exceeded".
+function classify429(body: string): OpenMeteoErrorCode {
+  if (/daily/i.test(body)) return "RATE_LIMIT_DAILY";
+  if (/hourly/i.test(body)) return "RATE_LIMIT_HOURLY";
+  // Treat unknown 429 ("limit exceeded" without scope, or generic) as minutely burst.
+  return "RATE_LIMIT_MINUTELY";
+}
+
+function ttlForRateLimit(code: OpenMeteoErrorCode): number {
+  // milliseconds
+  switch (code) {
+    case "RATE_LIMIT_DAILY":   return -1; // sentinel → use UTC midnight
+    case "RATE_LIMIT_HOURLY":  return 30 * 60 * 1000;
+    case "RATE_LIMIT_MINUTELY": return 2 * 60 * 1000;
+    default: return 2 * 60 * 1000;
   }
 }
 
