@@ -855,7 +855,7 @@ export async function runAutoForecast(creatorId: string | null) {
   {
     const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
     const body = enforceSkyConsistency(
-      await generateText(promptTemplate, `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`),
+      await generateTextNominal(promptTemplate, `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`),
       firstData,
     );
     entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: firstData, forecast_id: forecast.id });
@@ -867,13 +867,13 @@ export async function runAutoForecast(creatorId: string | null) {
     const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
     const formatted = date.toLocaleDateString("de-CH", { day: "2-digit", month: "long" });
     const title = i === 1 ? `Morgen, ${weekday} ${formatted}` : `${weekday}, ${formatted}`;
-    const body = enforceSkyConsistency(await generateText(promptTemplate, `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted}:\n${JSON.stringify(day, null, 2)}`), day);
+    const body = enforceSkyConsistency(await generateTextNominal(promptTemplate, `Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted}:\n${JSON.stringify(day, null, 2)}`), day);
     entries.push({ position: i + 1, entry_date: day.date, title, body, weather_data: day, forecast_id: forecast.id });
   }
   {
     const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean) as any[];
     if (trendDays.length) {
-      const body = await generateText(promptTemplate, `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für Tage 6-10:\n${JSON.stringify(trendDays, null, 2)}`);
+      const body = await generateTextNominal(promptTemplate, `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für Tage 6-10:\n${JSON.stringify(trendDays, null, 2)}`);
       entries.push({ position: 7, entry_date: trendDays[0].date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: forecast.id });
     }
   }
