@@ -14,11 +14,14 @@ export const Route = createFileRoute("/api/public/hooks/generate-pressure-map")(
         }
         try {
           const result = await generatePressureMap();
+          const status = result.skipped
+            ? `Skip (cron) · bereits aktuell für ${result.targetUtc}`
+            : `OK (cron) · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB`;
           await supabaseAdmin
             .from("app_settings")
             .update({
               pressure_map_last_run: new Date().toISOString(),
-              pressure_map_last_status: `OK (cron) · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB`,
+              pressure_map_last_status: status,
             })
             .neq("id", "00000000-0000-0000-0000-000000000000");
           return Response.json(result);
