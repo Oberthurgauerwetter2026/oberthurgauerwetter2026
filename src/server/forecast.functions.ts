@@ -2995,9 +2995,12 @@ export const regenerateEntry = createServerFn({ method: "POST" })
       ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
       : "";
     const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data, tempHint);
-    const body = stripTiefstwerteForAfternoon(
-      enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data),
-      entry.title,
+    const body = enforceFrostWarning(
+      stripTiefstwerteForAfternoon(
+        enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data),
+        entry.title,
+      ),
+      entry.weather_data,
     );
     const { error: uErr } = await supabase
       .from("forecast_entries")
