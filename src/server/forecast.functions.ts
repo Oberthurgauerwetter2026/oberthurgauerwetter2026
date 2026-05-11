@@ -881,15 +881,8 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
       .eq("cache_key", negKey)
       .maybeSingle();
     if (data?.expires_at && data.expires_at > new Date().toISOString()) {
-      // Ignoriere Alt-Marker, deren TTL nicht auf UTC-Mitternacht gesetzt wurde
-      // (Pre-Fix: fixe 1h-TTL). Nur Marker mit "T..00:00:00" UTC sind gültig.
-      const isUtcMidnight = /T00:00:00(\.0+)?Z$/.test(data.expires_at);
-      if (!isUtcMidnight) {
-        console.warn(`[open-meteo] ignoring stale rate-limit marker for ${models} (expires_at=${data.expires_at} is not UTC midnight)`);
-      } else {
-        console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at} (UTC, = Open-Meteo quota reset)`);
-        return null;
-      }
+      console.warn(`[open-meteo] skipping ${models} — rate-limit cache active until ${data.expires_at}`);
+      return null;
     }
   } catch (e) {
     // Cache lookup failed — proceed with the call.
@@ -899,15 +892,23 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
     return await fetchOpenMeteo(lat, lon, models, includeHourly);
   } catch (e) {
     console.warn(e instanceof Error ? e.message : e);
-    // On daily-quota errors, set a 1h negative-cache marker so subsequent calls
-    // (within the same generation, or from the user clicking again) bail out fast.
-    if (e instanceof OpenMeteoError && e.code === "RATE_LIMIT") {
+    // On rate-limit errors, set a negative-cache marker with TTL based on tier:
+    //  daily → bis 00:00 UTC, hourly → 30 min, minutely → 2 min.
+    if (
+      e instanceof OpenMeteoError &&
+      (e.code === "RATE_LIMIT_DAILY" ||
+        e.code === "RATE_LIMIT_HOURLY" ||
+        e.code === "RATE_LIMIT_MINUTELY")
+    ) {
       try {
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const expiresAt = nextUtcMidnightIso();
+        const ttlMs = ttlForRateLimit(e.code);
+        const expiresAt =
+          ttlMs < 0 ? nextUtcMidnightIso() : new Date(Date.now() + ttlMs).toISOString();
+        console.warn(`[open-meteo] negative-cache ${e.code} for ${models} → expires ${expiresAt}`);
         await supabaseAdmin.from("weather_cache").upsert({
           cache_key: rateLimitCacheKey(models),
-          payload: { rate_limited: true, models },
+          payload: { rate_limited: true, models, code: e.code },
           fetched_at: new Date().toISOString(),
           expires_at: expiresAt,
         });
