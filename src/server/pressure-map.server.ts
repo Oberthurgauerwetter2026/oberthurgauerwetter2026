@@ -138,8 +138,6 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     url.searchParams.set("forecast_days", "2");
     url.searchParams.set("timezone", "UTC");
     let json: any;
-    let lastBody = "";
-    let lastTier: RateLimitTier = "minutely";
     try {
       const res = await fetchOpenMeteo(url, "pressure_map");
       if (!res.ok) {
