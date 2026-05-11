@@ -2932,7 +2932,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
       tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
-        position: pos, entry_date: day.date, title, body: enforceSkyConsistency(body, day), weather_data: day, forecast_id: data.forecastId,
+        position: pos, entry_date: day.date, title, body: enforceFrostWarning(enforceSkyConsistency(body, day), day), weather_data: day, forecast_id: data.forecastId,
       })));
     }
 
