@@ -2780,7 +2780,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     if (!degraded) {
       const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
-        const synoptic = await fetchSynopticTrend(trendDays as any).catch((e) => {
+        const synoptic = await fetchSynopticTrend(trendDays as any).catch((e: unknown) => {
           console.warn("[trend] synoptic fetch failed", e);
           return null;
         });
