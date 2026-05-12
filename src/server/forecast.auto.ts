@@ -878,7 +878,12 @@ export async function runAutoForecast(creatorId: string | null) {
   {
     const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean) as any[];
     if (trendDays.length) {
-      const body = await generateTextNominal(promptTemplate, `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für Tage 6-10:\n${JSON.stringify(trendDays, null, 2)}`);
+      const synoptic = await fetchSynopticTrend(trendDays).catch((e: unknown) => {
+        console.warn("[trend-auto] synoptic fetch failed", e);
+        return null;
+      });
+      const userPrompt = buildTrendUserPrompt(locationName, trendDays, synoptic);
+      const body = await generateTextNominal(promptTemplate, userPrompt);
       entries.push({ position: 7, entry_date: trendDays[0].date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: forecast.id });
     }
   }
