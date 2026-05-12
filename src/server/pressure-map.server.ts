@@ -245,7 +245,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
 
   // Echte Limits (hourly/daily) → Marker setzen, damit weitere Aufrufe pausieren.
   // Minutely → KEIN Marker; transient, heilt sich durch Backoff (65s) selbst.
-  const finalTier: RateLimitTier = lastTier;
+  const finalTier = lastTier as RateLimitTier;
   if (total429 > 0 && total429 >= attempted / 2 && (finalTier === "daily" || finalTier === "hourly")) {
     await setRateLimited(finalTier, lastBody);
     throw new OpenMeteoRateLimitError();
