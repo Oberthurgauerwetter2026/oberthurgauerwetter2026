@@ -211,9 +211,10 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     }
   }
 
-  // If majority of batches were 429 (but not 3 daily in a row), still treat as ratelimit
-  // — but with the actual tier so a minutely burst doesn't lock us out for the whole day.
-  if (total429 > 0 && total429 >= attempted / 2) {
+  // Echte Limits (hourly/daily) → Marker setzen, damit weitere Aufrufe pausieren.
+  // Minutely → KEIN Marker; transient, heilt sich durch Backoff (65s) selbst.
+  // Falls trotzdem zu wenige Werte ankamen, fällt das unten in der „Zu wenige gültige Druckwerte"-Prüfung auf.
+  if (total429 > 0 && total429 >= attempted / 2 && (lastTier === "daily" || lastTier === "hourly")) {
     await setRateLimited(lastTier, lastBody);
     throw new OpenMeteoRateLimitError();
   }
