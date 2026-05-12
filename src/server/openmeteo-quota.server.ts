@@ -12,7 +12,8 @@ export type OmSource =
   | "pressure_gradient"
   | "nowcast"
   | "elevation"
-  | "historical_bias";
+  | "historical_bias"
+  | "synoptic_trend";
 
 export const OPEN_METEO_DAILY_LIMIT = 10000;
 
