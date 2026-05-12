@@ -163,11 +163,19 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
             if (lastTier === "daily" && consecutive429 >= 3) {
               console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive DAILY 429s (batch ${i})`);
               await setRateLimited("daily", body);
-              throw new OpenMeteoRateLimitError();
+              aborted = new OpenMeteoRateLimitError();
+              throw aborted;
+            }
+            if (lastTier === "hourly") {
+              // 30 min wait wäre länger als das Edge-Timeout → sofort abbrechen
+              console.warn(`Open-Meteo: aborting on HOURLY 429 (batch ${i})`);
+              await setRateLimited("hourly", body);
+              aborted = new OpenMeteoRateLimitError();
+              throw aborted;
             }
             if (attempt < 3) {
-              const waitMs = lastTier === "minutely" ? 65000 : lastTier === "hourly" ? 1800000 : 1500;
-              console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1}: 429 ${lastTier}, waiting ${waitMs}ms`);
+              const waitMs = 65000; // minutely
+              console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1}: 429 minutely, waiting ${waitMs}ms`);
               await new Promise((r) => setTimeout(r, waitMs));
               continue;
             }
@@ -194,7 +202,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
         // network error → retry
       }
     }
-    if (!batchOk) continue;
+    if (!batchOk) return;
     const list = Array.isArray(json) ? json : [json];
     for (let k = 0; k < list.length; k++) {
       const loc = list[k];
@@ -218,13 +226,28 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
         if (count > 0) precip[i + k] = sum;
       }
     }
+  };
+
+  // Worker pool: CONCURRENCY parallel runners pulling from a shared cursor.
+  const worker = async () => {
+    while (!aborted) {
+      const idx = cursor++;
+      if (idx >= batchStarts.length) return;
+      await runBatch(batchStarts[idx]);
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+  const elapsed = Date.now() - t0;
+  if (elapsed > 25000) {
+    console.warn(`[pressure-map] fetchGrids took ${elapsed}ms (>25s)`);
   }
 
   // Echte Limits (hourly/daily) → Marker setzen, damit weitere Aufrufe pausieren.
   // Minutely → KEIN Marker; transient, heilt sich durch Backoff (65s) selbst.
-  // Falls trotzdem zu wenige Werte ankamen, fällt das unten in der „Zu wenige gültige Druckwerte"-Prüfung auf.
-  if (total429 > 0 && total429 >= attempted / 2 && (lastTier === "daily" || lastTier === "hourly")) {
-    await setRateLimited(lastTier, lastBody);
+  const finalTier: RateLimitTier = lastTier;
+  if (total429 > 0 && total429 >= attempted / 2 && (finalTier === "daily" || finalTier === "hourly")) {
+    await setRateLimited(finalTier, lastBody);
     throw new OpenMeteoRateLimitError();
   }
 
