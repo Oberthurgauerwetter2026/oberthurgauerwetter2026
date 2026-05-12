@@ -27,9 +27,12 @@ export const Route = createFileRoute("/api/public/hooks/generate-pressure-map")(
           return Response.json(result);
         } catch (e: any) {
           const isRateLimit = e instanceof OpenMeteoRateLimitError || /Tageslimit|rate.?limit|429/i.test(e?.message ?? "");
+          const isInsufficient = /Zu wenige gültige Druckwerte/.test(e?.message ?? "");
           const status = isRateLimit
             ? "Pausiert: Open-Meteo Tageslimit erreicht (auto-retry 00:00 UTC)"
-            : `Fehler (cron): ${e?.message ?? String(e)}`;
+            : isInsufficient
+              ? `Transient: ${e?.message} — auto-retry beim nächsten Cron-Slot`
+              : `Fehler (cron): ${e?.message ?? String(e)}`;
           await supabaseAdmin
             .from("app_settings")
             .update({
