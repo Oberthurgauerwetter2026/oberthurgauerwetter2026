@@ -114,7 +114,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     }
   }
 
-  const BATCH = 100;
+  const BATCH = 50;
   const pressure: number[] = new Array(lats.length).fill(NaN);
   const t850: number[] = new Array(lats.length).fill(NaN);
   const precip: number[] = new Array(lats.length).fill(NaN);
@@ -126,7 +126,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   let lastTier: RateLimitTier = "minutely";
 
   for (let i = 0; i < lats.length; i += BATCH) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 250));
+    if (i > 0) await new Promise((r) => setTimeout(r, 1100));
     attempted++;
     const la = lats.slice(i, i + BATCH).join(",");
     const lo = lons.slice(i, i + BATCH).join(",");
@@ -139,9 +139,9 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     url.searchParams.set("timezone", "UTC");
     let json: any;
     let batchOk = false;
-    // Retry transient failures (5xx, network, 429-minutely) up to 3 attempts.
-    for (let attempt = 0; attempt < 3 && !batchOk; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt - 1)));
+    // Retry transient failures (5xx, network, 429) up to 4 attempts.
+    // minutely 429 → wait 65s (Open-Meteo's bucket window). 5xx/network → fast backoff.
+    for (let attempt = 0; attempt < 4 && !batchOk; attempt++) {
       try {
         const res = await fetchOpenMeteo(url, "pressure_map");
         if (!res.ok) {
@@ -156,13 +156,19 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
               await setRateLimited("daily", body);
               throw new OpenMeteoRateLimitError();
             }
-            // minutely 429 → retry
-            console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1}: 429 ${lastTier}, retrying`);
-            continue;
+            if (attempt < 3) {
+              const waitMs = lastTier === "minutely" ? 65000 : lastTier === "hourly" ? 1800000 : 1500;
+              console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1}: 429 ${lastTier}, waiting ${waitMs}ms`);
+              await new Promise((r) => setTimeout(r, waitMs));
+              continue;
+            }
+            console.warn(`Open-Meteo batch ${i} gave up after ${attempt + 1} 429-${lastTier} attempts`);
+            break;
           }
           consecutive429 = 0;
           // 5xx → retry, 4xx (non-429) → give up
-          if (res.status >= 500 && attempt < 2) {
+          if (res.status >= 500 && attempt < 3) {
+            await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt)));
             console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1}: ${res.status}, retrying`);
             continue;
           }
@@ -175,6 +181,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
       } catch (err) {
         if (err instanceof OpenMeteoRateLimitError) throw err;
         console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1} threw:`, err);
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt)));
         // network error → retry
       }
     }
@@ -204,9 +211,10 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     }
   }
 
-  // If majority of batches were 429 (but not 3 daily in a row), still treat as ratelimit
-  // — but with the actual tier so a minutely burst doesn't lock us out for the whole day.
-  if (total429 > 0 && total429 >= attempted / 2) {
+  // Echte Limits (hourly/daily) → Marker setzen, damit weitere Aufrufe pausieren.
+  // Minutely → KEIN Marker; transient, heilt sich durch Backoff (65s) selbst.
+  // Falls trotzdem zu wenige Werte ankamen, fällt das unten in der „Zu wenige gültige Druckwerte"-Prüfung auf.
+  if (total429 > 0 && total429 >= attempted / 2 && (lastTier === "daily" || lastTier === "hourly")) {
     await setRateLimited(lastTier, lastBody);
     throw new OpenMeteoRateLimitError();
   }

@@ -1,35 +1,43 @@
-## Problem
+## Diagnose
 
-Die Bodendruckkarte wird einmal täglich um 04:30 UTC per pg_cron generiert. Am 12. Mai schlug dieser eine Versuch fehl (`0/1344 gültige Druckwerte` — vermutlich wegen Open‑Meteo `429 minutely` durch parallelen Lastpeak von `forecast.auto.ts`). Da es **keinen Retry** gibt und kein zweiter Cron‑Slot existiert, blieb die Karte für den 13. Mai leer.
+Beim manuellen Erzeugen läuft `fetchGrids` 14 Batches à 100 Koordinaten mit nur 250 ms Pause. Open‑Meteo erlaubt ~600 Calls/Minute, aber durch parallel laufende Hintergrundjobs (`forecast.auto`, `synoptic_trend`, `pressure_gradient`, …) wird der **minutely** Bucket schnell voll. Die ersten Batches laufen, ab Batch ~6–8 kommt `429 minutely`.
 
-## Lösung (3 Schichten)
+Die aktuelle Retry‑Logik (500 / 1500 / 4500 ms) ist viel zu kurz für `minutely` — Open‑Meteo selbst sagt "try again in one minute". Wenn dann ≥50 % der Batches in einem Lauf 429 lieferten, schreibt der Code einen Negative‑Cache‑Eintrag (`om:ratelimit:pressure-map`, Tier `minutely`, 2 min TTL) und wirft `OpenMeteoRateLimitError`. Der Button zeigt deshalb genau den Status, den du siehst:
 
-### 1. Mehrere Cron‑Slots (Selbstheilung)
+> Pausiert: Open-Meteo Rate-Limit (auto-retry sobald frei)
 
-Statt nur 04:30 UTC zusätzlich um **05:30, 07:30 und 10:30 UTC** triggern. Die bestehende Idempotenz‑Logik (`OK`‑Status enthält bereits `targetDay` → Skip) sorgt dafür, dass nach Erfolg keine weiteren OM‑Calls anfallen. Implementierung via `cron.schedule` SQL über das Insert‑Tool (kein Migration‑File, da projektspezifische URL/Key).
+Bestätigt durch DB:
+- `weather_cache.om:ratelimit:pressure-map` → `tier: minutely`, expires nach 2 min
+- `openmeteo_usage` heute: `pressure_map: 44` Calls (≙ ein erfolgreicher Versuch + ein abgebrochener Lauf mit Retries)
 
-### 2. Retry pro Batch in `fetchGrids` (`src/server/pressure-map.server.ts`)
+Es ist **kein** Tageslimit (Limit 10000, heute Total 58).
 
-Aktuell: Batch fehlgeschlagen → `continue` → Werte bleiben NaN.
-Neu: Bei nicht‑daily‑Fehlern (Netzwerk, 5xx, 429‑minutely) bis zu **2 Wiederholungen** mit exponentiellem Backoff (500 ms, 1500 ms). Nur echte `daily 429` brechen sofort ab (wie heute).
+## Lösung
 
-### 3. Härtere Erfolgsbedingung mit Auto‑Retry des Hooks
+Drei kleine, gezielte Änderungen, alle in `src/server/pressure-map.server.ts`:
 
-Wenn am Ende `validCount < 100`, wird ein klar typisierter Fehler `INSUFFICIENT_DATA` zurückgegeben statt nur `Fehler: ...`. Der Cron‑Slot 05:30/07:30/10:30 läuft dann ohnehin und versucht es erneut, weil die Idempotenz‑Prüfung nur bei `OK` greift.
+### 1. Burst entzerren
 
-## Technische Details
+`BATCH` auf 50 verkleinern und die Pause zwischen Batches von 250 ms → **1100 ms** erhöhen. Damit liegen ~28 Batches × 1.1 s ≈ 31 s pro Lauf, sicher unter dem Minute‑Limit auch wenn parallel andere Jobs laufen.
 
-- **`src/server/pressure-map.server.ts`** — Retry‑Loop um den `fetchOpenMeteo`‑Call in `fetchGrids` (Zeilen ~140‑168). Maximal 3 Versuche pro Batch. Bei daily‑429 sofortiger Abbruch.
-- **`src/routes/api/public/hooks/generate-pressure-map.ts`** — Status‑String bei Insufficient‑Data ergänzen um Hinweis „auto‑retry beim nächsten Cron‑Slot".
-- **DB / pg_cron** — drei zusätzliche Schedules `generate-pressure-map-0530`, `-0730`, `-1030`. Bestehender 04:30‑Slot bleibt.
+### 2. Echter „1‑Minute"-Backoff bei `minutely`
+
+Im Retry‑Loop von `fetchGrids` (Zeilen 142‑180) bei `lastTier === "minutely"` den nächsten Versuch erst nach **65 s** statt 500 ms / 1500 ms machen, und auf bis zu **4 Versuche** erhöhen (heute 3). Bei `5xx` und Netzwerkfehler bleibt der schnelle Backoff.
+
+### 3. Negative‑Cache nur bei `hourly` / `daily`
+
+Den Block bei Zeilen 209‑212 (`if total429 >= attempted/2 → setRateLimited`) so anpassen, dass er **bei `minutely` nicht** den 2‑Minuten‑Marker setzt — minutely heilt sich durch (1) und (2) selbst. Stattdessen einfach einen klar getypten Fehler `INSUFFICIENT_DATA` werfen (oder den vorhandenen "Zu wenige gültige Druckwerte"‑Pfad nutzen), den der Hook bereits als `Transient: … — auto-retry beim nächsten Cron‑Slot` behandelt. Manueller Button‑Klick zeigt dann einen ehrlichen "Daten unvollständig"-Status statt des irreführenden "Tageslimit"-Wordings.
+
+Hourly‑ und Daily‑Pfade bleiben unverändert (echte Limits sollen weiterhin gemerkt werden).
 
 ## Nicht im Scope
 
-- Kein Modellwechsel (bleibt `icon_seamless`).
-- Kein Caching‑Bypass.
-- Keine UI‑Änderungen.
-- Kein Eingriff in `forecast.auto.ts` (Lastpeak entzerrt sich durch Retries).
+- Kein Modellwechsel, kein Caching‑Bypass, keine UI‑Änderung.
+- Keine Reduktion paralleler Hintergrundjobs.
+- Keine Migration nötig — alles in einer Datei.
 
 ## Erwartetes Ergebnis
 
-Selbst wenn der erste Slot durch transiente OM‑Fehler scheitert, generiert spätestens der 05:30‑Slot die Karte. Bleibt alles erfolgreich, fallen nur die Idempotenz‑Reads an (1 SELECT, keine OM‑Quota).
+- Manueller "Karte erzeugen"-Klick läuft ~30 s durch und liefert die Karte, auch wenn parallel `forecast.auto` läuft.
+- Falls doch ein `429 minutely` kommt, wartet der betroffene Batch 65 s und probiert erneut — der Lauf bleibt erfolgreich.
+- Die irreführende "Tageslimit"-Meldung verschwindet im Minutely‑Fall.
