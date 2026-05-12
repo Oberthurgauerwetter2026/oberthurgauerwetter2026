@@ -2779,7 +2779,11 @@ export const generateForecast = createServerFn({ method: "POST" })
     if (!degraded) {
       const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
       if (trendDays.length) {
-        const userPrompt = `Standort: ${locationName}. Schreibe einen kurzen Trend-Ausblick (3-4 Sätze) für die Tage 6-10, der die Grosswetterlage umreisst (z. B. dominierende Strömung, Hoch-/Tiefdruckeinfluss, übergeordnete Temperaturtendenz, allgemeiner Niederschlagscharakter). Keine tagesgenauen Werte, keine konkreten Temperaturen, keine Wochentagsnennung — bewusst allgemeiner und unschärfer als die Tagesprognosen. Datenbasis:\n${JSON.stringify(trendDays, null, 2)}`;
+        const synoptic = await fetchSynopticTrend(trendDays as any).catch((e) => {
+          console.warn("[trend] synoptic fetch failed", e);
+          return null;
+        });
+        const userPrompt = buildTrendUserPrompt(locationName, trendDays, synoptic);
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
         })));
