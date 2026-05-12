@@ -11,6 +11,7 @@ import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.ser
 import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
 import { fetchOpenMeteo as fetchOMTracked } from "./openmeteo-quota.server";
 import { generateTextNominal as runNominal } from "./nominal-style.server";
+import { fetchSynopticTrend, buildTrendUserPrompt } from "./synoptic-trend.server";
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
