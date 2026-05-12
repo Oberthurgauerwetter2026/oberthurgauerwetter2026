@@ -134,7 +134,7 @@ async function fetchEuropeMslp(forecastDays: number): Promise<{ times: string[];
   url.searchParams.set("latitude", lats.join(","));
   url.searchParams.set("longitude", lons.join(","));
   url.searchParams.set("hourly", "pressure_msl");
-  url.searchParams.set("models", "ecmwf_ifs025");
+  url.searchParams.set("models", "ecmwf_ifs025,gfs_global");
   url.searchParams.set("forecast_days", String(forecastDays));
   url.searchParams.set("timezone", "UTC");
 
@@ -146,12 +146,48 @@ async function fetchEuropeMslp(forecastDays: number): Promise<{ times: string[];
   const json = (await res.json()) as any;
   const list = Array.isArray(json) ? json : [json];
   if (!list.length) return null;
+
+  // Open-Meteo liefert pro Location entweder ein Objekt (bei genau 1 Modell)
+  // oder bei mehreren Modellen pro Variable Arrays mit Suffixen wie
+  // pressure_msl_ecmwf_ifs025 und pressure_msl_gfs_global.
+  const MODEL_KEYS = ["pressure_msl_ecmwf_ifs025", "pressure_msl_gfs_global"];
   const times: string[] = list[0]?.hourly?.time ?? [];
-  const perPoint = list.map((loc: any, i: number) => ({
-    lat: lats[i],
-    lon: lons[i],
-    pressure: (loc?.hourly?.pressure_msl ?? []) as number[],
-  }));
+
+  let ecmwfOk = 0;
+  let gfsOk = 0;
+
+  const perPoint = list.map((loc: any, i: number) => {
+    const hourly = loc?.hourly ?? {};
+    const series: number[][] = MODEL_KEYS
+      .map((k) => (Array.isArray(hourly[k]) ? (hourly[k] as number[]) : null))
+      .filter((s): s is number[] => Array.isArray(s));
+
+    if (Array.isArray(hourly[MODEL_KEYS[0]])) ecmwfOk++;
+    if (Array.isArray(hourly[MODEL_KEYS[1]])) gfsOk++;
+
+    // Fallback: falls (warum auch immer) nur das generische Feld kam.
+    if (series.length === 0 && Array.isArray(hourly.pressure_msl)) {
+      series.push(hourly.pressure_msl as number[]);
+    }
+
+    const len = times.length;
+    const merged = new Array<number>(len);
+    for (let h = 0; h < len; h++) {
+      let sum = 0;
+      let n = 0;
+      for (const s of series) {
+        const v = s[h];
+        if (Number.isFinite(v)) { sum += v; n++; }
+      }
+      merged[h] = n > 0 ? sum / n : NaN;
+    }
+    return { lat: lats[i], lon: lons[i], pressure: merged };
+  });
+
+  if (ecmwfOk !== gfsOk) {
+    console.warn(`[synoptic-trend] model coverage mismatch: ecmwf=${ecmwfOk} gfs=${gfsOk} of ${list.length}`);
+  }
+
   return { times, perPoint };
 }
 
