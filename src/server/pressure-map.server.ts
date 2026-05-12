@@ -138,34 +138,47 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     url.searchParams.set("forecast_days", "2");
     url.searchParams.set("timezone", "UTC");
     let json: any;
-    try {
-      const res = await fetchOpenMeteo(url, "pressure_map");
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        if (res.status === 429) {
-          consecutive429++;
-          total429++;
-          lastBody = body;
-          lastTier = classify429Body(body);
-          // Early abort only on real DAILY limits, otherwise keep trying.
-          if (lastTier === "daily" && consecutive429 >= 3) {
-            console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive DAILY 429s (batch ${i})`);
-            await setRateLimited("daily", body);
-            throw new OpenMeteoRateLimitError();
+    let batchOk = false;
+    // Retry transient failures (5xx, network, 429-minutely) up to 3 attempts.
+    for (let attempt = 0; attempt < 3 && !batchOk; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt - 1)));
+      try {
+        const res = await fetchOpenMeteo(url, "pressure_map");
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          if (res.status === 429) {
+            consecutive429++;
+            total429++;
+            lastBody = body;
+            lastTier = classify429Body(body);
+            if (lastTier === "daily" && consecutive429 >= 3) {
+              console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive DAILY 429s (batch ${i})`);
+              await setRateLimited("daily", body);
+              throw new OpenMeteoRateLimitError();
+            }
+            // minutely 429 → retry
+            console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1}: 429 ${lastTier}, retrying`);
+            continue;
           }
-        } else {
           consecutive429 = 0;
+          // 5xx → retry, 4xx (non-429) → give up
+          if (res.status >= 500 && attempt < 2) {
+            console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1}: ${res.status}, retrying`);
+            continue;
+          }
+          console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${body.slice(0, 200)}`);
+          break;
         }
-        console.warn(`Open-Meteo batch ${i} failed: ${res.status} ${body.slice(0, 200)}`);
-        continue;
+        consecutive429 = 0;
+        json = await res.json();
+        batchOk = true;
+      } catch (err) {
+        if (err instanceof OpenMeteoRateLimitError) throw err;
+        console.warn(`Open-Meteo batch ${i} attempt ${attempt + 1} threw:`, err);
+        // network error → retry
       }
-      consecutive429 = 0;
-      json = await res.json();
-    } catch (err) {
-      if (err instanceof OpenMeteoRateLimitError) throw err;
-      console.warn(`Open-Meteo batch ${i} threw:`, err);
-      continue;
     }
+    if (!batchOk) continue;
     const list = Array.isArray(json) ? json : [json];
     for (let k = 0; k < list.length; k++) {
       const loc = list[k];
