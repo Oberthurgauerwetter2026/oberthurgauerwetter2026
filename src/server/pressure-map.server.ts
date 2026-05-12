@@ -114,7 +114,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     }
   }
 
-  const BATCH = 100;
+  const BATCH = 50;
   const pressure: number[] = new Array(lats.length).fill(NaN);
   const t850: number[] = new Array(lats.length).fill(NaN);
   const precip: number[] = new Array(lats.length).fill(NaN);
