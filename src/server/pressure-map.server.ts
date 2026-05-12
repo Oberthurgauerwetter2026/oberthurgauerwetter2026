@@ -115,6 +115,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   }
 
   const BATCH = 50;
+  const CONCURRENCY = 4;
   const pressure: number[] = new Array(lats.length).fill(NaN);
   const t850: number[] = new Array(lats.length).fill(NaN);
   const precip: number[] = new Array(lats.length).fill(NaN);
@@ -124,9 +125,17 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
   let attempted = 0;
   let lastBody = "";
   let lastTier: RateLimitTier = "minutely";
+  let aborted: Error | null = null;
 
-  for (let i = 0; i < lats.length; i += BATCH) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 1100));
+  // Build batch start indices
+  const batchStarts: number[] = [];
+  for (let i = 0; i < lats.length; i += BATCH) batchStarts.push(i);
+
+  let cursor = 0;
+  const t0 = Date.now();
+
+  const runBatch = async (i: number) => {
+    if (aborted) return;
     attempted++;
     const la = lats.slice(i, i + BATCH).join(",");
     const lo = lons.slice(i, i + BATCH).join(",");
