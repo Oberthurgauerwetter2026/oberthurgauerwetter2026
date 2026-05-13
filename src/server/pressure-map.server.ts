@@ -13,9 +13,9 @@ import { fetchOpenMeteo } from "./openmeteo-quota.server";
 
 // Map extent
 const W = -25, E = 45, S = 30, N = 70;
-const STEP = 1.5; // degrees per grid cell
-const COLS = Math.round((E - W) / STEP) + 1; // 47
-const ROWS = Math.round((N - S) / STEP) + 1; // 28
+const STEP = 2.0; // degrees per grid cell
+const COLS = Math.round((E - W) / STEP) + 1; // 36
+const ROWS = Math.round((N - S) / STEP) + 1; // 21
 
 // Image dimensions
 const IMG_W = 1200;
