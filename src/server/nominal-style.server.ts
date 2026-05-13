@@ -31,28 +31,68 @@ export function enforceNominalStyle(text: string): { violations: string[] } {
   return { violations };
 }
 
-// Wrapper: ruft die übergebene Generator-Funktion, prüft Nominalstil,
-// retried bei jedem Verstoß genau 1× mit verschärftem User-Prompt.
+// Erkennt Sonnen-Vokabular im Nacht-Kontext (z. B. "In der Nacht meist klar,
+// teils sonnig"). Splittet den Text in Sätze/Halbsätze und prüft jedes Segment,
+// das einen Nacht-Trigger enthält, auf verbotene Sonnen-Begriffe.
+export function enforceNightSunConsistency(text: string): { violations: string[] } {
+  const NIGHT_TRIGGER = /\b(in der nacht|nachts|nachthälfte|gegen mitternacht|nach sonnenuntergang|vor sonnenaufgang)\b/i;
+  const SUN_TERMS = /\b(sonnig|heiter|freundlich|sonnenschein|aufhellungen?|sonnige lücken|wolkenlücken)\b/i;
+  // An Satzende-Zeichen ODER " - " (Telegrammstil-Trenner) splitten.
+  const segments = text.split(/[.!?]+|\s-\s/);
+  const violations: string[] = [];
+  for (const seg of segments) {
+    if (NIGHT_TRIGGER.test(seg) && SUN_TERMS.test(seg)) {
+      const m = seg.match(SUN_TERMS);
+      violations.push(`"${(m?.[0] ?? "").toLowerCase()}" im Nacht-Kontext`);
+    }
+  }
+  return { violations };
+}
+
+// Wrapper: ruft die übergebene Generator-Funktion, prüft Nominalstil + Nacht-Sonne-Konsistenz
+// in einem kombinierten Retry (max. 1×) mit verschärftem User-Prompt.
 export async function generateTextNominal(
   systemPrompt: string,
   userPrompt: string,
   generateFn: (sys: string, usr: string) => Promise<string>,
 ): Promise<string> {
   const first = await generateFn(systemPrompt, userPrompt);
-  const check = enforceNominalStyle(first);
-  if (check.violations.length < 1) return first;
-  console.log(`[nominal-style] Verstöße erkannt: ${check.violations.join(", ")} — Retry`);
-  const retryPrompt = userPrompt +
-    `\n\nWICHTIG: Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${check.violations.join(", ")}). ` +
-    `Schreibe ZWINGEND im Nominal-/Telegrammstil — keine finiten Vollverben, sondern Substantiv-Phrasen. ` +
-    `Beispiele: statt "die Sonne scheint" → "Sonnenschein"; statt "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"; ` +
-    `statt "es regnet" → "zeitweise Regen"; statt "Schneefallgrenze sinkt auf 900 m" → "Schneefallgrenze auf 900 m sinkend"; ` +
-    `statt "Temperatur steigt auf 12 Grad" → "Höchsttemperatur 12 Grad".`;
+  const nominal = enforceNominalStyle(first);
+  const nightSun = enforceNightSunConsistency(first);
+  if (nominal.violations.length < 1 && nightSun.violations.length < 1) return first;
+
+  const hints: string[] = [];
+  if (nominal.violations.length > 0) {
+    console.log(`[nominal-style] Verstöße erkannt: ${nominal.violations.join(", ")} — Retry`);
+    hints.push(
+      `Im vorherigen Versuch wurden Vollverb-Phrasen verwendet (${nominal.violations.join(", ")}). ` +
+      `Schreibe ZWINGEND im Nominal-/Telegrammstil — keine finiten Vollverben, sondern Substantiv-Phrasen. ` +
+      `Beispiele: statt "die Sonne scheint" → "Sonnenschein"; statt "Wolken ziehen auf" → "Aufzug von Wolkenfeldern"; ` +
+      `statt "es regnet" → "zeitweise Regen"; statt "Schneefallgrenze sinkt auf 900 m" → "Schneefallgrenze auf 900 m sinkend"; ` +
+      `statt "Temperatur steigt auf 12 Grad" → "Höchsttemperatur 12 Grad".`
+    );
+  }
+  if (nightSun.violations.length > 0) {
+    console.log(`[night-sun] Verstöße erkannt: ${nightSun.violations.join(", ")} — Retry`);
+    hints.push(
+      `Im vorherigen Versuch wurde im Nacht-Kontext Sonnen-Vokabular verwendet (${nightSun.violations.join(", ")}). ` +
+      `Schreibe ZWINGEND ohne "sonnig/teils sonnig/heiter/freundlich/Sonnenschein/Aufhellungen/sonnige Lücken/Wolkenlücken", ` +
+      `sobald ein Satzteil die Nacht beschreibt ("in der Nacht", "nachts", "Nachthälfte", "nach Sonnenuntergang", "vor Sonnenaufgang"). ` +
+      `Verwende stattdessen "klar", "meist klar", "sternenklar", "gering bewölkt", "wolkenlos", "aufgelockerte Bewölkung", "stark bewölkt", "bedeckt", "Nebel-/Hochnebelfelder". ` +
+      `Beispiel: statt "In der Nacht meist klar, teils sonnig" → "In der Nacht meist klar, nur vereinzelt dünne Wolkenfelder".`
+    );
+  }
+  const retryPrompt = userPrompt + "\n\nWICHTIG: " + hints.join("\n\n");
+
   try {
     const second = await generateFn(systemPrompt, retryPrompt);
-    const recheck = enforceNominalStyle(second);
-    if (recheck.violations.length > 0) {
-      console.warn(`[nominal-style] Auch Retry enthält Verstöße: ${recheck.violations.join(", ")}`);
+    const reNominal = enforceNominalStyle(second);
+    const reNight = enforceNightSunConsistency(second);
+    if (reNominal.violations.length > 0) {
+      console.warn(`[nominal-style] Auch Retry enthält Verstöße: ${reNominal.violations.join(", ")}`);
+    }
+    if (reNight.violations.length > 0) {
+      console.warn(`[night-sun] Auch Retry enthält Verstöße: ${reNight.violations.join(", ")}`);
     }
     return second;
   } catch (e) {
