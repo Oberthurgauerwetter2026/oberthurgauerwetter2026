@@ -1,10 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { getOpenMeteoUsage } from "@/lib/admin-stats.functions";
+import { Button } from "@/components/ui/button";
+import { getOpenMeteoUsage, clearOpenMeteoRateLimits } from "@/lib/admin-stats.functions";
 import { useAuth } from "@/hooks/use-auth";
-import { AlertTriangle, CheckCircle2, Clock } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Loader2, RotateCcw } from "lucide-react";
 
 const SOURCE_LABELS: Record<string, string> = {
   forecast: "Forecast",
@@ -24,6 +27,8 @@ function formatTime(iso: string | null) {
 
 export function OpenMeteoUsageCard() {
   const { session } = useAuth();
+  const qc = useQueryClient();
+  const [clearing, setClearing] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ["openmeteo-usage"],
     queryFn: () =>
@@ -33,6 +38,22 @@ export function OpenMeteoUsageCard() {
     refetchInterval: 30_000,
     enabled: !!session,
   });
+
+  async function handleClearRateLimit() {
+    if (!session) return;
+    setClearing(true);
+    try {
+      const res: any = await clearOpenMeteoRateLimits({
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      } as any);
+      toast.success(`${res.cleared} Marker gelöscht`);
+      await qc.invalidateQueries({ queryKey: ["openmeteo-usage"] });
+    } catch (e: any) {
+      toast.error(e.message ?? "Fehler beim Zurücksetzen");
+    } finally {
+      setClearing(false);
+    }
+  }
 
   if (isLoading || !data) {
     return (
@@ -101,6 +122,18 @@ export function OpenMeteoUsageCard() {
         {data.last429At && (
           <div className="text-xs text-destructive">
             Letzter 429-Fehler: {formatTime(data.last429At)} ({SOURCE_LABELS[data.last429Source ?? ""] ?? data.last429Source})
+          </div>
+        )}
+
+        {(data.isRateLimited || (data.activeMarkerCount ?? 0) > 0) && (
+          <div className="flex items-center justify-between gap-2 pt-2 border-t">
+            <span className="text-xs text-muted-foreground">
+              {data.activeMarkerCount ?? 0} aktive Rate-Limit-Marker
+            </span>
+            <Button size="sm" variant="outline" onClick={handleClearRateLimit} disabled={clearing}>
+              {clearing ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-2 h-3 w-3" />}
+              Rate-Limit zurücksetzen
+            </Button>
           </div>
         )}
       </CardContent>
