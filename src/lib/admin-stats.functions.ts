@@ -4,7 +4,6 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { OPEN_METEO_DAILY_LIMIT } from "@/server/openmeteo-quota.server";
 
 const RATELIMIT_KEY_PREFIX = "om:ratelimit:";
-const RATELIMIT_KEY = "om:ratelimit:pressure-map";
 
 function utcDay(): string {
   return new Date().toISOString().slice(0, 10);
