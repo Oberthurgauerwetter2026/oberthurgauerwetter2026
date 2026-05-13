@@ -1,53 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { generatePressureMap } from "@/server/pressure-map.server";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
-
-async function ensureAdmin(supabase: any, userId: string) {
-  const { data, error } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", userId);
-  if (error) throw new Error(error.message);
-  const roles = (data ?? []).map((r: { role: string }) => r.role);
-  if (!roles.includes("admin")) throw new Error("Forbidden: admin required");
-}
-
-export const triggerPressureMap = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .handler(async ({ context }) => {
-    const { supabase, userId } = context;
-    await ensureAdmin(supabase, userId);
-    try {
-      const result = await generatePressureMap();
-      const status = result.skipped
-        ? `Skip · bereits aktuell für ${result.targetUtc}`
-        : `OK · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB`;
-      await supabaseAdmin
-        .from("app_settings")
-        .update({
-          pressure_map_last_run: new Date().toISOString(),
-          pressure_map_last_status: status,
-        })
-        .neq("id", "00000000-0000-0000-0000-000000000000");
-      return { ok: true as const, ...result };
-    } catch (e: any) {
-      const msg = e?.message ?? String(e);
-      const isRateLimit = e?.name === "OpenMeteoRateLimitError" || /Tageslimit|rate.?limit|429/i.test(msg);
-      const status = isRateLimit
-        ? "Pausiert: Open-Meteo Rate-Limit (auto-retry sobald frei)"
-        : `Fehler: ${msg}`;
-      await supabaseAdmin
-        .from("app_settings")
-        .update({
-          pressure_map_last_run: new Date().toISOString(),
-          pressure_map_last_status: status,
-        })
-        .neq("id", "00000000-0000-0000-0000-000000000000");
-      // Return structured error instead of throwing — avoids blank-screen on the client.
-      return { ok: false as const, error: isRateLimit ? "RATE_LIMITED" : "FAILED", message: status };
-    }
-  });
 
 export const getPressureMapStatus = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
