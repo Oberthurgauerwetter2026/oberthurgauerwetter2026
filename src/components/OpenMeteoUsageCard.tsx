@@ -124,6 +124,18 @@ export function OpenMeteoUsageCard() {
             Letzter 429-Fehler: {formatTime(data.last429At)} ({SOURCE_LABELS[data.last429Source ?? ""] ?? data.last429Source})
           </div>
         )}
+
+        {(data.isRateLimited || (data.activeMarkerCount ?? 0) > 0) && (
+          <div className="flex items-center justify-between gap-2 pt-2 border-t">
+            <span className="text-xs text-muted-foreground">
+              {data.activeMarkerCount ?? 0} aktive Rate-Limit-Marker
+            </span>
+            <Button size="sm" variant="outline" onClick={handleClearRateLimit} disabled={clearing}>
+              {clearing ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-2 h-3 w-3" />}
+              Rate-Limit zurücksetzen
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
