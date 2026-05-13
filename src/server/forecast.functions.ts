@@ -2454,6 +2454,8 @@ VERBOTS-KLAUSEL "kein sonnig": Wenn EINE der folgenden Bedingungen gilt:
 - "sky_pattern" ist eines von "schauer_dominant", "regnerisch_bewoelkt", "bedeckt"
 DANN sind die Wörter "sonnig", "recht sonnig", "meist sonnig", "ziemlich sonnig", "heiter", "freundlich", "rasche Auflösung", "Auflockerung danach sonnig" ABSOLUT VERBOTEN. Erlaubte Alternativen für vereinzelte Aufhellungen: "sonnige Lücken", "Aufhellungen", "kurze trockene Phasen", "Wolkenlücken".
 
+TAGESZEIT-KONSISTENZ (Sonne nur tagsüber): In Sätzen oder Satzteilen, die einen Nacht-Kontext beschreiben (Trigger: "in der Nacht", "nachts", "in der ersten/zweiten Nachthälfte", "gegen Mitternacht", "nach Sonnenuntergang", "vor Sonnenaufgang", "in den frühen Morgenstunden vor Sonnenaufgang"), sind die Wörter "sonnig", "teils sonnig", "recht/meist/ziemlich sonnig", "heiter", "freundlich", "Sonnenschein", "Aufhellungen", "sonnige Lücken", "Wolkenlücken" ABSOLUT VERBOTEN — die Sonne steht unter dem Horizont. Erlaubt sind stattdessen: "klar", "meist klar", "sternenklar", "gering bewölkt", "wolkenlos", "aufgelockerte Bewölkung", "stark bewölkt", "bedeckt", "Nebel-/Hochnebelfelder". Beispiel falsch: "In der Nacht meist klar, teils sonnig." → richtig: "In der Nacht meist klar, nur vereinzelt dünne Wolkenfelder."
+
 KONSISTENZ-REGEL: Wenn der Wind-Absatz "in Schauernähe" oder "stürmische Böen in Schauernähe" enthält ODER "wind_gusts.class" = "strong"/"severe" ist, MUSS der Sky-Absatz Schauer/Regen/Niederschlag erwähnen. Widersprüche wie "recht sonnig … in Schauernähe" sind absolut verboten.
 
 GEWITTER-PFLICHT: Wenn "thunderstorm.class" eines von "isolated", "scattered", "widespread" ist, MUSS der Sky-Absatz "Gewitterneigung", "lokale Gewitter" oder "Gewitter" enthalten.

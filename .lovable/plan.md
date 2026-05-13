@@ -1,58 +1,39 @@
-## Diagnose
+## Problem
 
-Heute 06:00 UTC: Cron lief, **0 von 1316 Gitterpunkten** wurden geliefert. Open-Meteo antwortete für jeden der 27 Druckkarten-Batches mit `429 — Daily API request limit exceeded.` Die Druckkarte ist heute nicht mehr generierbar (frühestens morgen, wenn Open-Meteo das Tageslimit zurücksetzt).
+Im KI-Text erscheint die widersprüchliche Phrase „In der Nacht meist klar, **teils sonnig**." Sonnen-Vokabular („sonnig", „heiter", „freundlich", „Sonnenschein", „Aufhellungen") gehört nicht in einen Nacht-Kontext (Sonne steht unter dem Horizont).
 
-Strukturelle Ursache: Druckkarte (~27 OM-Calls) + Forecast-Generierung teilen sich denselben Lovable-Cloud-IP-Pool und damit dasselbe tägliche Open-Meteo-Limit. Wenn der Forecast vorher viele Calls verbraucht, fällt die Karte über die Grenze (oder umgekehrt).
+Aktuell gibt es keine Regel und keinen Post-Check, der diese Kombination unterbindet — weder im Prompt (`DEFAULT_SKY_RULES`) noch in `nominal-style.server.ts`.
 
-## Änderungen
+## Lösung
 
-### 1. Grid-Auflösung reduzieren (1.5° → 2.0°)
+Zweistufig: (1) explizite Prompt-Regel, damit das Modell es gar nicht erst produziert, (2) deterministischer Post-Validator mit 1× Retry — analog zum bestehenden Nominalstil-Mechanismus.
 
-`src/server/pressure-map.server.ts`:
-- `STEP = 1.5` → `STEP = 2.0`
-- Kommentare/Berechnungen für `COLS`/`ROWS` aktualisieren: 36 × 21 = **756 Gitterpunkte** statt 1316.
-- Mit `BATCH = 50` ergibt das **16 Batches** statt 27 → ~40 % weniger Open-Meteo-Calls.
-- Visuell: Isobaren bleiben durch Chaikin-Glättung + Catmull-Rom-Bezier praktisch identisch lesbar; nur sehr lokale Druckfeinheiten (z. B. kleine Hochs zwischen Alpenpässen) verschwinden.
-- Schwelle `validCount < 100` bleibt (entspricht jetzt ~13 % statt ~7,6 % — robust genug).
+### 1. Prompt-Regel ergänzen (`src/server/forecast.functions.ts`, in `DEFAULT_SKY_RULES`)
 
-### 2. Cron-Slot von 06:00 UTC auf 03:00 UTC vorziehen
+Neuer Absatz nach der bestehenden „VERBOTS-KLAUSEL kein sonnig":
 
-Über Insert-Tool (kein Migration, da userspezifische URL/Key):
+> **TAGESZEIT-KONSISTENZ (Sonne nur tagsüber):** In Sätzen oder Satzteilen, die einen Nacht-Kontext beschreiben (Trigger: „in der Nacht", „nachts", „in der ersten/zweiten Nachthälfte", „gegen Mitternacht", „in den frühen Morgenstunden vor Sonnenaufgang", „am späten Abend nach Sonnenuntergang"), sind die Wörter „sonnig", „teils sonnig", „recht/meist/ziemlich sonnig", „heiter", „freundlich", „Sonnenschein", „Aufhellungen", „sonnige Lücken", „Wolkenlücken" ABSOLUT VERBOTEN. Erlaubt sind stattdessen: „klar", „meist klar", „sternenklar", „gering bewölkt", „wolkenlos", „aufgelockerte Bewölkung", „stark bewölkt", „bedeckt", „Nebel-/Hochnebelfelder". Beispiel falsch: „In der Nacht meist klar, teils sonnig." → richtig: „In der Nacht meist klar, nur vereinzelt dünne Wolkenfelder."
 
-```sql
-SELECT cron.unschedule('generate-pressure-map-daily');
+### 2. Post-Validator + Retry (`src/server/nominal-style.server.ts`)
 
-SELECT cron.schedule(
-  'generate-pressure-map-daily',
-  '0 3 * * *',
-  $$
-  SELECT net.http_post(
-    url := 'https://project--e38eb7cd-9a65-493a-b3eb-f8b0eb5a851d.lovable.app/api/public/hooks/generate-pressure-map',
-    headers := jsonb_build_object(
-      'Content-Type','application/json',
-      'apikey','<ANON_KEY>'
-    ),
-    body := '{}'::jsonb
-  );
-  $$
-);
-```
+Neue exportierte Funktion `enforceNightSunConsistency(text)` analog zu `enforceNominalStyle`:
 
-Damit läuft die Karte **vor** der Forecast-Generierung (~03:28 UTC). Karten verbrauchen dann nur noch ~16 Calls aus dem frischen Tagesbudget; der Forecast hat anschließend praktisch das volle Open-Meteo-Limit zur Verfügung.
+- Splittet den Text in Sätze/Halbsätze (`/[.!?]|\s-\s/`).
+- Für jeden Satz, der einen Nacht-Trigger enthält (`/\b(in der Nacht|nachts|nachthälfte|gegen Mitternacht|nach Sonnenuntergang|vor Sonnenaufgang)\b/i`), prüft auf verbotene Sonnen-Wörter (`/\b(sonnig|heiter|freundlich|Sonnenschein|Aufhellungen?|sonnige Lücken|Wolkenlücken)\b/i`).
+- Liefert `{ violations: string[] }` mit den gefundenen Problemphrasen.
 
-### 3. Statusmeldung aktualisieren
+In `generateTextNominal` einbauen: nach dem bestehenden Nominalstil-Check zusätzlich Night-Sun-Check; bei Verstoß genau 1× Retry mit angehängter Anweisung:
 
-In `pickTargetTime` und im Skip-Check nichts ändern — bleibt „Tomorrow 12:00 UTC". Die Karte gilt also weiterhin für den Mittagsdruck des Folgetags.
+> WICHTIG: Im vorherigen Versuch wurde im Nacht-Kontext Sonnen-Vokabular verwendet ("…"). Schreibe ZWINGEND ohne „sonnig/heiter/freundlich/Sonnenschein/Aufhellungen" sobald die Nacht beschrieben wird. Verwende stattdessen „klar/meist klar/sternenklar/gering bewölkt/stark bewölkt/bedeckt/Nebel".
 
-## Was bleibt unverändert
+Bestehender Nominalstil-Retry bleibt unverändert; die beiden Checks werden gemeinsam ausgewertet (ein Retry, der beide Hinweise enthält, falls beide verletzt sind).
 
-- Stable Storage-URL `weather-maps/europe-pressure-latest.svg` — Einbettung in WordPress muss nicht angepasst werden.
-- Idempotency-Skip (gleicher Tag + OK-Status → kein Doppellauf).
-- Rate-Limit-Marker / Auto-Heal in `OpenMeteoUsageCard` (heute morgen eingebaut).
-- Forecast-Logik, MOSMIX, Bias-Korrektur, alles andere.
+## Technische Details
 
-## Erwartetes Ergebnis
+- Datei 1: `src/server/forecast.functions.ts` — nur Konstante `DEFAULT_SKY_RULES` erweitern (ein neuer Absatz). Kein Verhalten an anderer Stelle berührt.
+- Datei 2: `src/server/nominal-style.server.ts` — `enforceNightSunConsistency` hinzufügen, `generateTextNominal` so anpassen, dass beide Validatoren in einem kombinierten Retry münden (statt zwei getrennten Retry-Runden, um die Modell-Calls minimal zu halten).
+- Keine DB-, Cron- oder UI-Änderungen.
 
-- **Heute (13. Mai)**: Keine neue Karte möglich, Open-Meteo-Tageslimit ist erschöpft. Letzte Karte von gestern bleibt unter dem stabilen Link sichtbar.
-- **Ab morgen 03:00 UTC**: Karte erscheint zuverlässig vor der Forecast-Generierung. Etwa 40 % weniger Open-Meteo-Calls pro Lauf → Forecast bekommt sicher sein Kontingent.
-- **Karten-Optik**: praktisch unverändert; nur sehr feine lokale Druckdetails leicht weichgezeichnet.
+## Erwartetes Resultat
+
+Sätze wie „In der Nacht meist klar, teils sonnig" werden bereits vom Modell vermieden (Prompt-Regel) und im Restfall vom Validator abgefangen + automatisch durch eine konsistente Nacht-Formulierung ersetzt.
