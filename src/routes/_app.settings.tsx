@@ -668,8 +668,7 @@ function SettingsPage() {
 
 function PressureMapCard({ session }: { session: any }) {
   const [status, setStatus] = useState<{ enabled: boolean; lastRun: string | null; lastStatus: string | null; embedUrl: string } | null>(null);
-  const [running, setRunning] = useState(false);
-  const [bust, setBust] = useState(Date.now());
+  const [bust] = useState(Date.now());
 
   async function load() {
     if (!session) return;
@@ -681,24 +680,6 @@ function PressureMapCard({ session }: { session: any }) {
   }
   useEffect(() => { load(); }, [session]);
 
-  async function regen() {
-    if (!session) return;
-    setRunning(true);
-    try {
-      const { triggerPressureMap } = await import("@/lib/pressure-map.functions");
-      const res: any = await triggerPressureMap({ headers: { Authorization: `Bearer ${session.access_token}` } } as any);
-      if (res?.ok === false) {
-        toast.error(res.message ?? "Karte konnte nicht erzeugt werden");
-      } else if (res?.skipped) {
-        toast.info(`Bereits aktuell für ${res.targetUtc} – kein neuer Lauf.`);
-      } else {
-        toast.success("Karte neu erzeugt");
-      }
-      setBust(Date.now());
-      await load();
-    } catch (e: any) { toast.error(e.message); } finally { setRunning(false); }
-  }
-
   const embed = status?.embedUrl ?? "";
   const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
   const html = `<img src="${embed}" alt="${altText}" style="max-width:100%;height:auto" />`;
@@ -709,17 +690,12 @@ function PressureMapCard({ session }: { session: any }) {
         <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
         <CardDescription>
           Tägliche Vorhersagekarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
-          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Cron-Lauf täglich um 04:30 UTC für den
-          Folgetag — manuelle Auslösung wird übersprungen, wenn die Karte bereits aktuell ist.
-          Die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
+          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Cron-Lauf täglich um 06:00 UTC für den
+          Folgetag. Die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          <Button onClick={regen} disabled={running}>
-            {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Jetzt neu erzeugen
-          </Button>
           {status?.lastRun && (
             <span className="text-muted-foreground">
               Letzter Lauf: {new Date(status.lastRun).toLocaleString("de-CH")}
