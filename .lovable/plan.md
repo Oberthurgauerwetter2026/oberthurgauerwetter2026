@@ -1,39 +1,42 @@
 ## Ziel
 
-Open-Meteo-Tageskontingent entlasten: Bodendruckkarte nur noch 1×/Tag um **06:00 UTC** automatisch erzeugen, manueller „Jetzt neu erzeugen"-Button wird entfernt.
+1. **Sofort:** Drei stale `om:ratelimit:*`-Marker in `weather_cache` löschen → Forecast-Generierung läuft heute wieder mit allen drei Modellsets (Kurz-/Mittel-/Langfrist + Trend Tag 6–10).
+2. **Strukturell:** Admin-Button „Rate-Limit zurücksetzen" in den Settings, damit du das in Zukunft jederzeit selbst kannst.
 
 ## Änderungen
 
-### 1. Cron-Schedule auf täglich 06:00 UTC umstellen
+### 1. Marker sofort löschen (über Insert-Tool)
 
-In `cron.job` den bestehenden Druckkarten-Job neu anlegen:
-- Alten Job (vermutlich `generate-pressure-map-hourly` o. ä.) `unschedule`n.
-- Neuer Job `generate-pressure-map-daily` mit Schedule `0 6 * * *`, ruft via `pg_net` die bestehende Route `/api/public/hooks/generate-pressure-map` auf der stabilen Production-URL auf.
+```sql
+DELETE FROM weather_cache WHERE cache_key LIKE 'om:ratelimit:%';
+```
 
-Wird über das Supabase-Insert-Tool ausgeführt (kein Migration-File, da projektspezifische URL/Key).
+Betrifft genau die drei aktiven Marker (`meteoswiss_icon_ch1,...`, `meteoswiss_icon_ch2,arpege_europe`, `ecmwf_ifs025,gfs_global,icon_eu`). Forecast verwendet sofort wieder Open-Meteo.
 
-### 2. Manuellen Button entfernen
+### 2. Server-Function `clearOpenMeteoRateLimits` hinzufügen
 
-In `src/routes/_app.settings.tsx` (`PressureMapCard`):
-- Button „Jetzt neu erzeugen" + `regen()`-Handler + `running`-State entfernen.
-- Beschreibungstext anpassen: „Cron-Lauf täglich um **06:00 UTC**", Hinweis auf manuelle Auslösung streichen.
-- Status (letzter Lauf, letzter Status) und Vorschaubild bleiben erhalten.
+Neu in `src/lib/admin-stats.functions.ts`:
+- `createServerFn({ method: "POST" })` mit `requireSupabaseAuth`-Middleware.
+- Admin-Check (gleiches Muster wie `getOpenMeteoUsage`).
+- `DELETE FROM weather_cache WHERE cache_key LIKE 'om:ratelimit:%'` via `supabaseAdmin`.
+- Liefert `{ cleared: number }` zurück.
 
-In `src/lib/pressure-map.functions.ts`:
-- `triggerPressureMap` entfernen (nicht mehr genutzt).
-- `getPressureMapStatus` bleibt (Settings-Card liest weiterhin Status).
+### 3. UI-Button in `OpenMeteoUsageCard`
 
-### 3. Was bleibt unverändert
+In `src/components/OpenMeteoUsageCard.tsx`:
+- Button „Rate-Limit zurücksetzen" — nur sichtbar/aktiv, wenn `isRateLimited === true` oder mind. ein Marker existiert.
+- Klick → `clearOpenMeteoRateLimits()` aufrufen → Toast „N Marker gelöscht" → Card neu laden.
+- Loading-State mit `Loader2`-Spinner.
 
-- `src/server/pressure-map.server.ts` (Concurrency-Pool, Retry-Logik) — keine Änderung.
-- `src/routes/api/public/hooks/generate-pressure-map.ts` (Hook-Route) — keine Änderung, wird vom neuen Cron weiterhin aufgerufen.
-- Synoptik-Trend ECMWF+GFS — keine Änderung.
-- Forecast-Logik / Eingeschränkter Modus — keine Änderung.
-- `pressure_map_enabled`-Flag in `app_settings` — bleibt als Notbremse erhalten (Hook respektiert es bereits).
+## Was bleibt unverändert
+
+- TTL-Logik für DAILY/HOURLY/MINUTELY-Marker bleibt wie sie ist (24h / 30 min / 2 min).
+- `forecast.functions.ts` wird nicht angefasst.
+- Druckkarten-Cron (1×/Tag um 06:00 UTC) bleibt.
+- Kein neues DB-Schema.
 
 ## Erwartetes Ergebnis
 
-- OM-Verbrauch durch die Druckkarte sinkt von ~33'600/Tag (stündlich) auf **1'400/Tag** (~14 % des 10'000er-Limits).
-- Forecast-Erstellung hat ganztags freien OM-Spielraum, der „Eingeschränkter Modus"-Hinweis sollte nicht mehr durch die Druckkarte ausgelöst werden.
-- Karte ist täglich ab ca. 06:05 UTC (≈ 07/08 Uhr lokal) frisch verfügbar, gültig für 12 UTC des Folgetags.
-- Settings-Seite zeigt nur noch Status + Vorschau, keine manuelle Auslösung mehr.
+- **Heute:** Forecast funktioniert in der nächsten Generierung wieder vollständig (alle drei Modellsets verfügbar, Trend Tag 6–10 erscheint wieder).
+- **Künftig:** Falls erneut ein DAILY-Marker fälschlich gesetzt wird, kannst du in den Settings auf einen Button klicken und musst nicht bis 00:00 UTC warten.
+- Eingeschränkter Modus erscheint nur noch, wenn das Limit wirklich erreicht ist.
