@@ -37,12 +37,14 @@ export const getOpenMeteoUsage = createServerFn({ method: "GET" })
       .eq("day", day)
       .maybeSingle();
 
-    const { data: rl } = await supabaseAdmin
+    const nowIso = new Date().toISOString();
+    const { data: rlAll } = await supabaseAdmin
       .from("weather_cache")
-      .select("expires_at")
-      .eq("cache_key", RATELIMIT_KEY)
-      .maybeSingle();
-    const isRateLimited = !!(rl?.expires_at && new Date(rl.expires_at).getTime() > Date.now());
+      .select("cache_key,expires_at")
+      .like("cache_key", `${RATELIMIT_KEY_PREFIX}%`)
+      .gt("expires_at", nowIso);
+    const activeMarkers = rlAll ?? [];
+    const isRateLimited = activeMarkers.length > 0;
 
     return {
       day,
@@ -53,6 +55,22 @@ export const getOpenMeteoUsage = createServerFn({ method: "GET" })
       last429Source: row?.last_429_source ?? null,
       updatedAt: row?.updated_at ?? null,
       isRateLimited,
+      activeMarkerCount: activeMarkers.length,
       resetAtIso: nextUtcMidnightIso(),
     };
+  });
+
+export const clearOpenMeteoRateLimits = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabase, userId } = context;
+    await ensureAdmin(supabase, userId);
+
+    const { data, error } = await supabaseAdmin
+      .from("weather_cache")
+      .delete()
+      .like("cache_key", `${RATELIMIT_KEY_PREFIX}%`)
+      .select("cache_key");
+    if (error) throw new Error(error.message);
+    return { cleared: data?.length ?? 0 };
   });
