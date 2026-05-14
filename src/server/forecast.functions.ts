@@ -1476,10 +1476,10 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   if (!precArrs.length) return null;
 
   const blocks = {
-    night: { range: [0, 6], label: "Nacht (00–06)" },
-    morning: { range: [6, 12], label: "Vormittag (06–12)" },
-    afternoon: { range: [12, 18], label: "Nachmittag (12–18)" },
-    evening: { range: [18, 24], label: "Abend (18–24)" },
+    night: { range: [0, 6], label: "Nacht" },
+    morning: { range: [6, 12], label: "Vormittag" },
+    afternoon: { range: [12, 18], label: "Nachmittag" },
+    evening: { range: [18, 24], label: "Abend" },
   } as const;
 
   const result: Record<string, { label: string; precip_mm: number; max_prob: number | null; wet_hours: number }> = {};
