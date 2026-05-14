@@ -2012,11 +2012,20 @@ function formatDayData(weather: any, dayIndex: number) {
   const agg = (varName: string, perModel: Record<string, number>) =>
     aggregate(perModel, { variable: varName, regime, horizon });
 
-  const cloudcover = agg("cloudcover_mean", collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
+  const cloudPerModel = collectModelValuesTiered(weather, "cloudcover_mean", dayIndex);
+  const cloudcoverRaw = agg("cloudcover_mean", cloudPerModel);
+  const cloudWeighted = weightedCloudSunAvg(cloudPerModel);
+  const cloudcover = cloudcoverRaw && cloudWeighted
+    ? { ...cloudcoverRaw, avg: Math.round(cloudWeighted.avg), weights_used: cloudWeighted.weights_used }
+    : cloudcoverRaw;
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = agg("sunshine_duration", sunshineHours);
+  const sunshineRawAgg = agg("sunshine_duration", sunshineHours);
+  const sunWeighted = weightedCloudSunAvg(sunshineHours);
+  const sunshine_h = sunshineRawAgg && sunWeighted
+    ? { ...sunshineRawAgg, avg: sunWeighted.avg, weights_used: sunWeighted.weights_used }
+    : sunshineRawAgg;
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
   let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
