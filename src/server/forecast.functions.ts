@@ -109,7 +109,7 @@ const DAILY_VARS = [
   "weathercode",
   "cloudcover_mean",
 ];
-const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
+const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "cloudcover_low", "cloudcover_mid", "cloudcover_high", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
 
 // ===== Wind helpers =====
 // Region Oberthurgau: hochauflösende MeteoSwiss-/Météo-France-Modelle bilden den
