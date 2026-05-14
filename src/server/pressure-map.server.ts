@@ -655,6 +655,13 @@ function pickTargetTime(now = new Date()): string {
   return tomorrow.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
 }
 
+// Shift a "YYYY-MM-DDTHH:MM" UTC timestamp by N hours.
+function shiftHour(iso: string, deltaH: number): string {
+  const d = new Date(`${iso}:00Z`);
+  d.setUTCHours(d.getUTCHours() + deltaH);
+  return d.toISOString().slice(0, 16);
+}
+
 // Iteratively fill NaN cells from neighbours, then fill any remaining with fallback.
 function fillAndSmooth(g: Grid, fallback: number, smoothPasses = 3): Grid {
   let cur: Grid = g;
@@ -683,7 +690,7 @@ function fillAndSmooth(g: Grid, fallback: number, smoothPasses = 3): Grid {
   return cur;
 }
 
-export async function generatePressureMap(): Promise<{ url: string; targetUtc: string; bytes: number; skipped?: boolean }> {
+export async function generatePressureMap(): Promise<{ url: string; targetUtc: string; bytes: number; skipped?: boolean; source?: string }> {
   const targetUtc = pickTargetTime();
   const targetUtcIso = `${targetUtc}`; // matches Open-Meteo "YYYY-MM-DDTHH:MM"
   const targetDay = targetUtc.slice(0, 10);
@@ -756,11 +763,11 @@ export async function generatePressureMap(): Promise<{ url: string; targetUtc: s
     // Precipitation: don't over-smooth; fill missing with 0
     precip: fillAndSmooth(raw.precip, 0, 1),
   };
-  const svg = buildSvg(grids, targetUtcIso);
+  const svg = buildSvg(grids, usedTarget);
   const bytes = new TextEncoder().encode(svg);
 
   const latestPath = "europe-pressure-latest.svg";
-  const archivePath = `archive/europe-pressure-${targetUtc.slice(0, 10)}.svg`;
+  const archivePath = `archive/europe-pressure-${usedTarget.slice(0, 10)}.svg`;
 
   for (const path of [latestPath, archivePath]) {
     const { error } = await supabaseAdmin.storage.from("weather-maps").upload(path, bytes, {
@@ -773,5 +780,5 @@ export async function generatePressureMap(): Promise<{ url: string; targetUtc: s
 
   const supabaseUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
   const url = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/weather-maps/${latestPath}`;
-  return { url, targetUtc: targetUtcIso, bytes: bytes.length };
+  return { url, targetUtc: usedTarget, bytes: bytes.length, source: usedLabel };
 }
