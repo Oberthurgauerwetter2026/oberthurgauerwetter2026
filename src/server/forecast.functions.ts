@@ -1679,38 +1679,49 @@ function detectFogDissipation(
 
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
   const fogCloud = avg(earlyFog.map((r) => r.c).filter((v): v is number => v != null));
+  const fogCloudLow = avg(earlyFog.map((r) => r.c_low).filter((v): v is number => v != null));
+  const fogCloudHigh = avg(earlyFog.map((r) => r.c_high).filter((v): v is number => v != null));
   const fogSun = avg(earlyFog.map((r) => r.s ?? 0));
   const daySun = avg(dayWindow.map((r) => r.s ?? 0));
   const dayCloud = avg(dayWindow.map((r) => r.c).filter((v): v is number => v != null));
+  const dayCloudLow = avg(dayWindow.map((r) => r.c_low).filter((v): v is number => v != null));
   const sunnyHours = dayWindow.filter((r) => (r.s ?? 0) >= 30).length;
+  const hasLowData = earlyFog.some((r) => r.c_low != null);
 
   const hasFogCode = weathercodeByModel
     ? Object.values(weathercodeByModel).some((v) => v === 45 || v === 48)
     : false;
 
   // Nebelphase: 06–07 Uhr sehr bewölkt UND kaum Sonne.
+  // Wenn Schichtdaten vorhanden: tiefe Bewölkung muss dominieren — sonst sind
+  // es nur hohe Schleierwolken (kein Hochnebel-Pattern).
   const morningOvercast = fogCloud >= 85 && fogSun <= 10;
-  if (!morningOvercast) return null;
+  const lowDominant = hasLowData
+    ? fogCloudLow >= 75 && fogCloudHigh < fogCloudLow + 10
+    : true; // ohne Schichtdaten Verhalten wie bisher
+  if (!morningOvercast || !lowDominant) return null;
 
   // Auflösung: ENTWEDER Nebel-Code vorhanden (dann reicht morgens dichte
-  // Bewölkung), ODER über den Tag verteilt klar deutliche Sonne.
+  // Bewölkung), ODER über den Tag verteilt klar deutliche Sonne, ODER
+  // tiefe Bewölkung nimmt deutlich ab.
   const clearingByCode = hasFogCode && (sunnyHours >= 3 || daySun >= 25);
   const clearingBySun = sunnyHours >= 5 || daySun >= 35 || dayCloud <= 60;
-  if (!clearingByCode && !clearingBySun) return null;
+  const clearingByLow = hasLowData && dayCloudLow <= 50 && fogCloudLow - dayCloudLow >= 25;
+  if (!clearingByCode && !clearingBySun && !clearingByLow) return null;
 
   // Auflösungsstunde: erste Stunde ab 08:00, in der Sonne ≥ 20 min ODER
-  // Bewölkung < 75 %.
+  // tiefe Bewölkung < 60 % (bzw. Gesamtbewölkung < 75 % wenn keine Schichtdaten).
   let dissipation = 10;
   for (const r of profile) {
     if (r.h < 8 || r.h > 14) continue;
     const sunOk = r.s != null && r.s >= 20;
-    const cloudOk = r.c != null && r.c < 75;
-    if (sunOk || cloudOk) { dissipation = r.h; break; }
+    const lowOk = hasLowData ? (r.c_low != null && r.c_low < 60) : (r.c != null && r.c < 75);
+    if (sunOk || lowOk) { dissipation = r.h; break; }
   }
 
   return {
     dissipation_hour: dissipation,
-    morning_cloud_pct: Math.round(fogCloud),
+    morning_cloud_pct: Math.round(hasLowData ? fogCloudLow : fogCloud),
     afternoon_sunshine_min: Math.round(daySun),
   };
 }
