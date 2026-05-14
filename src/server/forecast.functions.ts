@@ -2546,6 +2546,7 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
     models_used: Object.keys(by_model),
     spread,
     by_model,
+    degraded_hourly,
   };
 }
 
