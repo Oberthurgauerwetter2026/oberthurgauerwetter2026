@@ -1607,6 +1607,9 @@ function buildHourlyProfile(
   const pArrs = filt(collectArrs("precipitation"));
   const wArrs = filt(collectArrs("windspeed_10m"));
   const cArrs = filt(collectArrs("cloudcover"));
+  const cLowArrs = filt(collectArrs("cloudcover_low"));
+  const cMidArrs = filt(collectArrs("cloudcover_mid"));
+  const cHighArrs = filt(collectArrs("cloudcover_high"));
   const sArrs = filt(collectArrs("sunshine_duration"));
 
   const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -1630,9 +1633,15 @@ function buildHourlyProfile(
     const pv = sample(pArrs, i);
     const wv = sample(wArrs, i);
     const cv = sample(cArrs, i);
+    const cLowV = sample(cLowArrs, i);
+    const cMidV = sample(cMidArrs, i);
+    const cHighV = sample(cHighArrs, i);
     const sv = sample(sArrs, i);
     const tMed = median(tv);
     const pMed = median(pv) ?? 0;
+    const cLowMed = median(cLowV);
+    const cMidMed = median(cMidV);
+    const cHighMed = median(cHighV);
     out.push({
       h: hr,
       t: tMed != null ? r1(tMed) : null,
@@ -1641,6 +1650,9 @@ function buildHourlyProfile(
       p_spread: r1(spread(pv)),
       w: median(wv) != null ? r1(median(wv)!) : null,
       c: median(cv) != null ? Math.round(median(cv)!) : null,
+      c_low: cLowMed != null ? Math.round(cLowMed) : null,
+      c_mid: cMidMed != null ? Math.round(cMidMed) : null,
+      c_high: cHighMed != null ? Math.round(cHighMed) : null,
       s: median(sv) != null ? r1(median(sv)! / 60) : null, // Sekunden → Minuten
       n_models: tv.length,
       src: "mod",
