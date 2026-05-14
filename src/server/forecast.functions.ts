@@ -109,7 +109,7 @@ const DAILY_VARS = [
   "weathercode",
   "cloudcover_mean",
 ];
-const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
+const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probability", "cloudcover", "cloudcover_low", "cloudcover_mid", "cloudcover_high", "windspeed_10m", "winddirection_10m", "wind_gusts_10m", "weathercode", "sunshine_duration", "dewpoint_2m", "relativehumidity_2m", "cape", "lifted_index"];
 
 // ===== Wind helpers =====
 // Region Oberthurgau: hochauflösende MeteoSwiss-/Météo-France-Modelle bilden den
@@ -217,6 +217,25 @@ function classifySky(data: any): { sky_label: string; sky_pattern: string } {
   const thunderActive = thunder && thunder !== "none";
   const dist = data?.precip_distribution;
   const blocks = dist?.blocks ?? null;
+  const layers = data?.cloud_layers ?? null;
+  const layersOk = layers?.has_data === true;
+  const cLow = layersOk ? layers.day?.low ?? null : null;
+  const cMid = layersOk ? layers.day?.mid ?? null : null;
+  const cHigh = layersOk ? layers.day?.high ?? null : null;
+  const cLowMorn = layersOk ? layers.morning?.low ?? null : null;
+
+  // 0. Hohe Schleierwolken bei sonst klarem Himmel — Sonne scheint milchig durch.
+  // Trigger: viel hohe Bewölkung, aber kaum tiefe/mittlere Wolken und nennenswert Sonne.
+  if (
+    layersOk
+    && cHigh != null && cHigh >= 60
+    && (cLow ?? 0) <= 30
+    && (cMid ?? 0) <= 40
+    && (sun == null || sun >= 5)
+    && (pp == null || pp < 40)
+  ) {
+    return { sky_label: "Sonne durch hohe Schleierwolken, oft milchig", sky_pattern: "schleierwolken_sonnig" };
+  }
 
   // 1. Sonnig & wolkenlos
   if (cloud != null && sun != null && cloud <= 5 && sun >= 10) {
@@ -283,9 +302,23 @@ function classifySky(data: any): { sky_label: string; sky_pattern: string } {
     };
   }
 
-  // 4. Bedeckt
+  // 4. Bedeckt — mit Hochnebel-Hinweis, wenn tiefe Bewölkung dominiert.
   if (cloud != null && sun != null && cloud >= 80 && sun <= 4) {
+    if (layersOk && cLow != null && cLow >= 80 && (cMid ?? 0) < 70 && (cHigh ?? 0) < 70) {
+      return { sky_label: "Trüb durch Hochnebel oder Stratusdecke", sky_pattern: "hochnebel_truebe" };
+    }
     return { sky_label: "Stark bewölkt bis bedeckt", sky_pattern: "bedeckt" };
+  }
+
+  // 4b. Hochnebel-Lage ohne Niederschlag, aber mit deutlicher tiefer Bewölkung morgens
+  // (Auflösung wird separat über detectFogDissipation/sky_label überschrieben).
+  if (
+    layersOk
+    && cLowMorn != null && cLowMorn >= 80
+    && (sun == null || sun < 5)
+    && (pp == null || pp < 40)
+  ) {
+    return { sky_label: "Tiefe Wolkendecke, vielfach trüb", sky_pattern: "hochnebel_lage" };
   }
 
   // 5. Überwiegend sonnig
@@ -1575,6 +1608,9 @@ type HourlyProfileRow = {
   p_spread: number;
   w: number | null;
   c: number | null;
+  c_low: number | null;
+  c_mid: number | null;
+  c_high: number | null;
   s: number | null;
   n_models: number;
   src?: "obs" | "mix" | "mod"; // obs = SMN/Radar, mix = Übergang, mod = Modell-Median (default)
@@ -1604,6 +1640,9 @@ function buildHourlyProfile(
   const pArrs = filt(collectArrs("precipitation"));
   const wArrs = filt(collectArrs("windspeed_10m"));
   const cArrs = filt(collectArrs("cloudcover"));
+  const cLowArrs = filt(collectArrs("cloudcover_low"));
+  const cMidArrs = filt(collectArrs("cloudcover_mid"));
+  const cHighArrs = filt(collectArrs("cloudcover_high"));
   const sArrs = filt(collectArrs("sunshine_duration"));
 
   const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -1627,9 +1666,15 @@ function buildHourlyProfile(
     const pv = sample(pArrs, i);
     const wv = sample(wArrs, i);
     const cv = sample(cArrs, i);
+    const cLowV = sample(cLowArrs, i);
+    const cMidV = sample(cMidArrs, i);
+    const cHighV = sample(cHighArrs, i);
     const sv = sample(sArrs, i);
     const tMed = median(tv);
     const pMed = median(pv) ?? 0;
+    const cLowMed = median(cLowV);
+    const cMidMed = median(cMidV);
+    const cHighMed = median(cHighV);
     out.push({
       h: hr,
       t: tMed != null ? r1(tMed) : null,
@@ -1638,6 +1683,9 @@ function buildHourlyProfile(
       p_spread: r1(spread(pv)),
       w: median(wv) != null ? r1(median(wv)!) : null,
       c: median(cv) != null ? Math.round(median(cv)!) : null,
+      c_low: cLowMed != null ? Math.round(cLowMed) : null,
+      c_mid: cMidMed != null ? Math.round(cMidMed) : null,
+      c_high: cHighMed != null ? Math.round(cHighMed) : null,
       s: median(sv) != null ? r1(median(sv)! / 60) : null, // Sekunden → Minuten
       n_models: tv.length,
       src: "mod",
@@ -1664,38 +1712,49 @@ function detectFogDissipation(
 
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
   const fogCloud = avg(earlyFog.map((r) => r.c).filter((v): v is number => v != null));
+  const fogCloudLow = avg(earlyFog.map((r) => r.c_low).filter((v): v is number => v != null));
+  const fogCloudHigh = avg(earlyFog.map((r) => r.c_high).filter((v): v is number => v != null));
   const fogSun = avg(earlyFog.map((r) => r.s ?? 0));
   const daySun = avg(dayWindow.map((r) => r.s ?? 0));
   const dayCloud = avg(dayWindow.map((r) => r.c).filter((v): v is number => v != null));
+  const dayCloudLow = avg(dayWindow.map((r) => r.c_low).filter((v): v is number => v != null));
   const sunnyHours = dayWindow.filter((r) => (r.s ?? 0) >= 30).length;
+  const hasLowData = earlyFog.some((r) => r.c_low != null);
 
   const hasFogCode = weathercodeByModel
     ? Object.values(weathercodeByModel).some((v) => v === 45 || v === 48)
     : false;
 
   // Nebelphase: 06–07 Uhr sehr bewölkt UND kaum Sonne.
+  // Wenn Schichtdaten vorhanden: tiefe Bewölkung muss dominieren — sonst sind
+  // es nur hohe Schleierwolken (kein Hochnebel-Pattern).
   const morningOvercast = fogCloud >= 85 && fogSun <= 10;
-  if (!morningOvercast) return null;
+  const lowDominant = hasLowData
+    ? fogCloudLow >= 75 && fogCloudHigh < fogCloudLow + 10
+    : true; // ohne Schichtdaten Verhalten wie bisher
+  if (!morningOvercast || !lowDominant) return null;
 
   // Auflösung: ENTWEDER Nebel-Code vorhanden (dann reicht morgens dichte
-  // Bewölkung), ODER über den Tag verteilt klar deutliche Sonne.
+  // Bewölkung), ODER über den Tag verteilt klar deutliche Sonne, ODER
+  // tiefe Bewölkung nimmt deutlich ab.
   const clearingByCode = hasFogCode && (sunnyHours >= 3 || daySun >= 25);
   const clearingBySun = sunnyHours >= 5 || daySun >= 35 || dayCloud <= 60;
-  if (!clearingByCode && !clearingBySun) return null;
+  const clearingByLow = hasLowData && dayCloudLow <= 50 && fogCloudLow - dayCloudLow >= 25;
+  if (!clearingByCode && !clearingBySun && !clearingByLow) return null;
 
   // Auflösungsstunde: erste Stunde ab 08:00, in der Sonne ≥ 20 min ODER
-  // Bewölkung < 75 %.
+  // tiefe Bewölkung < 60 % (bzw. Gesamtbewölkung < 75 % wenn keine Schichtdaten).
   let dissipation = 10;
   for (const r of profile) {
     if (r.h < 8 || r.h > 14) continue;
     const sunOk = r.s != null && r.s >= 20;
-    const cloudOk = r.c != null && r.c < 75;
-    if (sunOk || cloudOk) { dissipation = r.h; break; }
+    const lowOk = hasLowData ? (r.c_low != null && r.c_low < 60) : (r.c != null && r.c < 75);
+    if (sunOk || lowOk) { dissipation = r.h; break; }
   }
 
   return {
     dissipation_hour: dissipation,
-    morning_cloud_pct: Math.round(fogCloud),
+    morning_cloud_pct: Math.round(hasLowData ? fogCloudLow : fogCloud),
     afternoon_sunshine_min: Math.round(daySun),
   };
 }
@@ -1854,6 +1913,35 @@ function buildDayUserPrompt(intro: string, day: any, extraHint: string = ""): st
   return prompt;
 }
 
+// Aggregiert die Wolkenschicht-Information (low/mid/high) aus dem Stundenprofil
+// auf Tages-, Vormittags- und Nachmittagsebene. Wird für die Sky-Klassifikation
+// und Hochnebel-/Schleierwolken-Erkennung genutzt.
+function computeCloudLayers(profile: HourlyProfileRow[] | null | undefined): {
+  day: { low: number | null; mid: number | null; high: number | null };
+  morning: { low: number | null; mid: number | null; high: number | null };
+  afternoon: { low: number | null; mid: number | null; high: number | null };
+  has_data: boolean;
+} | null {
+  if (!profile?.length) return null;
+  const meanRound = (xs: number[]) =>
+    xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
+  const block = (rows: HourlyProfileRow[]) => ({
+    low: meanRound(rows.map((r) => r.c_low).filter((v): v is number => v != null)),
+    mid: meanRound(rows.map((r) => r.c_mid).filter((v): v is number => v != null)),
+    high: meanRound(rows.map((r) => r.c_high).filter((v): v is number => v != null)),
+  });
+  const dayRows = profile.filter((r) => r.h >= 6 && r.h <= 20);
+  const mornRows = profile.filter((r) => r.h >= 6 && r.h < 12);
+  const aftRows = profile.filter((r) => r.h >= 12 && r.h < 18);
+  const hasData = profile.some((r) => r.c_low != null || r.c_mid != null || r.c_high != null);
+  return {
+    day: block(dayRows),
+    morning: block(mornRows),
+    afternoon: block(aftRows),
+    has_data: hasData,
+  };
+}
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
@@ -1902,6 +1990,9 @@ function formatDayData(weather: any, dayIndex: number) {
   // Tagesgang (Niederschlagsverteilung) für Tag 0–4 vorab berechnen, damit
   // die Sky-Klassifikation den intraday-Verlauf berücksichtigen kann.
   const precipDist = dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null;
+  // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–4
+  const hourlyProfile = dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null;
+  const cloud_layers = computeCloudLayers(hourlyProfile);
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
   // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
   const skyClass = classifySky({
@@ -1911,10 +2002,11 @@ function formatDayData(weather: any, dayIndex: number) {
     precip_prob,
     thunderstorm,
     precip_distribution: precipDist,
+    cloud_layers,
   });
   // Nebel-Auflösung als Sonderfall für Tag 0/1 — überschreibt Klassifikation
   const fogDiss = dayIndex <= 1
-    ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+    ? detectFogDissipation(hourlyProfile, weathercode?.by_model)
     : false;
   const sky_label = fogDiss
     ? "Morgens Nebel-/Hochnebelfelder, im Tagesverlauf Auflösung, am Nachmittag sonnig"
@@ -1946,15 +2038,16 @@ function formatDayData(weather: any, dayIndex: number) {
     sky_label,
     cloudcover: cloudcoverFinal,
     cloudcover_source,
+    cloud_layers,
     weathercode,
     sunshine_h,
     precip_distribution: precipDist,
-    hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null,
+    hourly_profile: hourlyProfile,
     sky_pattern,
     fog_dissipation: fogDiss,
     wind_gusts: assessGusts(weather, dayIndex),
     thunderstorm,
-    humidity: assessHumidity(weather, dayIndex, dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null),
+    humidity: assessHumidity(weather, dayIndex, hourlyProfile),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
 }
