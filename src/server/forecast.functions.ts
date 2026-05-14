@@ -1489,6 +1489,23 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   return merged;
 }
 
+// Bekannte Modell-IDs aus den drei Tier-Listen (short/mid/long) + "default".
+// Wird genutzt, um beim Präfix-Matching von Hourly-Keys (`base_<modelId>`) ausschliesslich
+// echte Modellnamen zu akzeptieren — sonst werden z. B. `precipitation_probability_<model>`
+// als Modell `probability_<model>` interpretiert und korrumpieren die Aggregation.
+function getKnownModels(weather: any): Set<string> {
+  const out = new Set<string>(["default"]);
+  const lists = weather?.modelLists;
+  if (lists) {
+    for (const s of [lists.short, lists.mid, lists.long]) {
+      if (typeof s === "string") {
+        for (const m of s.split(",").map((x: string) => x.trim()).filter(Boolean)) out.add(m);
+      }
+    }
+  }
+  return out;
+}
+
 // Stündlicher Niederschlags-Tagesgang aus Open-Meteo (Tag 0/1).
 // Liefert 4 Blöcke (night/morning/afternoon/evening) mit mm-Summe + max % Wahrscheinlichkeit.
 function computePrecipDistribution(weather: any, dayIndex: number, fromHour: number = 0): any | null {
@@ -1496,11 +1513,15 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): number[][] => {
     const out: number[][] = [];
     if (Array.isArray(h[base])) out.push(h[base]);
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push(h[k]);
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const suffix = k.slice(prefix.length);
+      if (known.has(suffix)) out.push(h[k]);
     }
     return out;
   };
