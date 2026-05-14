@@ -1506,6 +1506,27 @@ function getKnownModels(weather: any): Set<string> {
   return out;
 }
 
+// Gemeinsamer Hourly-Key-Collector mit Whitelist auf bekannte Modell-IDs.
+// Returns Record<modelId, number[]> — "default" für den unsuffixed Basis-Key.
+// Vier Aufrufstellen (computePrecipDistribution, buildHourlyProfile, refineDayFromHour,
+// formatEveningNight) ziehen am selben Helper, damit das Whitelist-Pattern eine
+// einzige Quelle der Wahrheit hat.
+function makeCollectArrs(weather: any): (base: string) => Record<string, number[]> {
+  const h = weather?.hourly ?? {};
+  const known = getKnownModels(weather);
+  return (base: string) => {
+    const out: Record<string, number[]> = {};
+    if (Array.isArray(h[base])) out["default"] = h[base];
+    const prefix = base + "_";
+    for (const k of Object.keys(h)) {
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out[model] = h[k];
+    }
+    return out;
+  };
+}
+
 // Stündlicher Niederschlags-Tagesgang aus Open-Meteo (Tag 0/1).
 // Liefert 4 Blöcke (night/morning/afternoon/evening) mit mm-Summe + max % Wahrscheinlichkeit.
 function computePrecipDistribution(weather: any, dayIndex: number, fromHour: number = 0): any | null {
@@ -1513,20 +1534,9 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
-  const known = getKnownModels(weather);
-  const collectArrs = (base: string): number[][] => {
-    const out: number[][] = [];
-    if (Array.isArray(h[base])) out.push(h[base]);
-    const prefix = base + "_";
-    for (const k of Object.keys(h)) {
-      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
-      const suffix = k.slice(prefix.length);
-      if (known.has(suffix)) out.push(h[k]);
-    }
-    return out;
-  };
-  const precArrs = collectArrs("precipitation");
-  const probArrs = collectArrs("precipitation_probability");
+  const collect = makeCollectArrs(weather);
+  const precArrs = Object.values(collect("precipitation"));
+  const probArrs = Object.values(collect("precipitation_probability"));
   if (!precArrs.length) return null;
 
   const blocks = {
@@ -1646,29 +1656,20 @@ function buildHourlyProfile(
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
-  const known = getKnownModels(weather);
-  const collectArrs = (base: string): Array<{ model: string; arr: number[] }> => {
-    const out: Array<{ model: string; arr: number[] }> = [];
-    if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
-    const prefix = base + "_";
-    for (const k of Object.keys(h)) {
-      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
-      const model = k.slice(prefix.length);
-      if (known.has(model)) out.push({ model, arr: h[k] });
-    }
-    return out;
-  };
+  const collect = makeCollectArrs(weather);
+  const toArr = (rec: Record<string, number[]>): Array<{ model: string; arr: number[] }> =>
+    Object.entries(rec).map(([model, arr]) => ({ model, arr }));
   const isUsable = (m: string) => m === "default" || !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
   const filt = (arrs: Array<{ model: string; arr: number[] }>) => arrs.filter(({ model }) => isUsable(model));
 
-  const tArrs = filt(collectArrs("temperature_2m"));
-  const pArrs = filt(collectArrs("precipitation"));
-  const wArrs = filt(collectArrs("windspeed_10m"));
-  const cArrs = filt(collectArrs("cloudcover"));
-  const cLowArrs = filt(collectArrs("cloudcover_low"));
-  const cMidArrs = filt(collectArrs("cloudcover_mid"));
-  const cHighArrs = filt(collectArrs("cloudcover_high"));
-  const sArrs = filt(collectArrs("sunshine_duration"));
+  const tArrs = filt(toArr(collect("temperature_2m")));
+  const pArrs = filt(toArr(collect("precipitation")));
+  const wArrs = filt(toArr(collect("windspeed_10m")));
+  const cArrs = filt(toArr(collect("cloudcover")));
+  const cLowArrs = filt(toArr(collect("cloudcover_low")));
+  const cMidArrs = filt(toArr(collect("cloudcover_mid")));
+  const cHighArrs = filt(toArr(collect("cloudcover_high")));
+  const sArrs = filt(toArr(collect("sunshine_duration")));
 
   const r1 = (n: number) => Math.round(n * 10) / 10;
   const median = (vals: number[]) => {
@@ -2138,11 +2139,11 @@ function formatDayData(weather: any, dayIndex: number) {
   const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
   const thunderstorm = assessThunderstormRisk(weather, dayIndex, weathercode?.by_model);
 
-  // Tagesgang (Niederschlagsverteilung) für Tag 0–4 vorab berechnen, damit
+  // Tagesgang (Niederschlagsverteilung) für Tag 0–5 vorab berechnen, damit
   // die Sky-Klassifikation den intraday-Verlauf berücksichtigen kann.
-  const precipDist = dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null;
-  // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–4
-  const hourlyProfile = dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null;
+  const precipDist = dayIndex <= 5 ? computePrecipDistribution(weather, dayIndex) : null;
+  // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–5
+  const hourlyProfile = dayIndex <= 5 ? buildHourlyProfile(weather, dayIndex) : null;
   const cloud_layers = computeCloudLayers(hourlyProfile);
   const cloud_sun_distribution = computeCloudSunDistribution(hourlyProfile);
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
@@ -2215,18 +2216,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return day;
 
-  const known = getKnownModels(weather);
-  const collectArrs = (base: string): Record<string, number[]> => {
-    const out: Record<string, number[]> = {};
-    if (Array.isArray(h[base])) out["default"] = h[base];
-    const prefix = base + "_";
-    for (const k of Object.keys(h)) {
-      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
-      const model = k.slice(prefix.length);
-      if (known.has(model)) out[model] = h[k];
-    }
-    return out;
-  };
+  const collectArrs = makeCollectArrs(weather);
   const isUsableModel = (m: string) => !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
 
   const idx: number[] = [];
@@ -2275,6 +2265,32 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const sunHPerModel: Record<string, number> = {};
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
 
+  // Baustein 2 — Tier-Fallback: wenn das Stundenfenster für eine Variable <2 Modelle
+  // liefert (z. B. ICON-CH1 ist ab h+33 raus), die fehlenden Modelle aus der bereits
+  // aggregierten Tagesbasis (`day.<var>.by_model`, kommt aus formatDayData mit
+  // collectModelValuesTiered) auffüllen. Werte sind dann Tagesmittel statt
+  // Fenstermittel — Spread und Konsens bleiben aber erhalten, was für die KI
+  // belastbarer ist als ein Single-Model-Mix.
+  const fillFromDay = (perModel: Record<string, number>, dayField: any): Record<string, number> => {
+    if (Object.keys(perModel).length >= 2) return perModel;
+    const byModel = dayField?.by_model;
+    if (!byModel || typeof byModel !== "object") return perModel;
+    const out = { ...perModel };
+    for (const [m, v] of Object.entries(byModel)) {
+      if (m === "default" || m === "derived") continue;
+      if (m in out) continue;
+      if (typeof v === "number" && Number.isFinite(v)) out[m] = v;
+    }
+    return out;
+  };
+  const precPerModelF = fillFromDay(precPerModel, day?.precip);
+  const probPerModelF = fillFromDay(probPerModel, day?.precip_prob);
+  const cloudPerModelF = fillFromDay(cloudPerModel, day?.cloudcover);
+  const sunHPerModelF = fillFromDay(sunHPerModel, day?.sunshine_h);
+  const windPerModelF = fillFromDay(windPerModel, day?.wind_max);
+  const tminPerModelF = fillFromDay(tminPerModel, day?.tmin);
+  const tmaxPerModelF = fillFromDay(tmaxPerModel, day?.tmax);
+
   // Diagnose: Coverage von ICON-Modellen (CH1/CH2/D2) im Restfenster prüfen.
   // Sichtbar machen, wenn entweder <2 Modelle insgesamt beitragen oder kein
   // ICON-Modell mehr drin ist — verhindert stille Single-Model-Fallbacks.
@@ -2289,9 +2305,9 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
       );
     }
   };
-  coverage("precip", precPerModel);
-  coverage("cloud", cloudPerModel);
-  coverage("sunshine", sunHPerModel);
+  coverage("precip", precPerModelF);
+  coverage("cloud", cloudPerModelF);
+  coverage("sunshine", sunHPerModelF);
 
   const out = { ...day };
   // Mittlere Stunde des Fensters für Horizont-Bestimmung
@@ -2302,23 +2318,23 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const regime = day?.regime as Regime | undefined;
   const aggH = (variable: string, perModel: Record<string, number>) =>
     aggregate(perModel, { variable, regime, horizon });
-  if (Object.keys(tminPerModel).length) out.tmin = aggH("temperature_2m_min", tminPerModel);
-  if (Object.keys(tmaxPerModel).length) out.tmax = aggH("temperature_2m_max", tmaxPerModel);
-  if (Object.keys(precPerModel).length) out.precip = aggH("precipitation_sum", precPerModel);
-  if (Object.keys(probPerModel).length) out.precip_prob = aggH("precipitation_probability_max", probPerModel);
-  if (Object.keys(windPerModel).length) {
-    const wRaw = aggH("windspeed_10m_max", windPerModel);
-    const wW = weightedWindAvg(windPerModel);
+  if (Object.keys(tminPerModelF).length) out.tmin = aggH("temperature_2m_min", tminPerModelF);
+  if (Object.keys(tmaxPerModelF).length) out.tmax = aggH("temperature_2m_max", tmaxPerModelF);
+  if (Object.keys(precPerModelF).length) out.precip = aggH("precipitation_sum", precPerModelF);
+  if (Object.keys(probPerModelF).length) out.precip_prob = aggH("precipitation_probability_max", probPerModelF);
+  if (Object.keys(windPerModelF).length) {
+    const wRaw = aggH("windspeed_10m_max", windPerModelF);
+    const wW = weightedWindAvg(windPerModelF);
     out.wind_max = wRaw && wW ? { ...wRaw, avg: wW.avg, weights_used: wW.weights_used } : wRaw;
   }
-  if (Object.keys(cloudPerModel).length) {
-    const cRaw = aggH("cloudcover_mean", cloudPerModel);
-    const cW = weightedCloudSunAvg(cloudPerModel);
+  if (Object.keys(cloudPerModelF).length) {
+    const cRaw = aggH("cloudcover_mean", cloudPerModelF);
+    const cW = weightedCloudSunAvg(cloudPerModelF);
     out.cloudcover = cRaw && cW ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used } : cRaw;
   }
-  if (Object.keys(sunHPerModel).length) {
-    const sRaw = aggH("sunshine_duration", sunHPerModel);
-    const sW = weightedCloudSunAvg(sunHPerModel);
+  if (Object.keys(sunHPerModelF).length) {
+    const sRaw = aggH("sunshine_duration", sunHPerModelF);
+    const sW = weightedCloudSunAvg(sunHPerModelF);
     out.sunshine_h = sRaw && sW ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used } : sRaw;
   }
   if (horizon) out.horizon = horizon;
@@ -2328,7 +2344,20 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   out.cloud_sun_distribution = computeCloudSunDistribution(out.hourly_profile);
   out.cloud_layers = computeCloudLayers(out.hourly_profile);
   out.window_from_hour = fromHour;
-  out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
+  out.window_label = fromHour > 0
+    ? `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`
+    : `00:00–24:00 (ganzer Tag)`;
+
+  // Baustein 5 — Diagnose-Felder ehrlich halten: models_used spiegelt nach dem
+  // Refine die tatsächlich beitragenden Modelle, refined_window dokumentiert
+  // das Zeitfenster.
+  const contributing = new Set<string>();
+  for (const aggOut of [out.tmin, out.tmax, out.precip, out.precip_prob, out.wind_max, out.cloudcover, out.sunshine_h]) {
+    if (aggOut?.by_model) for (const k of Object.keys(aggOut.by_model)) contributing.add(k);
+  }
+  if (contributing.size) out.models_used = Array.from(contributing).join(",");
+  out.refined_window = { from_hour: fromHour, to_hour: 24 };
+
   return normalizeSkyDiagnostics(out);
 }
 
@@ -2378,20 +2407,9 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
     });
   if (!slice.length) return null;
 
-  // Collect arrays for ALL models (not just the first one) — strikt nach bekannter Modell-ID,
-  // damit z. B. precipitation_probability_<model> nicht als eigenes „Modell" durchrutscht.
-  const known = getKnownModels(weather);
-  const collectArrs = (base: string): Record<string, number[]> => {
-    const out: Record<string, number[]> = {};
-    if (Array.isArray(h[base])) out["default"] = h[base];
-    const prefix = base + "_";
-    for (const k of Object.keys(h)) {
-      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
-      const model = k.slice(prefix.length);
-      if (known.has(model)) out[model] = h[k];
-    }
-    return out;
-  };
+  // Collect arrays for ALL models — Whitelist via gemeinsamem Helper, damit z. B.
+  // precipitation_probability_<model> nicht als eigenes „Modell" durchrutscht.
+  const collectArrs = makeCollectArrs(weather);
 
   const tArrs = collectArrs("temperature_2m");
   const pArrs = collectArrs("precipitation");
@@ -2984,9 +3002,13 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tag2WO = Math.max(0, Math.min(100, settings?.tag2_weight_om ?? 75));
     const tag3WM = Math.max(0, Math.min(100, settings?.tag3plus_weight_mosmix ?? 45));
     const tag3WO = Math.max(0, Math.min(100, settings?.tag3plus_weight_om ?? 55));
+    // Baustein 1: refine Tag 1 nur, wenn der Erst-Eintrag tatsächlich die Vornacht
+    // abdeckt (formatEveningNight läuft bei Stunde >= 12 und reicht bis 05:00 nächster Tag).
+    // Sonst entsteht eine künstliche 00–06-Lücke für Tag 1.
+    const tag1RefineFrom = currentZurichHour() >= 12 ? 6 : 0;
     const buildDay = (dayIndex: number) => {
       const omDayBase = formatDayData(weather, dayIndex);
-      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, tag1RefineFrom) : omDayBase;
       if (!omDay) return null;
       // MOSMIX-Beimischung: Tag 0/1 ohne MOSMIX (Radar/Nowcast/SMN-Bias dominieren),
       // Tag 2 moderat, ab Tag 3 stärker als statistische Stützung der Mittelfrist.
@@ -3175,9 +3197,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const tag2WO2 = Math.max(0, Math.min(100, settings?.tag2_weight_om ?? 75));
     const tag3WM2 = Math.max(0, Math.min(100, settings?.tag3plus_weight_mosmix ?? 45));
     const tag3WO2 = Math.max(0, Math.min(100, settings?.tag3plus_weight_om ?? 55));
+    // Baustein 1: refine Tag 1 nur bei tatsächlich abgedeckter Vornacht (siehe oben).
+    const tag1RefineFrom2 = currentZurichHour() >= 12 ? 6 : 0;
     const withTopo = (dayIndex: number) => {
       const omDayBase = formatDayData(weather, dayIndex);
-      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, tag1RefineFrom2) : omDayBase;
       if (!omDay) return null;
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
       let base: any = omDay;
