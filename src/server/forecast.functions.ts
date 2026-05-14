@@ -1942,7 +1942,66 @@ function computeCloudLayers(profile: HourlyProfileRow[] | null | undefined): {
   };
 }
 
-function formatDayData(weather: any, dayIndex: number) {
+// Tagesgang-Aggregat für Bewölkung & Sonne (Pendant zu computePrecipDistribution),
+// gespeist aus dem bereits gemittelten Stundenprofil.
+function computeCloudSunDistribution(profile: HourlyProfileRow[] | null | undefined): {
+  blocks: Record<string, {
+    label: string;
+    cloud_avg: number | null;
+    cloud_low_avg: number | null;
+    sun_min: number;
+    sunny_hours: number;
+  }>;
+  dominant_sun_block: string | null;
+  dominant_cloud_block: string | null;
+} | null {
+  if (!profile?.length) return null;
+  const ranges: Record<string, { label: string; from: number; to: number }> = {
+    night: { label: "Nacht", from: 0, to: 6 },
+    morning: { label: "Vormittag", from: 6, to: 12 },
+    afternoon: { label: "Nachmittag", from: 12, to: 18 },
+    evening: { label: "Abend", from: 18, to: 24 },
+  };
+  const meanRound = (xs: number[]) =>
+    xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
+  const blocks: Record<string, any> = {};
+  let bestSun = -1, bestSunKey: string | null = null;
+  let bestCloud = -1, bestCloudKey: string | null = null;
+  for (const [key, { label, from, to }] of Object.entries(ranges)) {
+    const rows = profile.filter((r) => r.h >= from && r.h < to);
+    if (!rows.length) continue;
+    const cloudAvg = meanRound(rows.map((r) => r.c).filter((v): v is number => v != null));
+    const cloudLowAvg = meanRound(rows.map((r) => r.c_low).filter((v): v is number => v != null));
+    const sunMin = Math.round(rows.reduce((a, r) => a + (r.s ?? 0), 0));
+    const sunnyHours = rows.filter((r) => (r.s ?? 0) >= 30).length;
+    blocks[key] = { label, cloud_avg: cloudAvg, cloud_low_avg: cloudLowAvg, sun_min: sunMin, sunny_hours: sunnyHours };
+    if (sunMin > bestSun) { bestSun = sunMin; bestSunKey = key; }
+    if (cloudAvg != null && cloudAvg > bestCloud) { bestCloud = cloudAvg; bestCloudKey = key; }
+  }
+  if (!Object.keys(blocks).length) return null;
+  return { blocks, dominant_sun_block: bestSunKey, dominant_cloud_block: bestCloudKey };
+}
+
+// Modell-Gewichte für Bewölkung & Sonne (analog zu Wind, aber andere Mischung).
+// Hochauflösende Modelle (ICON-CH1/2, AROME HD) erhalten höheres Gewicht.
+const CLOUD_SUN_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.30,
+  meteoswiss_icon_ch2: 0.25,
+  icon_d2: 0.15,
+  meteofrance_arome_france_hd: 0.15,
+  icon_eu: 0.10,
+  ecmwf_ifs025: 0.05,
+};
+function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in CLOUD_SUN_WEIGHTS && Number.isFinite(v));
+  if (!entries.length) return null;
+  const totalW = entries.reduce((s, [k]) => s + CLOUD_SUN_WEIGHTS[k], 0);
+  if (totalW <= 0) return null;
+  const avg = entries.reduce((s, [k, v]) => s + v * (CLOUD_SUN_WEIGHTS[k] / totalW), 0);
+  const weights_used: Record<string, number> = {};
+  for (const [k] of entries) weights_used[k] = Math.round((CLOUD_SUN_WEIGHTS[k] / totalW) * 100) / 100;
+  return { avg: Math.round(avg * 10) / 10, weights_used };
+}
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
