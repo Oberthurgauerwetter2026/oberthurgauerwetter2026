@@ -48,10 +48,6 @@ export type Database = {
           radar_enabled: boolean
           radar_radius_km: number
           radius_km: number | null
-          tag0_weight_mosmix: number
-          tag0_weight_om: number
-          tag1_weight_mosmix: number
-          tag1_weight_om: number
           tag2_weight_mosmix: number
           tag2_weight_om: number
           tag3plus_weight_mosmix: number
@@ -99,10 +95,6 @@ export type Database = {
           radar_enabled?: boolean
           radar_radius_km?: number
           radius_km?: number | null
-          tag0_weight_mosmix?: number
-          tag0_weight_om?: number
-          tag1_weight_mosmix?: number
-          tag1_weight_om?: number
           tag2_weight_mosmix?: number
           tag2_weight_om?: number
           tag3plus_weight_mosmix?: number
@@ -150,10 +142,6 @@ export type Database = {
           radar_enabled?: boolean
           radar_radius_km?: number
           radius_km?: number | null
-          tag0_weight_mosmix?: number
-          tag0_weight_om?: number
-          tag1_weight_mosmix?: number
-          tag1_weight_om?: number
           tag2_weight_mosmix?: number
           tag2_weight_om?: number
           tag3plus_weight_mosmix?: number
