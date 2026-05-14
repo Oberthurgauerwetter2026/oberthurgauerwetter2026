@@ -1990,6 +1990,7 @@ const CLOUD_SUN_WEIGHTS: Record<string, number> = {
   icon_d2: 0.15,
   meteofrance_arome_france_hd: 0.15,
   icon_eu: 0.10,
+  arpege_europe: 0.10,
   ecmwf_ifs025: 0.05,
 };
 function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
