@@ -1957,6 +1957,9 @@ function formatDayData(weather: any, dayIndex: number) {
   // Tagesgang (Niederschlagsverteilung) für Tag 0–4 vorab berechnen, damit
   // die Sky-Klassifikation den intraday-Verlauf berücksichtigen kann.
   const precipDist = dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null;
+  // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–4
+  const hourlyProfile = dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null;
+  const cloud_layers = computeCloudLayers(hourlyProfile);
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
   // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
   const skyClass = classifySky({
@@ -1966,10 +1969,11 @@ function formatDayData(weather: any, dayIndex: number) {
     precip_prob,
     thunderstorm,
     precip_distribution: precipDist,
+    cloud_layers,
   });
   // Nebel-Auflösung als Sonderfall für Tag 0/1 — überschreibt Klassifikation
   const fogDiss = dayIndex <= 1
-    ? detectFogDissipation(buildHourlyProfile(weather, dayIndex), weathercode?.by_model)
+    ? detectFogDissipation(hourlyProfile, weathercode?.by_model)
     : false;
   const sky_label = fogDiss
     ? "Morgens Nebel-/Hochnebelfelder, im Tagesverlauf Auflösung, am Nachmittag sonnig"
