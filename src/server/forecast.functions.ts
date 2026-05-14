@@ -1575,6 +1575,9 @@ type HourlyProfileRow = {
   p_spread: number;
   w: number | null;
   c: number | null;
+  c_low: number | null;
+  c_mid: number | null;
+  c_high: number | null;
   s: number | null;
   n_models: number;
   src?: "obs" | "mix" | "mod"; // obs = SMN/Radar, mix = Übergang, mod = Modell-Median (default)
