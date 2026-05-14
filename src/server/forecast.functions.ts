@@ -2113,6 +2113,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     precip_distribution: precipDist,
+    cloud_sun_distribution,
     hourly_profile: hourlyProfile,
     sky_pattern,
     fog_dissipation: fogDiss,
