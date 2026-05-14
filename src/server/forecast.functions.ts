@@ -1656,29 +1656,20 @@ function buildHourlyProfile(
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
-  const known = getKnownModels(weather);
-  const collectArrs = (base: string): Array<{ model: string; arr: number[] }> => {
-    const out: Array<{ model: string; arr: number[] }> = [];
-    if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
-    const prefix = base + "_";
-    for (const k of Object.keys(h)) {
-      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
-      const model = k.slice(prefix.length);
-      if (known.has(model)) out.push({ model, arr: h[k] });
-    }
-    return out;
-  };
+  const collect = makeCollectArrs(weather);
+  const toArr = (rec: Record<string, number[]>): Array<{ model: string; arr: number[] }> =>
+    Object.entries(rec).map(([model, arr]) => ({ model, arr }));
   const isUsable = (m: string) => m === "default" || !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
   const filt = (arrs: Array<{ model: string; arr: number[] }>) => arrs.filter(({ model }) => isUsable(model));
 
-  const tArrs = filt(collectArrs("temperature_2m"));
-  const pArrs = filt(collectArrs("precipitation"));
-  const wArrs = filt(collectArrs("windspeed_10m"));
-  const cArrs = filt(collectArrs("cloudcover"));
-  const cLowArrs = filt(collectArrs("cloudcover_low"));
-  const cMidArrs = filt(collectArrs("cloudcover_mid"));
-  const cHighArrs = filt(collectArrs("cloudcover_high"));
-  const sArrs = filt(collectArrs("sunshine_duration"));
+  const tArrs = filt(toArr(collect("temperature_2m")));
+  const pArrs = filt(toArr(collect("precipitation")));
+  const wArrs = filt(toArr(collect("windspeed_10m")));
+  const cArrs = filt(toArr(collect("cloudcover")));
+  const cLowArrs = filt(toArr(collect("cloudcover_low")));
+  const cMidArrs = filt(toArr(collect("cloudcover_mid")));
+  const cHighArrs = filt(toArr(collect("cloudcover_high")));
+  const sArrs = filt(toArr(collect("sunshine_duration")));
 
   const r1 = (n: number) => Math.round(n * 10) / 10;
   const median = (vals: number[]) => {
