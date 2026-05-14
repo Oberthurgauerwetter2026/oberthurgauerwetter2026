@@ -1942,6 +1942,67 @@ function computeCloudLayers(profile: HourlyProfileRow[] | null | undefined): {
   };
 }
 
+// Tagesgang-Aggregat für Bewölkung & Sonne (Pendant zu computePrecipDistribution),
+// gespeist aus dem bereits gemittelten Stundenprofil.
+function computeCloudSunDistribution(profile: HourlyProfileRow[] | null | undefined): {
+  blocks: Record<string, {
+    label: string;
+    cloud_avg: number | null;
+    cloud_low_avg: number | null;
+    sun_min: number;
+    sunny_hours: number;
+  }>;
+  dominant_sun_block: string | null;
+  dominant_cloud_block: string | null;
+} | null {
+  if (!profile?.length) return null;
+  const ranges: Record<string, { label: string; from: number; to: number }> = {
+    night: { label: "Nacht", from: 0, to: 6 },
+    morning: { label: "Vormittag", from: 6, to: 12 },
+    afternoon: { label: "Nachmittag", from: 12, to: 18 },
+    evening: { label: "Abend", from: 18, to: 24 },
+  };
+  const meanRound = (xs: number[]) =>
+    xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
+  const blocks: Record<string, any> = {};
+  let bestSun = -1, bestSunKey: string | null = null;
+  let bestCloud = -1, bestCloudKey: string | null = null;
+  for (const [key, { label, from, to }] of Object.entries(ranges)) {
+    const rows = profile.filter((r) => r.h >= from && r.h < to);
+    if (!rows.length) continue;
+    const cloudAvg = meanRound(rows.map((r) => r.c).filter((v): v is number => v != null));
+    const cloudLowAvg = meanRound(rows.map((r) => r.c_low).filter((v): v is number => v != null));
+    const sunMin = Math.round(rows.reduce((a, r) => a + (r.s ?? 0), 0));
+    const sunnyHours = rows.filter((r) => (r.s ?? 0) >= 30).length;
+    blocks[key] = { label, cloud_avg: cloudAvg, cloud_low_avg: cloudLowAvg, sun_min: sunMin, sunny_hours: sunnyHours };
+    if (sunMin > bestSun) { bestSun = sunMin; bestSunKey = key; }
+    if (cloudAvg != null && cloudAvg > bestCloud) { bestCloud = cloudAvg; bestCloudKey = key; }
+  }
+  if (!Object.keys(blocks).length) return null;
+  return { blocks, dominant_sun_block: bestSunKey, dominant_cloud_block: bestCloudKey };
+}
+
+// Modell-Gewichte für Bewölkung & Sonne (analog zu Wind, aber andere Mischung).
+// Hochauflösende Modelle (ICON-CH1/2, AROME HD) erhalten höheres Gewicht.
+const CLOUD_SUN_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.30,
+  meteoswiss_icon_ch2: 0.25,
+  icon_d2: 0.15,
+  meteofrance_arome_france_hd: 0.15,
+  icon_eu: 0.10,
+  ecmwf_ifs025: 0.05,
+};
+function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in CLOUD_SUN_WEIGHTS && Number.isFinite(v));
+  if (!entries.length) return null;
+  const totalW = entries.reduce((s, [k]) => s + CLOUD_SUN_WEIGHTS[k], 0);
+  if (totalW <= 0) return null;
+  const avg = entries.reduce((s, [k, v]) => s + v * (CLOUD_SUN_WEIGHTS[k] / totalW), 0);
+  const weights_used: Record<string, number> = {};
+  for (const [k] of entries) weights_used[k] = Math.round((CLOUD_SUN_WEIGHTS[k] / totalW) * 100) / 100;
+  return { avg: Math.round(avg * 10) / 10, weights_used };
+}
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
@@ -1951,11 +2012,20 @@ function formatDayData(weather: any, dayIndex: number) {
   const agg = (varName: string, perModel: Record<string, number>) =>
     aggregate(perModel, { variable: varName, regime, horizon });
 
-  const cloudcover = agg("cloudcover_mean", collectModelValuesTiered(weather, "cloudcover_mean", dayIndex));
+  const cloudPerModel = collectModelValuesTiered(weather, "cloudcover_mean", dayIndex);
+  const cloudcoverRaw = agg("cloudcover_mean", cloudPerModel);
+  const cloudWeighted = weightedCloudSunAvg(cloudPerModel);
+  const cloudcover = cloudcoverRaw && cloudWeighted
+    ? { ...cloudcoverRaw, avg: Math.round(cloudWeighted.avg), weights_used: cloudWeighted.weights_used }
+    : cloudcoverRaw;
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
-  const sunshine_h = agg("sunshine_duration", sunshineHours);
+  const sunshineRawAgg = agg("sunshine_duration", sunshineHours);
+  const sunWeighted = weightedCloudSunAvg(sunshineHours);
+  const sunshine_h = sunshineRawAgg && sunWeighted
+    ? { ...sunshineRawAgg, avg: sunWeighted.avg, weights_used: sunWeighted.weights_used }
+    : sunshineRawAgg;
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
   let cloudcover_source: "model" | "derived_from_sunshine" | "none" = cloudcover ? "model" : "none";
@@ -1993,6 +2063,7 @@ function formatDayData(weather: any, dayIndex: number) {
   // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–4
   const hourlyProfile = dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null;
   const cloud_layers = computeCloudLayers(hourlyProfile);
+  const cloud_sun_distribution = computeCloudSunDistribution(hourlyProfile);
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
   // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
   const skyClass = classifySky({
@@ -2042,6 +2113,7 @@ function formatDayData(weather: any, dayIndex: number) {
     weathercode,
     sunshine_h,
     precip_distribution: precipDist,
+    cloud_sun_distribution,
     hourly_profile: hourlyProfile,
     sky_pattern,
     fog_dissipation: fogDiss,
@@ -2136,12 +2208,22 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
     const wW = weightedWindAvg(windPerModel);
     out.wind_max = wRaw && wW ? { ...wRaw, avg: wW.avg, weights_used: wW.weights_used } : wRaw;
   }
-  if (Object.keys(cloudPerModel).length) out.cloudcover = aggH("cloudcover_mean", cloudPerModel);
-  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggH("sunshine_duration", sunHPerModel);
+  if (Object.keys(cloudPerModel).length) {
+    const cRaw = aggH("cloudcover_mean", cloudPerModel);
+    const cW = weightedCloudSunAvg(cloudPerModel);
+    out.cloudcover = cRaw && cW ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used } : cRaw;
+  }
+  if (Object.keys(sunHPerModel).length) {
+    const sRaw = aggH("sunshine_duration", sunHPerModel);
+    const sW = weightedCloudSunAvg(sunHPerModel);
+    out.sunshine_h = sRaw && sW ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used } : sRaw;
+  }
   if (horizon) out.horizon = horizon;
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
+  out.cloud_sun_distribution = computeCloudSunDistribution(out.hourly_profile);
+  out.cloud_layers = computeCloudLayers(out.hourly_profile);
   out.window_from_hour = fromHour;
   out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
   return normalizeSkyDiagnostics(out);
@@ -2567,7 +2649,18 @@ Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwette
 
 FALLBACK (nur wenn KEIN sky_label vorgegeben): Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt". Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt). Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
 
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen. Wenn "cloudcover.spread" ≥ 30 % oder "sunshine_h.spread" ≥ 4 h, sind definitive Aussagen ("durchgehend sonnig", "ganztags bedeckt") verboten — stattdessen "veränderlich bewölkt" / "wechselnd bewölkt".
+
+WOLKENSCHICHTEN ("cloud_layers", optional — nur wenn "cloud_layers.has_data" = true):
+- "cloud_layers.day": Tagesmittel der tiefen / mittleren / hohen Bewölkung (in %).
+- "cloud_layers.morning" / "cloud_layers.afternoon": gleiche Werte für Vormittag (06–12) und Nachmittag (12–18).
+Verwende die Schichten zur präziseren Beschreibung:
+- viel "high" (≥ 60 %) bei wenig "low"+"mid" (≤ 30 %): "hohe Schleierwolken", "milchige Sonne", "Sonne durch hohe Wolkenfelder".
+- viel "low" (≥ 75 %) morgens: "Hochnebel", "tiefe Wolkendecke", "stratusartige Bewölkung". Niemals "von Beginn an sonnig" formulieren, wenn "cloud_layers.morning.low" ≥ 75 %.
+- viel "mid" bei wenig "low": "mittelhohe Wolkenfelder", "Altostratus-artige Bewölkung".
+Wenn "sky_pattern" = "schleierwolken_sonnig", "hochnebel_lage" oder "hochnebel_truebe", MUSS die Schichtinformation in der Beschreibung anklingen.
+
+TAGESGANG WOLKEN/SONNE ("cloud_sun_distribution", optional): Enthält pro Block (Vormittag, Nachmittag, Abend) "cloud_avg" %, "cloud_low_avg" %, "sun_min" Minuten und "sunny_hours" (Anzahl Stunden mit ≥ 30 min Sonne). Wenn ein Block deutlich sonniger ist als ein anderer (Differenz "sun_min" ≥ 90), MUSS dieser Tagesgang im Wetterverlauf-Absatz abgebildet werden — z. B. "am Vormittag tiefe Wolkendecke, am Nachmittag zunehmend sonnige Phasen". Pauschale Tagesaussagen sind verboten, wenn die Blöcke deutlich differieren.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
