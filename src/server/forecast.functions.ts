@@ -3002,9 +3002,13 @@ export const generateForecast = createServerFn({ method: "POST" })
     const tag2WO = Math.max(0, Math.min(100, settings?.tag2_weight_om ?? 75));
     const tag3WM = Math.max(0, Math.min(100, settings?.tag3plus_weight_mosmix ?? 45));
     const tag3WO = Math.max(0, Math.min(100, settings?.tag3plus_weight_om ?? 55));
+    // Baustein 1: refine Tag 1 nur, wenn der Erst-Eintrag tatsächlich die Vornacht
+    // abdeckt (formatEveningNight läuft bei Stunde >= 12 und reicht bis 05:00 nächster Tag).
+    // Sonst entsteht eine künstliche 00–06-Lücke für Tag 1.
+    const tag1RefineFrom = currentZurichHour() >= 12 ? 6 : 0;
     const buildDay = (dayIndex: number) => {
       const omDayBase = formatDayData(weather, dayIndex);
-      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, tag1RefineFrom) : omDayBase;
       if (!omDay) return null;
       // MOSMIX-Beimischung: Tag 0/1 ohne MOSMIX (Radar/Nowcast/SMN-Bias dominieren),
       // Tag 2 moderat, ab Tag 3 stärker als statistische Stützung der Mittelfrist.
