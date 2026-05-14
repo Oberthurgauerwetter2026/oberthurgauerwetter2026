@@ -1,55 +1,60 @@
 ## Ziel
 
-Den ersten Eintrag (Restfenster heute → 05 Uhr Folgetag) robuster machen, indem (1) die Stundenmittelung in `formatEveningNight` Modelle gewichtet statt sie ungewichtet zu mitteln und (2) bei dünner Modellabdeckung pro Stunde ein Tier-Fallback auf Mid-Modelle greift — analog zu `collectModelValuesTiered` für Tagesaggregate.
+Den Tag-1-Befund (Freitag: nur ICON-CH2 + ARPEGE → ARPEGE bei Sonne/Wolken stillschweigend ignoriert) beheben durch zwei minimale Änderungen:
 
-Beide Hebel betreffen ausschliesslich `src/server/forecast.functions.ts`. Es werden keine neuen Open-Meteo-Calls ausgelöst (Hebel 5 nutzt bestehende Mid-Daten); falls Hebel 5 ohne weitere Calls nicht reicht, wird zusätzlich `hourly=true` für das Mid-Tier aktiviert (siehe Punkt 2c).
+1. **ICON-D2 wieder als Standard-Short-Modell** — garantiert in fast allen Fällen mindestens zwei Short-Tier-Modelle für Tag 0 + Tag 1, auch wenn ICON-CH1 (33 h) und AROME HD (51 h) im Run-Übergang Lücken haben.
+2. **ARPEGE Europe in `CLOUD_SUN_WEIGHTS`** — sonst wirkt der bestehende Mid-Tier-Fallback (`collectModelValuesTiered`) für Bewölkung und Sonne nicht, weil ARPEGE keinen Gewichtseintrag hat und damit aus `weightedCloudSunAvg` rausfällt.
 
-## Baustein 1 — Gewichtetes Stundenmittel
+Beide Änderungen ausschliesslich in `src/server/forecast.functions.ts`. Keine DB-Migration, kein UI-Change, kein neuer Open-Meteo-Call.
 
-In `formatEveningNight` wird `hourAvg(arrs, i)` heute als blankes arithmetisches Mittel berechnet. Ersetzen durch eine gewichtete Variante, die nach Variablengruppe unterscheidet:
+## Baustein 1 — ICON-D2 in den Short-Tier-Default
 
-- **Temperatur, Bewölkung, Sonne**: `CLOUD_SUN_WEIGHTS` (bereits in Baustein 3 eingeführt) als Basis. Für Temperatur eine eigene Tabelle `TEMP_HOURLY_WEIGHTS` (CH1: 0.30, CH2: 0.25, AROME HD: 0.20, ICON-D2: 0.15, ARPEGE: 0.10).
-- **Niederschlag**: `PRECIP_HOURLY_WEIGHTS` (CH1: 0.30, AROME HD: 0.25, CH2: 0.20, ICON-D2: 0.15, ARPEGE: 0.10) — AROME bekommt mehr Gewicht, weil konvektionsstark.
-- **Wind / Windrichtung**: bleibt wie heute (`WIND_WEIGHTS` + `weightedWindAvg` / `weightedCircularMeanDeg`).
-- **Horizont-Modifier**: `horizonForHour(t)` wird pro Stunde aufgerufen und multipliziert das Basisgewicht (z. B. ECMWF/GFS bleiben in `h0_12`/`h12_24` = 0, falls sie über das Mid-Fallback reinkommen).
+In `fetchWeather` ist der Default heute:
 
-Fallback-Regel: wenn für eine Stunde kein Modell aus der Gewichtstabelle vorhanden ist, ungewichtetes Mittel über die verfügbaren Modelle (heutiges Verhalten) — keine Regression.
+```ts
+shortModels = "meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,icon_d2"
+```
 
-Anwendung in `formatEveningNight`:
-- `hourlyTemps`, `hourlyPrecs`, `hourlyClouds`, `hourlySuns` nutzen die neue gewichtete Funktion.
-- `summarizeModel` und das `by_model`-Objekt bleiben unverändert (das ist Pro-Modell-Reporting, kein Mittel).
+ICON-D2 ist also dort schon drin — aber `app_settings.models_shortterm` (DB) lautet beim aktuellen Projekt nur `"meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd"` und überschreibt damit den Code-Default. Zwei Stellen anpassen:
 
-## Baustein 5 — Tier-Fallback im Stundenfenster
+- **Code-Default** unverändert lassen (enthält ICON-D2 bereits).
+- **`app_settings`-Spaltendefault** in einer Migration von `'meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd'` auf `'meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,icon_d2'` setzen UND in der einen vorhandenen Zeile `models_shortterm` aktualisieren — sonst greift die Änderung beim aktuellen Tenant nicht.
 
-Heute: `weather.hourly = shortData?.hourly`. Wenn das Short-Tier ein Rate-Limit hatte oder ICON-CH1/CH2 im Run-Übergang Lücken haben, fällt das gesamte Stundenfenster aus.
+ICON-D2 ist nicht in `HOURLY_LONGRANGE_BLOCKLIST`, hat alle benötigten Daily- und Hourly-Variablen, und ist für 0–48 h zuverlässig verfügbar.
 
-Änderung in `formatEveningNight`:
-1. **Pro-Stunde-Coverage prüfen**: Für jede Stunde im Slice zählen, wie viele Modelle einen finiten Wert für `temperature_2m` liefern.
-2. **Trigger**: Wenn für ≥ 30 % der Stunden im Fenster die Coverage < 2 Modelle ist ODER `weather.hourly?.time` komplett fehlt → Mid-Tier-Hourly nachziehen.
-3. **Mid-Tier-Hourly bereitstellen** (siehe 2c): Aktuell ruft `fetchWeather` für Mid `fetchOpenMeteoOptional(..., includeHourly=false)` auf — das wird auf `true` umgestellt, aber **nur für die Variablen, die das Stundenfenster braucht** (Subset von `HOURLY_VARS` ohne Strahlungs-/Schicht-Extras, um Antwortgrösse zu begrenzen). Cache-Key bleibt gleich (Mid wird bis 00 UTC gecacht), Mehrkosten = einmalig pro Tag pro Standort.
-4. **Merge**: Aus `midData?.hourly` werden die im Slice fehlenden Stunden ergänzt — Modelle aus `HOURLY_LONGRANGE_BLOCKLIST` (gfs_global, gfs_seamless, ecmwf_ifs025) bleiben ausgeschlossen. Effektiv kommen so `arpege_europe` (und ggf. `icon_eu`, falls in mid) dazu.
-5. **Markierung**: Eine neue `degraded_hourly?: { reason: "short_tier_thin" | "short_tier_unavailable"; filled_from: "mid" }`-Eigenschaft im `formatEveningNight`-Rückgabewert, damit das später ggf. im UI angezeigt werden kann (zunächst nur intern geloggt, kein UI-Change).
+## Baustein 2 — ARPEGE Europe in `CLOUD_SUN_WEIGHTS`
 
-Bei totalem Ausfall (auch Mid leer) bleibt das heutige Verhalten: `null` zurückgeben, Erst-Eintrag fällt auf Tag-0-Aggregat zurück.
+Aktuell:
+
+```ts
+const CLOUD_SUN_WEIGHTS = {
+  meteoswiss_icon_ch1: 0.30,
+  meteoswiss_icon_ch2: 0.25,
+  icon_d2: 0.15,
+  meteofrance_arome_france_hd: 0.15,
+  icon_eu: 0.10,
+  ecmwf_ifs025: 0.05,
+};
+```
+
+ARPEGE Europe ist das einzige Mid-Tier-Modell mit französischer Konvektionsphysik und damit ein wertvoller Gegenanker zur ICON-Familie — fehlt aber in der Tabelle. Einfügen mit kleinem Gewicht (0.10), damit es bei voller Modellabdeckung nicht dominiert, aber bei dünnem Short-Tier (wie im Freitag-Beispiel) eingeht statt ignoriert zu werden:
+
+```ts
+arpege_europe: 0.10,
+```
+
+Andere Gewichte unverändert. `weightedCloudSunAvg` und `weightedHourValue` profitieren automatisch (beide lesen `CLOUD_SUN_WEIGHTS`).
 
 ## Reihenfolge
 
-1. Baustein 1 isoliert umsetzen und gegen `withTopo(0)`-Fallback testen (Tagesaggregat darf nicht regressieren).
-2. Baustein 5 nachziehen, beginnend mit Coverage-Detection + Logging (ohne Mid-Hourly-Fetch). Erst wenn Logs zeigen, dass Coverage tatsächlich oft dünn ist, Mid-Hourly-Fetch aktivieren.
-3. Typecheck. Kein UI-Change, keine Schema-Änderung, keine neue DB-Tabelle.
-
-## Technische Details
-
-- Neue Konstanten am bestehenden Block der Gewichtstabellen (Nähe `WIND_WEIGHTS` / `CLOUD_SUN_WEIGHTS`).
-- Neue Hilfsfunktion `weightedHourValue(arrs, i, weights, opts?)` in der Nähe von `hourAvg`. Signatur ähnlich `weightedCloudSunAvg`, aber für ein einzelnes `i`.
-- `fetchWeather`-Signatur unverändert; nur das interne `includeHourly`-Flag für Mid wird auf `true` gesetzt, sobald Baustein 5 scharfgeschaltet ist.
-- Open-Meteo-Quota: Mid-Hourly erhöht die Antwort um ~Faktor 3 für den Mid-Call. Da Mid bis 00 UTC gecacht ist, bleibt es bei einem Call/Tag/Standort.
-- Keine Änderungen an `HORIZON_WEIGHTS`, `REGIME_WEIGHTS`, `pickBestSource` oder `formatDayData`.
+1. Migration für `app_settings.models_shortterm` (Default-Spalte + Update der bestehenden Zeile).
+2. Edit `CLOUD_SUN_WEIGHTS` in `forecast.functions.ts`.
+3. Typecheck.
+4. Optional: kurze Verifikation per `read_query` auf `app_settings`, dass der neue Wert wirkt.
 
 ## Nicht im Scope
 
-- Hebel 2 (zusätzlicher Mid-Tier-Hourly-Anker mit eigenem Gewicht) — wird durch Baustein 5 teilweise mitabgedeckt; falls später nötig, separat planen.
-- Hebel 3 (`models_shortterm` per Default um `arpege_europe` erweitern).
-- Hebel 4 (`horizonForHour` in Tagesaggregaten) — Tagesaggregate sind nicht das Problem.
-- MOSMIX-Stundendaten — separater Plan.
-- UI-Anzeige für `degraded_hourly` — vorerst nur Logging.
+- Hebel 3 (Hourly für Tag 1 absichern) — separater Plan, grössere Änderung.
+- Hebel 4 (Unsicherheits-Pflicht-Vokabel im Prompt).
+- Hebel 5 (`cloud_sun_distribution` aus Daily-Modellvergleich ableiten).
+- Anpassung von `TEMP_HOURLY_WEIGHTS` / `PRECIP_HOURLY_WEIGHTS` für ARPEGE — die enthalten ARPEGE bereits seit der vorigen Iteration.
