@@ -2005,15 +2005,16 @@ function formatDayData(weather: any, dayIndex: number) {
     sky_label,
     cloudcover: cloudcoverFinal,
     cloudcover_source,
+    cloud_layers,
     weathercode,
     sunshine_h,
     precip_distribution: precipDist,
-    hourly_profile: dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null,
+    hourly_profile: hourlyProfile,
     sky_pattern,
     fog_dissipation: fogDiss,
     wind_gusts: assessGusts(weather, dayIndex),
     thunderstorm,
-    humidity: assessHumidity(weather, dayIndex, dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null),
+    humidity: assessHumidity(weather, dayIndex, hourlyProfile),
     uncertainty: buildUncertainty(tmax, tmin, precip, wind_max),
   };
 }
