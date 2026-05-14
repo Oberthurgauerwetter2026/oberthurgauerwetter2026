@@ -1489,6 +1489,23 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   return merged;
 }
 
+// Bekannte Modell-IDs aus den drei Tier-Listen (short/mid/long) + "default".
+// Wird genutzt, um beim Präfix-Matching von Hourly-Keys (`base_<modelId>`) ausschliesslich
+// echte Modellnamen zu akzeptieren — sonst werden z. B. `precipitation_probability_<model>`
+// als Modell `probability_<model>` interpretiert und korrumpieren die Aggregation.
+function getKnownModels(weather: any): Set<string> {
+  const out = new Set<string>(["default"]);
+  const lists = weather?.modelLists;
+  if (lists) {
+    for (const s of [lists.short, lists.mid, lists.long]) {
+      if (typeof s === "string") {
+        for (const m of s.split(",").map((x: string) => x.trim()).filter(Boolean)) out.add(m);
+      }
+    }
+  }
+  return out;
+}
+
 // Stündlicher Niederschlags-Tagesgang aus Open-Meteo (Tag 0/1).
 // Liefert 4 Blöcke (night/morning/afternoon/evening) mit mm-Summe + max % Wahrscheinlichkeit.
 function computePrecipDistribution(weather: any, dayIndex: number, fromHour: number = 0): any | null {
@@ -1496,11 +1513,15 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): number[][] => {
     const out: number[][] = [];
     if (Array.isArray(h[base])) out.push(h[base]);
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push(h[k]);
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const suffix = k.slice(prefix.length);
+      if (known.has(suffix)) out.push(h[k]);
     }
     return out;
   };
@@ -1625,11 +1646,15 @@ function buildHourlyProfile(
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): Array<{ model: string; arr: number[] }> => {
     const out: Array<{ model: string; arr: number[] }> = [];
     if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out.push({ model, arr: h[k] });
     }
     return out;
   };
@@ -2190,11 +2215,15 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return day;
 
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): Record<string, number[]> => {
     const out: Record<string, number[]> = {};
     if (Array.isArray(h[base])) out["default"] = h[base];
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out[model] = h[k];
     }
     return out;
   };
@@ -2245,6 +2274,24 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const sunSecPerModel = perModel(sArrs, "sum");
   const sunHPerModel: Record<string, number> = {};
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
+
+  // Diagnose: Coverage von ICON-Modellen (CH1/CH2/D2) im Restfenster prüfen.
+  // Sichtbar machen, wenn entweder <2 Modelle insgesamt beitragen oder kein
+  // ICON-Modell mehr drin ist — verhindert stille Single-Model-Fallbacks.
+  const ICON_KEYS = ["meteoswiss_icon_ch1", "meteoswiss_icon_ch2", "icon_d2"];
+  const coverage = (label: string, perModel: Record<string, number>) => {
+    const keys = Object.keys(perModel);
+    const iconCount = keys.filter((k) => ICON_KEYS.includes(k)).length;
+    if (keys.length < 2 || iconCount === 0) {
+      console.warn(
+        `[forecast] refineDayFromHour day${dayIndex} ${label}: ${keys.length} Modell(e) ` +
+        `(${keys.join(",") || "—"}), ICON-Modelle: ${iconCount}/3`,
+      );
+    }
+  };
+  coverage("precip", precPerModel);
+  coverage("cloud", cloudPerModel);
+  coverage("sunshine", sunHPerModel);
 
   const out = { ...day };
   // Mittlere Stunde des Fensters für Horizont-Bestimmung
@@ -2331,12 +2378,17 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
     });
   if (!slice.length) return null;
 
-  // Collect arrays for ALL models (not just the first one)
+  // Collect arrays for ALL models (not just the first one) — strikt nach bekannter Modell-ID,
+  // damit z. B. precipitation_probability_<model> nicht als eigenes „Modell" durchrutscht.
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): Record<string, number[]> => {
     const out: Record<string, number[]> = {};
     if (Array.isArray(h[base])) out["default"] = h[base];
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out[model] = h[k];
     }
     return out;
   };
