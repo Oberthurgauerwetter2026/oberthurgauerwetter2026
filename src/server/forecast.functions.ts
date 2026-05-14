@@ -1506,6 +1506,27 @@ function getKnownModels(weather: any): Set<string> {
   return out;
 }
 
+// Gemeinsamer Hourly-Key-Collector mit Whitelist auf bekannte Modell-IDs.
+// Returns Record<modelId, number[]> — "default" für den unsuffixed Basis-Key.
+// Vier Aufrufstellen (computePrecipDistribution, buildHourlyProfile, refineDayFromHour,
+// formatEveningNight) ziehen am selben Helper, damit das Whitelist-Pattern eine
+// einzige Quelle der Wahrheit hat.
+function makeCollectArrs(weather: any): (base: string) => Record<string, number[]> {
+  const h = weather?.hourly ?? {};
+  const known = getKnownModels(weather);
+  return (base: string) => {
+    const out: Record<string, number[]> = {};
+    if (Array.isArray(h[base])) out["default"] = h[base];
+    const prefix = base + "_";
+    for (const k of Object.keys(h)) {
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out[model] = h[k];
+    }
+    return out;
+  };
+}
+
 // Stündlicher Niederschlags-Tagesgang aus Open-Meteo (Tag 0/1).
 // Liefert 4 Blöcke (night/morning/afternoon/evening) mit mm-Summe + max % Wahrscheinlichkeit.
 function computePrecipDistribution(weather: any, dayIndex: number, fromHour: number = 0): any | null {
