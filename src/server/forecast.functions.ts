@@ -1646,11 +1646,15 @@ function buildHourlyProfile(
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): Array<{ model: string; arr: number[] }> => {
     const out: Array<{ model: string; arr: number[] }> = [];
     if (Array.isArray(h[base])) out.push({ model: "default", arr: h[base] });
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out.push({ model: k.slice(base.length + 1), arr: h[k] });
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out.push({ model, arr: h[k] });
     }
     return out;
   };
