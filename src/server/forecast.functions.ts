@@ -2649,7 +2649,18 @@ Bei "Sonnig und wolkenlos" sind Formulierungen wie "einige Wolken", "Schönwette
 
 FALLBACK (nur wenn KEIN sky_label vorgegeben): Leite die Bewölkung primär aus "sunshine_h" ab: ≥ 10h = "sonnig"/"klar"/"meist sonnig", 6-10h = "ziemlich sonnig"/"heiter", 3-6h = "wechselnd bewölkt"/"zeitweise sonnig", < 3h = "stark bewölkt"/"bedeckt". Beachte zusätzlich "weathercode" (0-1 = klar/heiter, 2 = teils bewölkt, 3 = bedeckt). Wenn "cloudcover_source" = "model", darf "cloudcover.avg" genutzt werden. Bei "derived_from_sunshine" oder fehlend: NUR "sunshine_h"/"weathercode" verwenden.
 
-MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen.`;
+MODELL-UNSICHERHEIT: Wenn die Daten einen "spread"-Wert > 3 (Grad oder mm) zeigen oder die Modelle unterschiedliche Niederschlagssignale liefern, formuliere zurückhaltend ("veränderlich", "unsicher", "teils", "verbreitet zeitweise", "lokal unterschiedlich"). Bei kleinem spread konkrete Werte nennen. Wenn "cloudcover.spread" ≥ 30 % oder "sunshine_h.spread" ≥ 4 h, sind definitive Aussagen ("durchgehend sonnig", "ganztags bedeckt") verboten — stattdessen "veränderlich bewölkt" / "wechselnd bewölkt".
+
+WOLKENSCHICHTEN ("cloud_layers", optional — nur wenn "cloud_layers.has_data" = true):
+- "cloud_layers.day": Tagesmittel der tiefen / mittleren / hohen Bewölkung (in %).
+- "cloud_layers.morning" / "cloud_layers.afternoon": gleiche Werte für Vormittag (06–12) und Nachmittag (12–18).
+Verwende die Schichten zur präziseren Beschreibung:
+- viel "high" (≥ 60 %) bei wenig "low"+"mid" (≤ 30 %): "hohe Schleierwolken", "milchige Sonne", "Sonne durch hohe Wolkenfelder".
+- viel "low" (≥ 75 %) morgens: "Hochnebel", "tiefe Wolkendecke", "stratusartige Bewölkung". Niemals "von Beginn an sonnig" formulieren, wenn "cloud_layers.morning.low" ≥ 75 %.
+- viel "mid" bei wenig "low": "mittelhohe Wolkenfelder", "Altostratus-artige Bewölkung".
+Wenn "sky_pattern" = "schleierwolken_sonnig", "hochnebel_lage" oder "hochnebel_truebe", MUSS die Schichtinformation in der Beschreibung anklingen.
+
+TAGESGANG WOLKEN/SONNE ("cloud_sun_distribution", optional): Enthält pro Block (Vormittag, Nachmittag, Abend) "cloud_avg" %, "cloud_low_avg" %, "sun_min" Minuten und "sunny_hours" (Anzahl Stunden mit ≥ 30 min Sonne). Wenn ein Block deutlich sonniger ist als ein anderer (Differenz "sun_min" ≥ 90), MUSS dieser Tagesgang im Wetterverlauf-Absatz abgebildet werden — z. B. "am Vormittag tiefe Wolkendecke, am Nachmittag zunehmend sonnige Phasen". Pauschale Tagesaussagen sind verboten, wenn die Blöcke deutlich differieren.`;
 
 export const DEFAULT_TEMP_RULES = `Tiefstwerte-Format: "Tiefstwerte zwischen X und Y Grad." ODER "Tiefstwerte um X Grad." ODER "Tiefstwerte X bis Y Grad."
 Bei Tiefstwert ≤ 4 Grad zwingend anhängen: " - Bodenfrostgefahr".
