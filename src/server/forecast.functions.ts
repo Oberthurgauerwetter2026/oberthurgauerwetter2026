@@ -3197,9 +3197,11 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     const tag2WO2 = Math.max(0, Math.min(100, settings?.tag2_weight_om ?? 75));
     const tag3WM2 = Math.max(0, Math.min(100, settings?.tag3plus_weight_mosmix ?? 45));
     const tag3WO2 = Math.max(0, Math.min(100, settings?.tag3plus_weight_om ?? 55));
+    // Baustein 1: refine Tag 1 nur bei tatsächlich abgedeckter Vornacht (siehe oben).
+    const tag1RefineFrom2 = currentZurichHour() >= 12 ? 6 : 0;
     const withTopo = (dayIndex: number) => {
       const omDayBase = formatDayData(weather, dayIndex);
-      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, 6) : omDayBase;
+      const omDay = dayIndex === 1 ? refineDayFromHour(omDayBase, weather, 1, tag1RefineFrom2) : omDayBase;
       if (!omDay) return null;
       const mosmixDay = mosmixByDate.get(omDay.date) ?? null;
       let base: any = omDay;
