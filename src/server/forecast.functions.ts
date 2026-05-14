@@ -2215,11 +2215,15 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return day;
 
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): Record<string, number[]> => {
     const out: Record<string, number[]> = {};
     if (Array.isArray(h[base])) out["default"] = h[base];
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out[model] = h[k];
     }
     return out;
   };
