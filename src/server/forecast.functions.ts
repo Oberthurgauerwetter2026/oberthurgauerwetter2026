@@ -2002,6 +2002,8 @@ function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; w
   for (const [k] of entries) weights_used[k] = Math.round((CLOUD_SUN_WEIGHTS[k] / totalW) * 100) / 100;
   return { avg: Math.round(avg * 10) / 10, weights_used };
 }
+
+function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
   const { models, tier } = pickBestSource(weather, dayIndex);
