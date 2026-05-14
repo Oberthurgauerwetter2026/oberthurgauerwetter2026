@@ -1,39 +1,25 @@
-## Problem
+## Befund
 
-Im KI-Text erscheint die widersprüchliche Phrase „In der Nacht meist klar, **teils sonnig**." Sonnen-Vokabular („sonnig", „heiter", „freundlich", „Sonnenschein", „Aufhellungen") gehört nicht in einen Nacht-Kontext (Sonne steht unter dem Horizont).
+- Der Cron-Job läuft: heute um 03:00 UTC wurde der Endpoint erfolgreich aufgerufen.
+- Die Karte wurde nicht ersetzt, weil die Generierung mit `Zu wenige gültige Druckwerte (0/1344)` abgebrochen ist.
+- Die vorhandenen Retry-Cronjobs aus der Migration sind aktuell nicht aktiv vorhanden; aktiv ist nur der tägliche 03:00-Job.
+- Die Druckkarten-Logik ist zu strikt: Bei 0 gültigen Druckwerten wird komplett abgebrochen, obwohl eine letzte funktionierende Karte vorhanden ist und der Fehler als transient behandelt werden sollte.
 
-Aktuell gibt es keine Regel und keinen Post-Check, der diese Kombination unterbindet — weder im Prompt (`DEFAULT_SKY_RULES`) noch in `nominal-style.server.ts`.
+## Plan
 
-## Lösung
-
-Zweistufig: (1) explizite Prompt-Regel, damit das Modell es gar nicht erst produziert, (2) deterministischer Post-Validator mit 1× Retry — analog zum bestehenden Nominalstil-Mechanismus.
-
-### 1. Prompt-Regel ergänzen (`src/server/forecast.functions.ts`, in `DEFAULT_SKY_RULES`)
-
-Neuer Absatz nach der bestehenden „VERBOTS-KLAUSEL kein sonnig":
-
-> **TAGESZEIT-KONSISTENZ (Sonne nur tagsüber):** In Sätzen oder Satzteilen, die einen Nacht-Kontext beschreiben (Trigger: „in der Nacht", „nachts", „in der ersten/zweiten Nachthälfte", „gegen Mitternacht", „in den frühen Morgenstunden vor Sonnenaufgang", „am späten Abend nach Sonnenuntergang"), sind die Wörter „sonnig", „teils sonnig", „recht/meist/ziemlich sonnig", „heiter", „freundlich", „Sonnenschein", „Aufhellungen", „sonnige Lücken", „Wolkenlücken" ABSOLUT VERBOTEN. Erlaubt sind stattdessen: „klar", „meist klar", „sternenklar", „gering bewölkt", „wolkenlos", „aufgelockerte Bewölkung", „stark bewölkt", „bedeckt", „Nebel-/Hochnebelfelder". Beispiel falsch: „In der Nacht meist klar, teils sonnig." → richtig: „In der Nacht meist klar, nur vereinzelt dünne Wolkenfelder."
-
-### 2. Post-Validator + Retry (`src/server/nominal-style.server.ts`)
-
-Neue exportierte Funktion `enforceNightSunConsistency(text)` analog zu `enforceNominalStyle`:
-
-- Splittet den Text in Sätze/Halbsätze (`/[.!?]|\s-\s/`).
-- Für jeden Satz, der einen Nacht-Trigger enthält (`/\b(in der Nacht|nachts|nachthälfte|gegen Mitternacht|nach Sonnenuntergang|vor Sonnenaufgang)\b/i`), prüft auf verbotene Sonnen-Wörter (`/\b(sonnig|heiter|freundlich|Sonnenschein|Aufhellungen?|sonnige Lücken|Wolkenlücken)\b/i`).
-- Liefert `{ violations: string[] }` mit den gefundenen Problemphrasen.
-
-In `generateTextNominal` einbauen: nach dem bestehenden Nominalstil-Check zusätzlich Night-Sun-Check; bei Verstoß genau 1× Retry mit angehängter Anweisung:
-
-> WICHTIG: Im vorherigen Versuch wurde im Nacht-Kontext Sonnen-Vokabular verwendet ("…"). Schreibe ZWINGEND ohne „sonnig/heiter/freundlich/Sonnenschein/Aufhellungen" sobald die Nacht beschrieben wird. Verwende stattdessen „klar/meist klar/sternenklar/gering bewölkt/stark bewölkt/bedeckt/Nebel".
-
-Bestehender Nominalstil-Retry bleibt unverändert; die beiden Checks werden gemeinsam ausgewertet (ein Retry, der beide Hinweise enthält, falls beide verletzt sind).
-
-## Technische Details
-
-- Datei 1: `src/server/forecast.functions.ts` — nur Konstante `DEFAULT_SKY_RULES` erweitern (ein neuer Absatz). Kein Verhalten an anderer Stelle berührt.
-- Datei 2: `src/server/nominal-style.server.ts` — `enforceNightSunConsistency` hinzufügen, `generateTextNominal` so anpassen, dass beide Validatoren in einem kombinierten Retry münden (statt zwei getrennten Retry-Runden, um die Modell-Calls minimal zu halten).
-- Keine DB-, Cron- oder UI-Änderungen.
-
-## Erwartetes Resultat
-
-Sätze wie „In der Nacht meist klar, teils sonnig" werden bereits vom Modell vermieden (Prompt-Regel) und im Restfall vom Validator abgefangen + automatisch durch eine konsistente Nacht-Formulierung ersetzt.
+1. **Druckkarten-Fetch robuster machen**
+  - In `src/server/pressure-map.server.ts` den Open-Meteo-Abruf so erweitern, dass bei leeren/ungültigen ICON-Daten automatisch ein alternatives globales Modell als Fallback versucht wird.
+  - Ziel: nicht mehr bei `0/1344` abbrechen, wenn ein anderes Modell gültige Druckwerte liefern kann.
+2. **Fallback-Strategie für Zielzeit verbessern**
+  - Falls die Zielzeit `morgen 12:00 UTC` noch keine gültigen Werte liefert, zusätzlich nahe synoptische Zeiten prüfen, z. B. `morgen 06:00`, `morgen 18:00`, optional `heute 12:00` als letzte Rückfallebene.
+  - Die Karte bleibt dadurch aktuell, statt komplett auszufallen.
+3. **Statusmeldung präziser machen**
+  - Den Status in `app_settings.pressure_map_last_status` so schreiben, dass klar erkennbar ist, ob die Karte direkt, über Modell-Fallback oder über Zeit-Fallback erstellt wurde.
+  - Bei echten Ausfällen soll weiterhin ein verständlicher Fehlerstatus stehen.
+4. **Cron-Retry wieder aktivieren**
+  - Eine Datenbankänderung vorbereiten, die neben 03:00 UTC zusätzliche Retry-Slots einrichtet, z. B. 05:30, 07:30 und 10:30 UTC.
+  - Der bestehende Idempotenz-Check verhindert Mehrfach-Erzeugung, sobald die Tageskarte einmal erfolgreich erstellt wurde.
+5. **Verifikation**
+  - Den Cron-Endpoint nach der Änderung mit gültigem Header testen.
+  - Prüfen, dass `weather-maps/europe-pressure-latest.svg` ein neues `updated_at` erhält und der Status `OK` ist.
+6.  - dabei  muss jedoch die Prognosengenerierung mit OpenMeteo gewährleistet bleiben

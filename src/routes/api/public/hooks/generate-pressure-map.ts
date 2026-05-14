@@ -16,7 +16,7 @@ export const Route = createFileRoute("/api/public/hooks/generate-pressure-map")(
           const result = await generatePressureMap();
           const status = result.skipped
             ? `Skip (cron) · bereits aktuell für ${result.targetUtc}`
-            : `OK (cron) · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB`;
+            : `OK (cron) · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB${result.source ? ` · ${result.source}` : ""}`;
           await supabaseAdmin
             .from("app_settings")
             .update({
