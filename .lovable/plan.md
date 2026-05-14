@@ -1,86 +1,67 @@
 
-## Befund (Freitag-Eintrag, `d4900cba-…`)
+## Befund: Ja, Tag 0–5 ist inkonsistent
 
-Im `weather_data` zeigt sich ein klarer Datenkorruptions-Bug, der Tag 1 (Freitag) und das „Heute Abend & Nacht"-Fenster betrifft:
+Nach den letzten Fixes ist die Korruption weg, aber der Weg vom Wettermodell zum Eintrag verläuft pro Tag unterschiedlich. Das macht es schwer vorherzusagen, **welche** Modelle, **welche** Gewichtung und **welches** Zeitfenster pro Tag tatsächlich landen.
 
-```
-precip.by_model = {
-  meteoswiss_icon_ch1: 3,
-  meteoswiss_icon_ch2: 5.5,
-  meteofrance_arome_france_hd: 0.1,
-  icon_d2: 8.6,
-  probability_meteoswiss_icon_ch1: 397,   ← MÜLL
-  probability_meteoswiss_icon_ch2: 335    ← MÜLL
-}
-→ precip.avg = 140.9 mm, spread = 396.9 mm
-```
+### Konkrete Brüche
 
-```
-cloudcover.by_model = {
-  icon_d2: 99.9,
-  low_icon_d2: 64.5, mid_icon_d2: 99.6, high_icon_d2: 42.3,   ← MÜLL
-  low_meteofrance_arome_france_hd: 58.9, …                    ← MÜLL
-}
-→ cloudcover.weights_used = { icon_d2: 1 }   ← CH1/CH2 fallen raus
-```
+| Tag | Daily-Aggregation | MOSMIX-Mix | Hourly-Profil / Distribution | Refine ab Stunde |
+|---|---|---|---|---|
+| 0 | `formatDayData` → `collectModelValuesTiered` (Tier-Fallback) | **nein** (obwohl `tag0_weight_*` Settings existieren) | ja | – |
+| 1 | `formatDayData` **dann** `refineDayFromHour(…, 6)` überschreibt tmin/tmax/precip/cloud/sunshine über eine **andere** Aggregation (nur `hourly[base_<model>]`, **kein** Tier-Fallback) | **nein** (obwohl `tag1_weight_*` Settings existieren) | ja, ein zweites Mal in Refine berechnet | 6 |
+| 2 | `formatDayData` (mid + Tier-Fallback) | ja, `tag2_weight_*` (25/75) | ja | – |
+| 3 | `formatDayData` | ja, `tag3plus_weight_*` (45/55) | ja | – |
+| 4 | `formatDayData` | ja, `tag3plus_weight_*` | ja | – |
+| 5 | `formatDayData` | ja, `tag3plus_weight_*` | **nein** (`dayIndex <= 4`-Cutoff) | – |
 
-## Root Cause
+Daraus folgen die Probleme, die du im Output siehst:
 
-In `refineDayFromHour` (Z. 2193), `formatEveningNight` (Z. 2335), `buildHourlyProfile` (Z. 1628) und `computePrecipDistribution` (Z. 1499) sammelt `collectArrs(base)` per **Präfix-Matching** alle Hourly-Keys, die mit `base + "_"` beginnen, und kappt das Präfix als „Modellname":
+1. **Tag 1 vs. Tag 0/2–5 nutzen unterschiedliche Aggregations-Pfade.** `refineDayFromHour` mischt nur Modelle, die im Hourly-Block stehen, ohne Tier-Fallback. ICON-CH1 ist ab ca. h+33 raus — `formatDayData` würde dann automatisch CH2/AROME nachziehen, `refineDayFromHour` nicht. Folge: Tag 1 nachmittags hängt am dünnsten Modell-Set des ganzen Wochenausblicks.
+2. **`tag0_weight_*` / `tag1_weight_*` Settings sind tot.** Code mischt MOSMIX nur ab Tag 2. UI verspricht etwas anderes.
+3. **`models_used` und `tier` lügen für Tag 1.** `refineDayFromHour` macht `{ …day }` und überschreibt nur Werte, nicht die Diagnose. Im UI steht "tier: short, models_used: …", obwohl die finalen Zahlen aus einem anderen Modell-Mix stammen.
+4. **Lücke zwischen "Heute Abend & Nacht" und Tag 1.** `refineDayFromHour(…, 6)` schneidet **immer** 00–06 von Tag 1 weg — auch dann, wenn der erste Eintrag "Heute, Vormittag" oder "Heute Nachmittag & Abend" heisst und die Vornacht von Tag 1 gar nicht abdeckt. Saubere Annahme nur, wenn Erst-Eintrag = "Heute Abend & Nacht".
+5. **Tag 5 hat plötzlich keinen Tagesgang/Wolkenschichten** (`dayIndex <= 4`-Cutoff in `formatDayData`), Tag 4 schon → sichtbare Bruchkante in der Beschreibung.
+6. **`formatDayData` und `refineDayFromHour` definieren `collectArrs` noch parallel** (zwei nahezu identische Closures, gleicher Bug-Vektor). Nach dem Whitelist-Fix sind sie korrekt, aber drift-anfällig.
 
-```ts
-if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
-```
+### Plan
 
-Open-Meteo Hourly liefert aber:
-- `precipitation_meteoswiss_icon_ch1` ✓ ( Modell = `meteoswiss_icon_ch1`)
-- `precipitation_probability_meteoswiss_icon_ch1` → wird fälschlich als Modell `probability_meteoswiss_icon_ch1` interpretiert
-- `cloudcover_low_icon_d2` → wird fälschlich als Modell `low_icon_d2` interpretiert (analog `mid_*`, `high_*`)
+#### Baustein 1 — Refine-Fenster an den ersten Eintrag koppeln
+`refineDayFromHour` für Tag 1 nur dann mit `fromHour=6` aufrufen, wenn der Erst-Eintrag tatsächlich die Vornacht abdeckt (Titel = "Heute Abend & Nacht"). Sonst `fromHour=0` (= ganzer Tag, keine künstliche Lücke). Der Aufrufer (`buildDay`) bekommt dafür ein Argument `firstEntryCoversNight: boolean`, das aus `restOfDayTitle(startHour, …) === "Heute Abend & Nacht"` abgeleitet wird. Beide Aufrufstellen (Z. 2989 und Z. 3180) ziehen am selben Helper.
 
-Folge: `perModel(pArrs, "sum")` summiert die Wahrscheinlichkeit (0–100 %) über 24 Stunden zu Werten wie 397 „mm". `aggH("precipitation_sum", precPerModel)` schreibt das in `out.precip`. Damit **überschreibt `refineDayFromHour` die saubere Tageswert-Aggregation aus `formatDayData`** mit korrupten Daten — exakt das, was der Nutzer als „Basis wird immer schlechter" sieht.
+#### Baustein 2 — Tier-Fallback in `refineDayFromHour`
+Wenn nach dem Window <2 Modelle in `precPerModel` / `cloudPerModel` / `sunHPerModel` übrig sind, mit Werten aus `formatDayData` (also `day.precip.by_model` etc.) auffüllen, **bevor** `aggregate`/`weightedCloudSunAvg` läuft. Das ersetzt das bisherige `console.warn` (Diagnose bleibt drin) durch ein echtes Fallback und macht Tag 1 nachmittags wieder belastbar, wenn ICON-CH1 expired.
 
-Zusätzlich: weil die korrupten Modellnamen nicht in `CLOUD_SUN_WEIGHTS` / `PRECIP_HOURLY_WEIGHTS` stehen, fällt der gewichtete Mittelwert auf den letzten verbliebenen Eintrag (z. B. nur `icon_d2`) zurück — CH1/CH2 sind faktisch ausgeschlossen, obwohl ihre Daten da sind.
+#### Baustein 3 — `tag0_weight_*` / `tag1_weight_*` aktivieren oder entfernen
+Eine von zwei Optionen — bitte entscheiden:
+- **a)** MOSMIX-Mix für Tag 0 + 1 mit den existierenden Settings aktivieren (Default 0/100, also faktisch aus, aber nutzbar).
+- **b)** Settings + Spalten + UI-Felder entfernen, Doku klar sagen "MOSMIX erst ab Tag 2".
 
-## Plan
+Empfehlung: **a)** — minimaler Eingriff, behebt die Lüge zwischen UI und Code, Default-Verhalten bleibt unverändert.
 
-### Baustein 1 — Strikte Modell-ID-Filterung in `collectArrs` (Hauptfix)
+#### Baustein 4 — Tag 5 bekommt Tagesgang
+`computePrecipDistribution`, `buildHourlyProfile`, `computeCloudSunDistribution`, `computeCloudLayers` von `dayIndex <= 4` auf `dayIndex <= 5` heben. Open-Meteo Hourly liefert für die mid-Tier-Modelle bis ~5 Tage; falls Datenlage dünn, fällt das Ergebnis automatisch leer aus — kein Risiko, nur ein Gewinn an Konsistenz.
 
-`collectArrs` so umbauen, dass nur Keys mit bekannter Modell-ID akzeptiert werden. Bekannte Modelle = Vereinigung von `weather.modelLists.short/mid/long` (komma-getrennt) plus Sentinel `"default"`.
+#### Baustein 5 — Diagnose-Felder im Refine aktualisieren
+In `refineDayFromHour` nach dem Mix `out.models_used` neu berechnen (Vereinigung der `by_model`-Keys aus den überschriebenen Feldern) und `out.refined_window = { from_hour: fromHour, to_hour: 24 }` ergänzen. `tier` bleibt aus `formatDayData` (kommt vom `pickBestSource`-Setup). Damit steht im UI/Prompt, was wirklich verwendet wurde.
 
-Akzeptiert: `k === base` (→ `default`) oder `k === ${base}_${model}` für `model ∈ knownModels`. Alles andere wird verworfen.
+#### Baustein 6 — `collectArrs` als gemeinsamer Helper
+Aktuell vier nahezu identische Closures. Einmaliger Helper `makeCollectArrs(weather)` (analog zu `getKnownModels`) am Modul-Level, alle vier Stellen importieren ihn. Kein Verhaltensänderung, nur eine Quelle der Wahrheit für künftige Änderungen am Whitelist-Pattern.
 
-Damit verschwinden `probability_*`, `low_*`, `mid_*`, `high_*` aus `pArrs`/`cArrs` an allen vier Stellen:
-1. `refineDayFromHour` (Z. 2193) — fixt Tag 1 `precip` und `cloudcover` (Hauptursache des Freitag-Problems)
-2. `formatEveningNight` (Z. 2335) — fixt „Heute Abend & Nacht"-Eintrag analog
-3. `buildHourlyProfile` (Z. 1628) — fixt `hourly_profile.p` (Niederschlagsspur) und Cloud-Schichten
-4. `computePrecipDistribution` (Z. 1499) — fixt `precip_distribution.blocks[*].precip_mm` (Tagesgang)
+### Reihenfolge & Scope
+- Bausteine 1, 2, 5 sind die mit dem grössten Effekt auf den AI-Text (Tag 1 wird stabil, Vornacht-Lücke weg, Diagnose ehrlich).
+- Baustein 4 ist ein kleiner, in sich abgeschlossener Konsistenz-Fix.
+- Baustein 6 ist Hygiene, kein Verhalten.
+- Baustein 3 ist eine Produkt-Entscheidung — ich brauche dein OK auf a) oder b).
 
-Implementierung: gemeinsamer Helper `makeCollectArrs(weather)` der die `knownModels`-Set einmal aufbaut und eine `collectArrs`-Closure zurückgibt. Die vier Stellen rufen den Helper auf statt eigene Inline-Variante.
-
-Wichtig: `cloudcover_low/mid/high` sollen weiterhin verfügbar sein für `buildHourlyProfile` (`cLowArrs` etc., Z. 1643–1645) — die nutzen aber `collectArrs("cloudcover_low")` mit eigenem Basisnamen, was nach Fix korrekt nur `cloudcover_low_<model>` matcht. Kein Funktionsverlust.
-
-### Baustein 2 — Diagnose-Log nach dem Fix
-
-In `refineDayFromHour` direkt nach `precPerModel` / `cloudPerModel` / `sunHPerModel` einen `console.warn`, wenn nach dem Fix **weniger als 2 Modelle** beitragen oder wenn **kein einziges ICON-Modell** (`meteoswiss_icon_ch1`, `meteoswiss_icon_ch2`, `icon_d2`) drin ist. Kein Verhalten ändern, nur sichtbar machen — damit zukünftige Coverage-Lücken (CH1 expired etc.) im Log auffallen statt still durchzulaufen.
+Nicht im Scope: AI-Prompt-Anpassungen, Gewichtsverteilung in `CLOUD_SUN_WEIGHTS` / `PRECIP_HOURLY_WEIGHTS`, neue Modelle. Erst sehen, ob die Pipeline nach diesen sechs Schritten konsistent läuft.
 
 ### Verifikation
+- Typecheck.
+- Nach nächster Generierung pro Tag in `weather_data` prüfen:
+  - `models_used` ist nicht leer und enthält ICON-Modelle.
+  - `precip.by_model` enthält nur echte Modell-IDs (kein `probability_*`, `low_*`, …).
+  - Tag 5 hat `precip_distribution` und `hourly_profile`.
+  - Tag 1 bei Erst-Eintrag ≠ "Heute Abend & Nacht": `refined_window.from_hour = 0`.
 
-1. Typecheck (build:dev läuft automatisch).
-2. Stichproben-Query nach nächster Forecast-Generierung:
-   ```sql
-   select jsonb_pretty(weather_data->'precip'->'by_model')
-   from forecast_entries
-   where forecast_id = '<neuer forecast>' and entry_date = current_date + 1;
-   ```
-   Erwartung: nur echte Modell-IDs (`meteoswiss_icon_ch1`, `meteoswiss_icon_ch2`, `icon_d2`, `meteofrance_arome_france_hd`), keine `probability_*` / `low_*` / `mid_*` / `high_*`.
-3. `cloudcover.weights_used` sollte CH1/CH2/D2 enthalten, nicht nur `icon_d2: 1`.
-
-### Nicht im Scope
-
-- Hebel zur stärkeren ICON-Gewichtung — erst sinnvoll, wenn die Daten überhaupt sauber ankommen.
-- Überarbeitung des AI-Prompts — der nachgelagerte Schritt sieht nach dem Fix automatisch konsistente Werte.
-- ICON-CH1-Horizont (33 h) für Tag 1 Nachmittag — separates Thema, kein Bug.
-
-## Erwarteter Effekt
-
-Tag 1 (`refineDayFromHour`) und „Heute Abend & Nacht" (`formatEveningNight`) bekommen wieder saubere CH1/CH2-Niederschlags- und Bewölkungswerte statt aufsummierter Wahrscheinlichkeiten und Cloud-Schicht-Salat. Das `weights_used`-Feld zeigt wieder die echte Gewichtung statt Single-Model-Fallback. Die KI sieht plausible Spreads (z. B. 0.1–8.6 mm statt 0.1–397 mm) und kann Aussagen wie „kaum sonnig, am Nachmittag Schauer" wieder belastbar generieren.
+### Frage vor der Umsetzung
+Baustein 3: **a) Tag 0/1-MOSMIX-Mix aktivieren** oder **b) tote Settings entfernen**?
