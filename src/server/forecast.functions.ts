@@ -2208,12 +2208,22 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
     const wW = weightedWindAvg(windPerModel);
     out.wind_max = wRaw && wW ? { ...wRaw, avg: wW.avg, weights_used: wW.weights_used } : wRaw;
   }
-  if (Object.keys(cloudPerModel).length) out.cloudcover = aggH("cloudcover_mean", cloudPerModel);
-  if (Object.keys(sunHPerModel).length) out.sunshine_h = aggH("sunshine_duration", sunHPerModel);
+  if (Object.keys(cloudPerModel).length) {
+    const cRaw = aggH("cloudcover_mean", cloudPerModel);
+    const cW = weightedCloudSunAvg(cloudPerModel);
+    out.cloudcover = cRaw && cW ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used } : cRaw;
+  }
+  if (Object.keys(sunHPerModel).length) {
+    const sRaw = aggH("sunshine_duration", sunHPerModel);
+    const sW = weightedCloudSunAvg(sunHPerModel);
+    out.sunshine_h = sRaw && sW ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used } : sRaw;
+  }
   if (horizon) out.horizon = horizon;
 
   out.precip_distribution = computePrecipDistribution(weather, dayIndex, fromHour);
   out.hourly_profile = buildHourlyProfile(weather, dayIndex, fromHour);
+  out.cloud_sun_distribution = computeCloudSunDistribution(out.hourly_profile);
+  out.cloud_layers = computeCloudLayers(out.hourly_profile);
   out.window_from_hour = fromHour;
   out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
   return normalizeSkyDiagnostics(out);
