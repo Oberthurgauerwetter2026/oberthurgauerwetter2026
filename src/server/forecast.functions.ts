@@ -1534,20 +1534,9 @@ function computePrecipDistribution(weather: any, dayIndex: number, fromHour: num
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return null;
 
-  const known = getKnownModels(weather);
-  const collectArrs = (base: string): number[][] => {
-    const out: number[][] = [];
-    if (Array.isArray(h[base])) out.push(h[base]);
-    const prefix = base + "_";
-    for (const k of Object.keys(h)) {
-      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
-      const suffix = k.slice(prefix.length);
-      if (known.has(suffix)) out.push(h[k]);
-    }
-    return out;
-  };
-  const precArrs = collectArrs("precipitation");
-  const probArrs = collectArrs("precipitation_probability");
+  const collect = makeCollectArrs(weather);
+  const precArrs = Object.values(collect("precipitation"));
+  const probArrs = Object.values(collect("precipitation_probability"));
   if (!precArrs.length) return null;
 
   const blocks = {
