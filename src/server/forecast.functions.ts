@@ -2003,6 +2003,61 @@ function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; w
   return { avg: Math.round(avg * 10) / 10, weights_used };
 }
 
+// Modell-Gewichte fürs Stundenfenster (Restfenster 12–24 h).
+// Temperatur: hochauflösende CH-Modelle dominieren, ARPEGE als globaler Anker.
+const TEMP_HOURLY_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.30,
+  meteoswiss_icon_ch2: 0.25,
+  meteofrance_arome_france_hd: 0.20,
+  icon_d2: 0.15,
+  arpege_europe: 0.10,
+};
+// Niederschlag: AROME bekommt mehr Gewicht (konvektionsstark), CH-Modelle danach.
+const PRECIP_HOURLY_WEIGHTS: Record<string, number> = {
+  meteoswiss_icon_ch1: 0.30,
+  meteofrance_arome_france_hd: 0.25,
+  meteoswiss_icon_ch2: 0.20,
+  icon_d2: 0.15,
+  arpege_europe: 0.10,
+};
+
+// Pro-Stunden-Gewichtung. `weights` = Basistabelle; horizon-Modifier (HORIZON_WEIGHTS)
+// wird, wenn `hourIso` gegeben, multiplikativ angewandt — Modelle mit Horizont-Gewicht 0
+// (z. B. ECMWF/GFS in h0_12/h12_24) fallen so automatisch raus.
+// Fallback: wenn kein gewichtetes Modell vorhanden ist, ungewichtetes Mittel über
+// `arrs` (heutiges Verhalten von hourAvg) — keine Regression.
+function weightedHourValue(
+  arrs: Record<string, number[]>,
+  i: number,
+  weights: Record<string, number>,
+  hourIso?: string,
+): number | null {
+  const horiz = hourIso ? HORIZON_WEIGHTS[horizonForHour(hourIso)] : null;
+  let sumW = 0;
+  let sum = 0;
+  for (const [m, arr] of Object.entries(arrs)) {
+    const v = arr?.[i];
+    if (v == null || !Number.isFinite(v)) continue;
+    const base = weights[m];
+    if (base == null) continue;
+    const hMod = horiz ? (horiz[modelKey(m)] ?? 1.0) : 1.0;
+    const w = base * hMod;
+    if (w <= 0) continue;
+    sumW += w;
+    sum += v * w;
+  }
+  if (sumW > 0) return sum / sumW;
+  // Fallback: ungewichtetes Mittel über alle verfügbaren (nicht-blocklisteten) Modelle.
+  const vals: number[] = [];
+  for (const [m, arr] of Object.entries(arrs)) {
+    if (m !== "default" && HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b))) continue;
+    const v = arr?.[i];
+    if (v != null && Number.isFinite(v)) vals.push(v);
+  }
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
