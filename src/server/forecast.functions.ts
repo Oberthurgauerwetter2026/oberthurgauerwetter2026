@@ -302,9 +302,23 @@ function classifySky(data: any): { sky_label: string; sky_pattern: string } {
     };
   }
 
-  // 4. Bedeckt
+  // 4. Bedeckt — mit Hochnebel-Hinweis, wenn tiefe Bewölkung dominiert.
   if (cloud != null && sun != null && cloud >= 80 && sun <= 4) {
+    if (layersOk && cLow != null && cLow >= 80 && (cMid ?? 0) < 70 && (cHigh ?? 0) < 70) {
+      return { sky_label: "Trüb durch Hochnebel oder Stratusdecke", sky_pattern: "hochnebel_truebe" };
+    }
     return { sky_label: "Stark bewölkt bis bedeckt", sky_pattern: "bedeckt" };
+  }
+
+  // 4b. Hochnebel-Lage ohne Niederschlag, aber mit deutlicher tiefer Bewölkung morgens
+  // (Auflösung wird separat über detectFogDissipation/sky_label überschrieben).
+  if (
+    layersOk
+    && cLowMorn != null && cLowMorn >= 80
+    && (sun == null || sun < 5)
+    && (pp == null || pp < 40)
+  ) {
+    return { sky_label: "Tiefe Wolkendecke, vielfach trüb", sky_pattern: "hochnebel_lage" };
   }
 
   // 5. Überwiegend sonnig
