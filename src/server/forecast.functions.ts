@@ -217,6 +217,25 @@ function classifySky(data: any): { sky_label: string; sky_pattern: string } {
   const thunderActive = thunder && thunder !== "none";
   const dist = data?.precip_distribution;
   const blocks = dist?.blocks ?? null;
+  const layers = data?.cloud_layers ?? null;
+  const layersOk = layers?.has_data === true;
+  const cLow = layersOk ? layers.day?.low ?? null : null;
+  const cMid = layersOk ? layers.day?.mid ?? null : null;
+  const cHigh = layersOk ? layers.day?.high ?? null : null;
+  const cLowMorn = layersOk ? layers.morning?.low ?? null : null;
+
+  // 0. Hohe Schleierwolken bei sonst klarem Himmel — Sonne scheint milchig durch.
+  // Trigger: viel hohe Bewölkung, aber kaum tiefe/mittlere Wolken und nennenswert Sonne.
+  if (
+    layersOk
+    && cHigh != null && cHigh >= 60
+    && (cLow ?? 0) <= 30
+    && (cMid ?? 0) <= 40
+    && (sun == null || sun >= 5)
+    && (pp == null || pp < 40)
+  ) {
+    return { sky_label: "Sonne durch hohe Schleierwolken, oft milchig", sky_pattern: "schleierwolken_sonnig" };
+  }
 
   // 1. Sonnig & wolkenlos
   if (cloud != null && sun != null && cloud <= 5 && sun >= 10) {
