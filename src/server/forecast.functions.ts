@@ -1880,6 +1880,35 @@ function buildDayUserPrompt(intro: string, day: any, extraHint: string = ""): st
   return prompt;
 }
 
+// Aggregiert die Wolkenschicht-Information (low/mid/high) aus dem Stundenprofil
+// auf Tages-, Vormittags- und Nachmittagsebene. Wird für die Sky-Klassifikation
+// und Hochnebel-/Schleierwolken-Erkennung genutzt.
+function computeCloudLayers(profile: HourlyProfileRow[] | null | undefined): {
+  day: { low: number | null; mid: number | null; high: number | null };
+  morning: { low: number | null; mid: number | null; high: number | null };
+  afternoon: { low: number | null; mid: number | null; high: number | null };
+  has_data: boolean;
+} | null {
+  if (!profile?.length) return null;
+  const meanRound = (xs: number[]) =>
+    xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
+  const block = (rows: HourlyProfileRow[]) => ({
+    low: meanRound(rows.map((r) => r.c_low).filter((v): v is number => v != null)),
+    mid: meanRound(rows.map((r) => r.c_mid).filter((v): v is number => v != null)),
+    high: meanRound(rows.map((r) => r.c_high).filter((v): v is number => v != null)),
+  });
+  const dayRows = profile.filter((r) => r.h >= 6 && r.h <= 20);
+  const mornRows = profile.filter((r) => r.h >= 6 && r.h < 12);
+  const aftRows = profile.filter((r) => r.h >= 12 && r.h < 18);
+  const hasData = profile.some((r) => r.c_low != null || r.c_mid != null || r.c_high != null);
+  return {
+    day: block(dayRows),
+    morning: block(mornRows),
+    afternoon: block(aftRows),
+    has_data: hasData,
+  };
+}
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
