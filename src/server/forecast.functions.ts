@@ -2216,18 +2216,7 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const dateStr = weather?.daily?.time?.[dayIndex];
   if (!h?.time || !dateStr) return day;
 
-  const known = getKnownModels(weather);
-  const collectArrs = (base: string): Record<string, number[]> => {
-    const out: Record<string, number[]> = {};
-    if (Array.isArray(h[base])) out["default"] = h[base];
-    const prefix = base + "_";
-    for (const k of Object.keys(h)) {
-      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
-      const model = k.slice(prefix.length);
-      if (known.has(model)) out[model] = h[k];
-    }
-    return out;
-  };
+  const collectArrs = makeCollectArrs(weather);
   const isUsableModel = (m: string) => !HOURLY_LONGRANGE_BLOCKLIST.some((b) => m.includes(b));
 
   const idx: number[] = [];
@@ -2276,6 +2265,32 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const sunHPerModel: Record<string, number> = {};
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
 
+  // Baustein 2 — Tier-Fallback: wenn das Stundenfenster für eine Variable <2 Modelle
+  // liefert (z. B. ICON-CH1 ist ab h+33 raus), die fehlenden Modelle aus der bereits
+  // aggregierten Tagesbasis (`day.<var>.by_model`, kommt aus formatDayData mit
+  // collectModelValuesTiered) auffüllen. Werte sind dann Tagesmittel statt
+  // Fenstermittel — Spread und Konsens bleiben aber erhalten, was für die KI
+  // belastbarer ist als ein Single-Model-Mix.
+  const fillFromDay = (perModel: Record<string, number>, dayField: any): Record<string, number> => {
+    if (Object.keys(perModel).length >= 2) return perModel;
+    const byModel = dayField?.by_model;
+    if (!byModel || typeof byModel !== "object") return perModel;
+    const out = { ...perModel };
+    for (const [m, v] of Object.entries(byModel)) {
+      if (m === "default" || m === "derived") continue;
+      if (m in out) continue;
+      if (typeof v === "number" && Number.isFinite(v)) out[m] = v;
+    }
+    return out;
+  };
+  const precPerModelF = fillFromDay(precPerModel, day?.precip);
+  const probPerModelF = fillFromDay(probPerModel, day?.precip_prob);
+  const cloudPerModelF = fillFromDay(cloudPerModel, day?.cloudcover);
+  const sunHPerModelF = fillFromDay(sunHPerModel, day?.sunshine_h);
+  const windPerModelF = fillFromDay(windPerModel, day?.wind_max);
+  const tminPerModelF = fillFromDay(tminPerModel, day?.tmin);
+  const tmaxPerModelF = fillFromDay(tmaxPerModel, day?.tmax);
+
   // Diagnose: Coverage von ICON-Modellen (CH1/CH2/D2) im Restfenster prüfen.
   // Sichtbar machen, wenn entweder <2 Modelle insgesamt beitragen oder kein
   // ICON-Modell mehr drin ist — verhindert stille Single-Model-Fallbacks.
@@ -2290,9 +2305,9 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
       );
     }
   };
-  coverage("precip", precPerModel);
-  coverage("cloud", cloudPerModel);
-  coverage("sunshine", sunHPerModel);
+  coverage("precip", precPerModelF);
+  coverage("cloud", cloudPerModelF);
+  coverage("sunshine", sunHPerModelF);
 
   const out = { ...day };
   // Mittlere Stunde des Fensters für Horizont-Bestimmung
@@ -2303,23 +2318,23 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const regime = day?.regime as Regime | undefined;
   const aggH = (variable: string, perModel: Record<string, number>) =>
     aggregate(perModel, { variable, regime, horizon });
-  if (Object.keys(tminPerModel).length) out.tmin = aggH("temperature_2m_min", tminPerModel);
-  if (Object.keys(tmaxPerModel).length) out.tmax = aggH("temperature_2m_max", tmaxPerModel);
-  if (Object.keys(precPerModel).length) out.precip = aggH("precipitation_sum", precPerModel);
-  if (Object.keys(probPerModel).length) out.precip_prob = aggH("precipitation_probability_max", probPerModel);
-  if (Object.keys(windPerModel).length) {
-    const wRaw = aggH("windspeed_10m_max", windPerModel);
-    const wW = weightedWindAvg(windPerModel);
+  if (Object.keys(tminPerModelF).length) out.tmin = aggH("temperature_2m_min", tminPerModelF);
+  if (Object.keys(tmaxPerModelF).length) out.tmax = aggH("temperature_2m_max", tmaxPerModelF);
+  if (Object.keys(precPerModelF).length) out.precip = aggH("precipitation_sum", precPerModelF);
+  if (Object.keys(probPerModelF).length) out.precip_prob = aggH("precipitation_probability_max", probPerModelF);
+  if (Object.keys(windPerModelF).length) {
+    const wRaw = aggH("windspeed_10m_max", windPerModelF);
+    const wW = weightedWindAvg(windPerModelF);
     out.wind_max = wRaw && wW ? { ...wRaw, avg: wW.avg, weights_used: wW.weights_used } : wRaw;
   }
-  if (Object.keys(cloudPerModel).length) {
-    const cRaw = aggH("cloudcover_mean", cloudPerModel);
-    const cW = weightedCloudSunAvg(cloudPerModel);
+  if (Object.keys(cloudPerModelF).length) {
+    const cRaw = aggH("cloudcover_mean", cloudPerModelF);
+    const cW = weightedCloudSunAvg(cloudPerModelF);
     out.cloudcover = cRaw && cW ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used } : cRaw;
   }
-  if (Object.keys(sunHPerModel).length) {
-    const sRaw = aggH("sunshine_duration", sunHPerModel);
-    const sW = weightedCloudSunAvg(sunHPerModel);
+  if (Object.keys(sunHPerModelF).length) {
+    const sRaw = aggH("sunshine_duration", sunHPerModelF);
+    const sW = weightedCloudSunAvg(sunHPerModelF);
     out.sunshine_h = sRaw && sW ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used } : sRaw;
   }
   if (horizon) out.horizon = horizon;
@@ -2329,7 +2344,20 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   out.cloud_sun_distribution = computeCloudSunDistribution(out.hourly_profile);
   out.cloud_layers = computeCloudLayers(out.hourly_profile);
   out.window_from_hour = fromHour;
-  out.window_label = `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`;
+  out.window_label = fromHour > 0
+    ? `${String(fromHour).padStart(2, "0")}:00–24:00 (Vornacht 00–${String(fromHour).padStart(2, "0")} im vorherigen Eintrag abgedeckt)`
+    : `00:00–24:00 (ganzer Tag)`;
+
+  // Baustein 5 — Diagnose-Felder ehrlich halten: models_used spiegelt nach dem
+  // Refine die tatsächlich beitragenden Modelle, refined_window dokumentiert
+  // das Zeitfenster.
+  const contributing = new Set<string>();
+  for (const aggOut of [out.tmin, out.tmax, out.precip, out.precip_prob, out.wind_max, out.cloudcover, out.sunshine_h]) {
+    if (aggOut?.by_model) for (const k of Object.keys(aggOut.by_model)) contributing.add(k);
+  }
+  if (contributing.size) out.models_used = Array.from(contributing).join(",");
+  out.refined_window = { from_hour: fromHour, to_hour: 24 };
+
   return normalizeSkyDiagnostics(out);
 }
 
