@@ -2139,11 +2139,11 @@ function formatDayData(weather: any, dayIndex: number) {
   const weathercode = agg("weathercode", collectModelValuesTiered(weather, "weathercode", dayIndex));
   const thunderstorm = assessThunderstormRisk(weather, dayIndex, weathercode?.by_model);
 
-  // Tagesgang (Niederschlagsverteilung) für Tag 0–4 vorab berechnen, damit
+  // Tagesgang (Niederschlagsverteilung) für Tag 0–5 vorab berechnen, damit
   // die Sky-Klassifikation den intraday-Verlauf berücksichtigen kann.
-  const precipDist = dayIndex <= 4 ? computePrecipDistribution(weather, dayIndex) : null;
-  // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–4
-  const hourlyProfile = dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null;
+  const precipDist = dayIndex <= 5 ? computePrecipDistribution(weather, dayIndex) : null;
+  // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–5
+  const hourlyProfile = dayIndex <= 5 ? buildHourlyProfile(weather, dayIndex) : null;
   const cloud_layers = computeCloudLayers(hourlyProfile);
   const cloud_sun_distribution = computeCloudSunDistribution(hourlyProfile);
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
