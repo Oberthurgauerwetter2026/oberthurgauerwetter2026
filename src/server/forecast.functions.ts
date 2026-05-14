@@ -2275,6 +2275,24 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const sunHPerModel: Record<string, number> = {};
   for (const [m, v] of Object.entries(sunSecPerModel)) sunHPerModel[m] = r1(v / 3600);
 
+  // Diagnose: Coverage von ICON-Modellen (CH1/CH2/D2) im Restfenster prüfen.
+  // Sichtbar machen, wenn entweder <2 Modelle insgesamt beitragen oder kein
+  // ICON-Modell mehr drin ist — verhindert stille Single-Model-Fallbacks.
+  const ICON_KEYS = ["meteoswiss_icon_ch1", "meteoswiss_icon_ch2", "icon_d2"];
+  const coverage = (label: string, perModel: Record<string, number>) => {
+    const keys = Object.keys(perModel);
+    const iconCount = keys.filter((k) => ICON_KEYS.includes(k)).length;
+    if (keys.length < 2 || iconCount === 0) {
+      console.warn(
+        `[forecast] refineDayFromHour day${dayIndex} ${label}: ${keys.length} Modell(e) ` +
+        `(${keys.join(",") || "—"}), ICON-Modelle: ${iconCount}/3`,
+      );
+    }
+  };
+  coverage("precip", precPerModel);
+  coverage("cloud", cloudPerModel);
+  coverage("sunshine", sunHPerModel);
+
   const out = { ...day };
   // Mittlere Stunde des Fensters für Horizont-Bestimmung
   const midHour = Math.min(23, Math.floor((fromHour + 24) / 2));
