@@ -2360,12 +2360,17 @@ function formatEveningNight(weather: any, startHourOverride?: number, radar?: Ra
     });
   if (!slice.length) return null;
 
-  // Collect arrays for ALL models (not just the first one)
+  // Collect arrays for ALL models (not just the first one) — strikt nach bekannter Modell-ID,
+  // damit z. B. precipitation_probability_<model> nicht als eigenes „Modell" durchrutscht.
+  const known = getKnownModels(weather);
   const collectArrs = (base: string): Record<string, number[]> => {
     const out: Record<string, number[]> = {};
     if (Array.isArray(h[base])) out["default"] = h[base];
+    const prefix = base + "_";
     for (const k of Object.keys(h)) {
-      if (k.startsWith(base + "_") && Array.isArray(h[k])) out[k.slice(base.length + 1)] = h[k];
+      if (!k.startsWith(prefix) || !Array.isArray(h[k])) continue;
+      const model = k.slice(prefix.length);
+      if (known.has(model)) out[model] = h[k];
     }
     return out;
   };
