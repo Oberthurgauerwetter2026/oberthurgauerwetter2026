@@ -104,7 +104,7 @@ async function setRateLimited(tier: RateLimitTier = "daily", body = ""): Promise
   }
 }
 
-async function fetchGrids(targetUtcIso: string): Promise<Grids> {
+async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless"): Promise<Grids> {
   const lats: number[] = [];
   const lons: number[] = [];
   for (let r = 0; r < ROWS; r++) {
@@ -143,7 +143,7 @@ async function fetchGrids(targetUtcIso: string): Promise<Grids> {
     url.searchParams.set("latitude", la);
     url.searchParams.set("longitude", lo);
     url.searchParams.set("hourly", "pressure_msl,temperature_850hPa,precipitation");
-    url.searchParams.set("models", "icon_seamless");
+    url.searchParams.set("models", model);
     url.searchParams.set("forecast_days", "2");
     url.searchParams.set("timezone", "UTC");
     let json: any;
@@ -709,12 +709,47 @@ export async function generatePressureMap(): Promise<{ url: string; targetUtc: s
   if (await isRateLimited()) {
     throw new OpenMeteoRateLimitError();
   }
-  const raw = await fetchGrids(targetUtcIso);
-  const validCount = raw.pressure.values.filter((v: number) => Number.isFinite(v)).length;
-  console.log(`Pressure grid: ${validCount}/${raw.pressure.values.length} valid points`);
-  if (validCount < 100) {
-    throw new Error(`Zu wenige gültige Druckwerte (${validCount}/${raw.pressure.values.length})`);
+
+  // Try a chain of model + target-time fallbacks. The primary attempt uses
+  // icon_seamless at the canonical target (tomorrow 12 UTC). If that produces
+  // too few valid grid points, fall back to other global models, then to
+  // alternate synoptic hours. Idempotency in app_settings prevents wasted
+  // calls once a map has been produced for the day.
+  const attempts: Array<{ model: string; target: string; label: string }> = [
+    { model: "icon_seamless", target: targetUtcIso, label: "icon_seamless" },
+    { model: "ecmwf_ifs025", target: targetUtcIso, label: "ecmwf_ifs025" },
+    { model: "gfs_global", target: targetUtcIso, label: "gfs_global" },
+    { model: "icon_seamless", target: shiftHour(targetUtcIso, -6), label: "icon_seamless@-6h" },
+    { model: "icon_seamless", target: shiftHour(targetUtcIso, +6), label: "icon_seamless@+6h" },
+    { model: "ecmwf_ifs025", target: shiftHour(targetUtcIso, -6), label: "ecmwf_ifs025@-6h" },
+  ];
+
+  let raw: Grids | null = null;
+  let usedLabel = "";
+  let usedTarget = targetUtcIso;
+  let lastValidCount = 0;
+  for (const a of attempts) {
+    try {
+      const candidate = await fetchGrids(a.target, a.model);
+      const valid = candidate.pressure.values.filter((v: number) => Number.isFinite(v)).length;
+      console.log(`[pressure-map] ${a.label} target=${a.target}: ${valid}/${candidate.pressure.values.length} valid`);
+      lastValidCount = valid;
+      if (valid >= 100) {
+        raw = candidate;
+        usedLabel = a.label;
+        usedTarget = a.target;
+        break;
+      }
+    } catch (e) {
+      if (e instanceof OpenMeteoRateLimitError) throw e;
+      console.warn(`[pressure-map] attempt ${a.label} threw:`, e);
+    }
   }
+
+  if (!raw) {
+    throw new Error(`Zu wenige gültige Druckwerte (${lastValidCount}/${COLS * ROWS}) — alle Modell-Fallbacks fehlgeschlagen`);
+  }
+
   const grids: Grids = {
     pressure: fillAndSmooth(raw.pressure, 1013, 3),
     t850: fillAndSmooth(raw.t850, 0, 2),
