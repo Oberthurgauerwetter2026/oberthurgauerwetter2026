@@ -2063,6 +2063,7 @@ function formatDayData(weather: any, dayIndex: number) {
   // Stundenprofil + Wolkenschichten (low/mid/high) für Tag 0–4
   const hourlyProfile = dayIndex <= 4 ? buildHourlyProfile(weather, dayIndex) : null;
   const cloud_layers = computeCloudLayers(hourlyProfile);
+  const cloud_sun_distribution = computeCloudSunDistribution(hourlyProfile);
   // Deterministische Sky-Klassifikation IMMER (auch Tag 2+) — verhindert
   // widersprüchliche "sonnig"-Aussagen, wenn Niederschlag/Bewölkung dagegen sprechen.
   const skyClass = classifySky({
