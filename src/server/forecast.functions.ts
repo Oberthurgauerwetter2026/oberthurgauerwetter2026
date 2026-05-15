@@ -1975,6 +1975,42 @@ function formatHourlyProfileTable(profile: HourlyProfileRow[] | null | undefined
   return lines.join("\n");
 }
 
+// Baustein D — Datenqualitätshinweise für den AI-Prompt aus dem Tagesdatensatz.
+// Verhindert overconfident "sonnig"-Aussagen, wenn Bewölkung/Sonne nur dünn
+// belegt sind oder Modelle stark uneinig sind.
+function buildDataQualityBlock(day: any): string | null {
+  const lines: string[] = [];
+  const cc = day?.cloudcover;
+  const sh = day?.sunshine_h;
+  const ccSource: string | undefined = day?.cloudcover_source;
+  if (cc) {
+    const n = typeof cc.n_effective === "number" ? cc.n_effective : Object.keys(cc.by_model || {}).length;
+    if (ccSource && ccSource !== "model") {
+      lines.push(`- Bewölkung: abgeleitet (${ccSource}) — neutral formulieren, NICHT "sonnig" oder "bedeckt" als Faktum`);
+    } else if (n < 2) {
+      lines.push(`- Bewölkung: nur ${n} Modell beiträgt — vorsichtig formulieren, neutrale Begriffe, KEINE Aussage wie "sonnig"`);
+    } else if (typeof cc.spread === "number" && cc.spread > 40) {
+      lines.push(`- Bewölkung: Modelle uneinig (Spread ${Math.round(cc.spread)}%) — Unsicherheit benennen statt Festlegung`);
+    }
+    if (cc.trimmed && Array.isArray(cc.outliers) && cc.outliers.length) {
+      lines.push(`- Bewölkung: Ausreisser-Modelle (${cc.outliers.join(", ")}) wurden runtergewichtet`);
+    }
+  }
+  if (sh) {
+    const n = typeof sh.n_effective === "number" ? sh.n_effective : Object.keys(sh.by_model || {}).length;
+    if (typeof sh.spread === "number" && sh.spread > 4) {
+      lines.push(`- Sonnenscheindauer: Spread ${sh.spread.toFixed(1)} h zwischen Modellen — Unsicherheit benennen, keine optimistische Aussage`);
+    } else if (n < 2) {
+      lines.push(`- Sonnenscheindauer: nur ${n} Modell — vorsichtig formulieren`);
+    }
+    if (sh.trimmed && Array.isArray(sh.outliers) && sh.outliers.length) {
+      lines.push(`- Sonne: Ausreisser-Modelle (${sh.outliers.join(", ")}) wurden runtergewichtet`);
+    }
+  }
+  if (!lines.length) return null;
+  return `DATENQUALITÄT (beim Formulieren beachten):\n${lines.join("\n")}`;
+}
+
 // Baut den userPrompt für einen Tag und hängt — falls vorhanden — das
 // Stundenprofil als separate Tabelle an (statt es als JSON-Array im Datensatz
 // zu vergraben). `hourly_profile` wird aus dem JSON-Dump entfernt, um Tokens zu sparen.
@@ -1983,7 +2019,8 @@ function buildDayUserPrompt(intro: string, day: any, extraHint: string = ""): st
   const dump = { ...day };
   delete dump.hourly_profile;
   const json = JSON.stringify(dump, null, 2);
-  let prompt = `${intro}\n${json}`;
+  const quality = buildDataQualityBlock(day);
+  let prompt = quality ? `${quality}\n\n${intro}\n${json}` : `${intro}\n${json}`;
   const table = formatHourlyProfileTable(profile);
   if (table) {
     prompt += `\n\nSTUNDENPROFIL (Median über Modelle, ± = Modell-Streuung):\n${table}`;
@@ -2081,6 +2118,44 @@ function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; w
   const weights_used: Record<string, number> = {};
   for (const [k] of entries) weights_used[k] = Math.round((CLOUD_SUN_WEIGHTS[k] / totalW) * 100) / 100;
   return { avg: Math.round(avg * 10) / 10, weights_used };
+}
+
+// Baustein C — Konsens-basiertes Trimming für Bewölkung & Sonne.
+// Wenn der Spread eine Schwelle überschreitet UND ein Modell mehr als 1.5×MAD
+// vom Median abweicht, wird sein Gewicht auf 30 % reduziert. Die zurückgelieferten
+// `outliers`/`trimmed`-Felder werden im AI-Prompt als Datenqualitätshinweis genutzt.
+function trimmedConsensus(
+  perModel: Record<string, number>,
+  baseWeights: Record<string, number>,
+  spreadThreshold: number,
+): { avg: number; weights_used: Record<string, number>; outliers: string[]; trimmed: boolean } | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in baseWeights && Number.isFinite(v));
+  if (!entries.length) return null;
+  const vals = entries.map(([, v]) => v);
+  const spread = Math.max(...vals) - Math.min(...vals);
+  const sorted = [...vals].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const madArr = vals.map((v) => Math.abs(v - median)).sort((a, b) => a - b);
+  const mad = madArr[Math.floor(madArr.length / 2)] || 1;
+  const outliers: string[] = [];
+  const adj: Record<string, number> = {};
+  const shouldTrim = spread > spreadThreshold && entries.length >= 2;
+  for (const [k, v] of entries) {
+    const isOutlier = shouldTrim && Math.abs(v - median) > 1.5 * mad;
+    adj[k] = baseWeights[k] * (isOutlier ? 0.3 : 1);
+    if (isOutlier) outliers.push(k);
+  }
+  const totalW = Object.values(adj).reduce((a, b) => a + b, 0);
+  if (totalW <= 0) return null;
+  const avg = entries.reduce((s, [k, v]) => s + v * (adj[k] / totalW), 0);
+  const weights_used: Record<string, number> = {};
+  for (const k of Object.keys(adj)) weights_used[k] = Math.round((adj[k] / totalW) * 100) / 100;
+  return {
+    avg: Math.round(avg * 10) / 10,
+    weights_used,
+    outliers,
+    trimmed: outliers.length > 0,
+  };
 }
 
 // Modell-Gewichte fürs Stundenfenster (Restfenster 12–24 h).
@@ -2182,17 +2257,29 @@ function formatDayData(weather: any, dayIndex: number) {
   // cloudcover_mean haben, aber ein synthetisiertes hourly cloudcover_<m> (s. fetchWeather).
   const cloudPerModel = fillCloudcoverFromHourly(weather, dayIndex, cloudPerModelDaily);
   const cloudcoverRaw = agg("cloudcover_mean", cloudPerModel);
-  const cloudWeighted = weightedCloudSunAvg(cloudPerModel);
+  const cloudWeighted = trimmedConsensus(cloudPerModel, CLOUD_SUN_WEIGHTS, 40);
   const cloudcover = cloudcoverRaw && cloudWeighted
-    ? { ...cloudcoverRaw, avg: Math.round(cloudWeighted.avg), weights_used: cloudWeighted.weights_used }
+    ? {
+        ...cloudcoverRaw,
+        avg: Math.round(cloudWeighted.avg),
+        weights_used: cloudWeighted.weights_used,
+        outliers: cloudWeighted.outliers,
+        trimmed: cloudWeighted.trimmed,
+      }
     : cloudcoverRaw;
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
   const sunshineRawAgg = agg("sunshine_duration", sunshineHours);
-  const sunWeighted = weightedCloudSunAvg(sunshineHours);
+  const sunWeighted = trimmedConsensus(sunshineHours, CLOUD_SUN_WEIGHTS, 4);
   const sunshine_h = sunshineRawAgg && sunWeighted
-    ? { ...sunshineRawAgg, avg: sunWeighted.avg, weights_used: sunWeighted.weights_used }
+    ? {
+        ...sunshineRawAgg,
+        avg: sunWeighted.avg,
+        weights_used: sunWeighted.weights_used,
+        outliers: sunWeighted.outliers,
+        trimmed: sunWeighted.trimmed,
+      }
     : sunshineRawAgg;
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
@@ -2415,13 +2502,17 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   }
   if (Object.keys(cloudPerModelF).length) {
     const cRaw = aggH("cloudcover_mean", cloudPerModelF);
-    const cW = weightedCloudSunAvg(cloudPerModelF);
-    out.cloudcover = cRaw && cW ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used } : cRaw;
+    const cW = trimmedConsensus(cloudPerModelF, CLOUD_SUN_WEIGHTS, 40);
+    out.cloudcover = cRaw && cW
+      ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used, outliers: cW.outliers, trimmed: cW.trimmed }
+      : cRaw;
   }
   if (Object.keys(sunHPerModelF).length) {
     const sRaw = aggH("sunshine_duration", sunHPerModelF);
-    const sW = weightedCloudSunAvg(sunHPerModelF);
-    out.sunshine_h = sRaw && sW ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used } : sRaw;
+    const sW = trimmedConsensus(sunHPerModelF, CLOUD_SUN_WEIGHTS, 4);
+    out.sunshine_h = sRaw && sW
+      ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used, outliers: sW.outliers, trimmed: sW.trimmed }
+      : sRaw;
   }
   if (horizon) out.horizon = horizon;
 
