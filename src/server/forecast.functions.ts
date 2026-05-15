@@ -2220,17 +2220,29 @@ function formatDayData(weather: any, dayIndex: number) {
   // cloudcover_mean haben, aber ein synthetisiertes hourly cloudcover_<m> (s. fetchWeather).
   const cloudPerModel = fillCloudcoverFromHourly(weather, dayIndex, cloudPerModelDaily);
   const cloudcoverRaw = agg("cloudcover_mean", cloudPerModel);
-  const cloudWeighted = weightedCloudSunAvg(cloudPerModel);
+  const cloudWeighted = trimmedConsensus(cloudPerModel, CLOUD_SUN_WEIGHTS, 40);
   const cloudcover = cloudcoverRaw && cloudWeighted
-    ? { ...cloudcoverRaw, avg: Math.round(cloudWeighted.avg), weights_used: cloudWeighted.weights_used }
+    ? {
+        ...cloudcoverRaw,
+        avg: Math.round(cloudWeighted.avg),
+        weights_used: cloudWeighted.weights_used,
+        outliers: cloudWeighted.outliers,
+        trimmed: cloudWeighted.trimmed,
+      }
     : cloudcoverRaw;
   const sunshineRaw = collectModelValuesTiered(weather, "sunshine_duration", dayIndex);
   const sunshineHours: Record<string, number> = {};
   for (const [k, v] of Object.entries(sunshineRaw)) sunshineHours[k] = Math.round((v / 3600) * 10) / 10;
   const sunshineRawAgg = agg("sunshine_duration", sunshineHours);
-  const sunWeighted = weightedCloudSunAvg(sunshineHours);
+  const sunWeighted = trimmedConsensus(sunshineHours, CLOUD_SUN_WEIGHTS, 4);
   const sunshine_h = sunshineRawAgg && sunWeighted
-    ? { ...sunshineRawAgg, avg: sunWeighted.avg, weights_used: sunWeighted.weights_used }
+    ? {
+        ...sunshineRawAgg,
+        avg: sunWeighted.avg,
+        weights_used: sunWeighted.weights_used,
+        outliers: sunWeighted.outliers,
+        trimmed: sunWeighted.trimmed,
+      }
     : sunshineRawAgg;
 
   // Derive cloudcover from sunshine when models don't return it (assume ~12h daylight average)
