@@ -2083,6 +2083,44 @@ function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; w
   return { avg: Math.round(avg * 10) / 10, weights_used };
 }
 
+// Baustein C — Konsens-basiertes Trimming für Bewölkung & Sonne.
+// Wenn der Spread eine Schwelle überschreitet UND ein Modell mehr als 1.5×MAD
+// vom Median abweicht, wird sein Gewicht auf 30 % reduziert. Die zurückgelieferten
+// `outliers`/`trimmed`-Felder werden im AI-Prompt als Datenqualitätshinweis genutzt.
+function trimmedConsensus(
+  perModel: Record<string, number>,
+  baseWeights: Record<string, number>,
+  spreadThreshold: number,
+): { avg: number; weights_used: Record<string, number>; outliers: string[]; trimmed: boolean } | null {
+  const entries = Object.entries(perModel).filter(([k, v]) => k in baseWeights && Number.isFinite(v));
+  if (!entries.length) return null;
+  const vals = entries.map(([, v]) => v);
+  const spread = Math.max(...vals) - Math.min(...vals);
+  const sorted = [...vals].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const madArr = vals.map((v) => Math.abs(v - median)).sort((a, b) => a - b);
+  const mad = madArr[Math.floor(madArr.length / 2)] || 1;
+  const outliers: string[] = [];
+  const adj: Record<string, number> = {};
+  const shouldTrim = spread > spreadThreshold && entries.length >= 2;
+  for (const [k, v] of entries) {
+    const isOutlier = shouldTrim && Math.abs(v - median) > 1.5 * mad;
+    adj[k] = baseWeights[k] * (isOutlier ? 0.3 : 1);
+    if (isOutlier) outliers.push(k);
+  }
+  const totalW = Object.values(adj).reduce((a, b) => a + b, 0);
+  if (totalW <= 0) return null;
+  const avg = entries.reduce((s, [k, v]) => s + v * (adj[k] / totalW), 0);
+  const weights_used: Record<string, number> = {};
+  for (const k of Object.keys(adj)) weights_used[k] = Math.round((adj[k] / totalW) * 100) / 100;
+  return {
+    avg: Math.round(avg * 10) / 10,
+    weights_used,
+    outliers,
+    trimmed: outliers.length > 0,
+  };
+}
+
 // Modell-Gewichte fürs Stundenfenster (Restfenster 12–24 h).
 // Temperatur: hochauflösende CH-Modelle dominieren, ARPEGE als globaler Anker.
 const TEMP_HOURLY_WEIGHTS: Record<string, number> = {
