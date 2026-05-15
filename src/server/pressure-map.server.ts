@@ -134,9 +134,12 @@ async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless")
     }
   }
 
-  const BATCH = 50;
-  const CONCURRENCY = 2;
-  const BATCH_THROTTLE_MS = 150;
+  // 756 grid points → mit BATCH=200 nur 4 OM-Calls statt 16.
+  // Reduziert Druck auf den geteilten Cloudflare-Worker-Egress-IP, der
+  // sonst mit anderen Tenants ins Open-Meteo-Tageslimit läuft.
+  const BATCH = 200;
+  const CONCURRENCY = 1;
+  const BATCH_THROTTLE_MS = 400;
   const pressure: number[] = new Array(lats.length).fill(NaN);
   const t850: number[] = new Array(lats.length).fill(NaN);
   const precip: number[] = new Array(lats.length).fill(NaN);
