@@ -1975,6 +1975,42 @@ function formatHourlyProfileTable(profile: HourlyProfileRow[] | null | undefined
   return lines.join("\n");
 }
 
+// Baustein D — Datenqualitätshinweise für den AI-Prompt aus dem Tagesdatensatz.
+// Verhindert overconfident "sonnig"-Aussagen, wenn Bewölkung/Sonne nur dünn
+// belegt sind oder Modelle stark uneinig sind.
+function buildDataQualityBlock(day: any): string | null {
+  const lines: string[] = [];
+  const cc = day?.cloudcover;
+  const sh = day?.sunshine_h;
+  const ccSource: string | undefined = day?.cloudcover_source;
+  if (cc) {
+    const n = typeof cc.n_effective === "number" ? cc.n_effective : Object.keys(cc.by_model || {}).length;
+    if (ccSource && ccSource !== "model") {
+      lines.push(`- Bewölkung: abgeleitet (${ccSource}) — neutral formulieren, NICHT "sonnig" oder "bedeckt" als Faktum`);
+    } else if (n < 2) {
+      lines.push(`- Bewölkung: nur ${n} Modell beiträgt — vorsichtig formulieren, neutrale Begriffe, KEINE Aussage wie "sonnig"`);
+    } else if (typeof cc.spread === "number" && cc.spread > 40) {
+      lines.push(`- Bewölkung: Modelle uneinig (Spread ${Math.round(cc.spread)}%) — Unsicherheit benennen statt Festlegung`);
+    }
+    if (cc.trimmed && Array.isArray(cc.outliers) && cc.outliers.length) {
+      lines.push(`- Bewölkung: Ausreisser-Modelle (${cc.outliers.join(", ")}) wurden runtergewichtet`);
+    }
+  }
+  if (sh) {
+    const n = typeof sh.n_effective === "number" ? sh.n_effective : Object.keys(sh.by_model || {}).length;
+    if (typeof sh.spread === "number" && sh.spread > 4) {
+      lines.push(`- Sonnenscheindauer: Spread ${sh.spread.toFixed(1)} h zwischen Modellen — Unsicherheit benennen, keine optimistische Aussage`);
+    } else if (n < 2) {
+      lines.push(`- Sonnenscheindauer: nur ${n} Modell — vorsichtig formulieren`);
+    }
+    if (sh.trimmed && Array.isArray(sh.outliers) && sh.outliers.length) {
+      lines.push(`- Sonne: Ausreisser-Modelle (${sh.outliers.join(", ")}) wurden runtergewichtet`);
+    }
+  }
+  if (!lines.length) return null;
+  return `DATENQUALITÄT (beim Formulieren beachten):\n${lines.join("\n")}`;
+}
+
 // Baut den userPrompt für einen Tag und hängt — falls vorhanden — das
 // Stundenprofil als separate Tabelle an (statt es als JSON-Array im Datensatz
 // zu vergraben). `hourly_profile` wird aus dem JSON-Dump entfernt, um Tokens zu sparen.
@@ -1983,7 +2019,8 @@ function buildDayUserPrompt(intro: string, day: any, extraHint: string = ""): st
   const dump = { ...day };
   delete dump.hourly_profile;
   const json = JSON.stringify(dump, null, 2);
-  let prompt = `${intro}\n${json}`;
+  const quality = buildDataQualityBlock(day);
+  let prompt = quality ? `${quality}\n\n${intro}\n${json}` : `${intro}\n${json}`;
   const table = formatHourlyProfileTable(profile);
   if (table) {
     prompt += `\n\nSTUNDENPROFIL (Median über Modelle, ± = Modell-Streuung):\n${table}`;
