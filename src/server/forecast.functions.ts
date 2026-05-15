@@ -2502,13 +2502,17 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   }
   if (Object.keys(cloudPerModelF).length) {
     const cRaw = aggH("cloudcover_mean", cloudPerModelF);
-    const cW = weightedCloudSunAvg(cloudPerModelF);
-    out.cloudcover = cRaw && cW ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used } : cRaw;
+    const cW = trimmedConsensus(cloudPerModelF, CLOUD_SUN_WEIGHTS, 40);
+    out.cloudcover = cRaw && cW
+      ? { ...cRaw, avg: Math.round(cW.avg), weights_used: cW.weights_used, outliers: cW.outliers, trimmed: cW.trimmed }
+      : cRaw;
   }
   if (Object.keys(sunHPerModelF).length) {
     const sRaw = aggH("sunshine_duration", sunHPerModelF);
-    const sW = weightedCloudSunAvg(sunHPerModelF);
-    out.sunshine_h = sRaw && sW ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used } : sRaw;
+    const sW = trimmedConsensus(sunHPerModelF, CLOUD_SUN_WEIGHTS, 4);
+    out.sunshine_h = sRaw && sW
+      ? { ...sRaw, avg: sW.avg, weights_used: sW.weights_used, outliers: sW.outliers, trimmed: sW.trimmed }
+      : sRaw;
   }
   if (horizon) out.horizon = horizon;
 
