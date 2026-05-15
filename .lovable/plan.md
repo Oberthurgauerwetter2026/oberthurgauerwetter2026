@@ -1,40 +1,93 @@
-## Problem
+## Befund — warum die Samstag-Prognose gegen ICON-CH1/CH2 + AROME schlecht ist
 
-Der 03:00-UTC-Cron läuft genau zur Open-Meteo-Reset-Sekunde und feuert 4× parallel × 16 Batches gegen die API. Open-Meteo antwortet mit minutely-429s. Der Code stuft das nach 3 consecutive 429 fälschlich auf `daily` hoch, setzt einen Negative-Cache-Marker bis Mitternacht UTC, und die geplanten Retry-Slots (05:30 / 07:30 / 10:30) skippen den Aufruf komplett. Tageskontingent ist dabei real bei 18/10 000.
+Drei strukturelle Probleme in den Daten, die ich aus dem gespeicherten `weather_data` von Eintrag 2 (Samstag) und einem Live-Probe-Call gegen Open-Meteo identifiziert habe.
 
-## Plan
+### 1. Bewölkung Samstag stützt sich auf die *falschen* Modelle
 
-### Baustein 1 — 429-Klassifizierung schärfen (`pressure-map.server.ts`)
-- `classify429Body`: nur „daily" wenn der Body **explizit** „daily" sagt. Bisher fällt **alles ohne Schlüsselwort** durch zu „minutely" — das ist ok, aber:
-- Z. 163-167 entfernen: die „nach 3 consecutive 429s → daily-Marker" Regel kippt minutely/unklassifizierte 429s in einen Tagesbann. Stattdessen: nach 3 consecutive 429s **abbrechen ohne Marker** (bleibt transient, nächster Cron-Slot versucht es neu).
-- Z. 248-252: `setRateLimited` nur, wenn `lastTier === "daily"` **und** der Body wirklich `daily` enthielt. Hourly bleibt (30 min Marker ist ok).
+Daten in der Prognose:
+```
+cloudcover.by_model: { arpege_europe: 62, icon_d2: 85.9 }   →   avg 76 %
+```
 
-### Baustein 2 — Burst entschärfen (`fetchGrids`)
-- `CONCURRENCY` von 4 → **2**.
-- Zwischen aufeinanderfolgenden Batches eines Workers ein kleines Throttle (~150 ms) einbauen, damit die OM-Minutely-Bucket nicht in 1–2 s leergeräumt wird.
-- 16 Batches × 2 parallel × 150 ms ≈ ~3–4 s mehr Laufzeit, weit unter Edge-Timeout.
+Live-Probe gegen Open-Meteo (Zürich-Region, Samstag 16.5.):
 
-### Baustein 3 — Cron-Slots umlegen
-Aktuell: 03:00 / 05:30 / 07:30 / 10:30 UTC. Probleme: 03:00 ist OM-Reset-Sekunde; nach 10:30 gibt es **keinen** weiteren Versuch.
-Neu (per `cron.unschedule` + `cron.schedule`):
-- Primär: **04:15 UTC** (06:15 CEST, weg vom Reset).
-- Retries: **06:15, 09:15, 13:15, 17:15 UTC** — fünf Versuche über den Tag verteilt.
+| Variable          | ICON-CH1 | ICON-CH2 | AROME-HD | ICON-D2 |
+|---|---|---|---|---|
+| `cloudcover_mean` (daily)  | null | **null** | null | 84   |
+| `cloudcover` (hourly Sa.)  | 0/24 | **0/24** | 0/24 | 24/24 |
 
-### Baustein 4 — Smart-Retry: false-positive `daily`-Marker selbstheilen
-Im Route-Handler `/api/public/hooks/generate-pressure-map`: vor `generatePressureMap()` prüfen, ob der Marker `daily` ist **und** `openmeteo_usage.total < 9 000` für heute. Wenn ja: Marker löschen und es erneut versuchen. So heilen sich falsche Tagesbänne automatisch beim nächsten Cron-Slot.
+Open-Meteo liefert für Samstag **bei keinem der drei vom Nutzer bevorzugten Modelle** Bewölkungswerte — weder daily noch hourly. Deshalb füllt `fillFromDay` mit ARPEGE-Europe (Mid-Tier, 25 km Raster) auf. Bewölkung Samstag = ICON-D2 + ARPEGE. **Die Modelle, an denen der Nutzer den Fehler diagnostiziert (CH1/CH2/AROME), tragen zur Bewölkung null bei.**
 
-### Baustein 5 — Status sichtbarer machen
-Im Status-Text aufnehmen, ob der Lauf wegen Marker geskippt wurde **vs.** echter 429, plus Anzahl Calls heute. Hilft beim Debug ohne SQL.
+### 2. Sonnenscheindauer Samstag — Konsens kaputt durch ICON-D2
 
-## Nicht im Scope
-- Wechsel zu einem anderen Provider/Modell.
-- Vorgenerierung im Cron-SQL.
-- Reduktion der Auflösung (STEP / Grid).
+```
+sunshine_h.by_model: { icon_d2: 8.6, ch1: 0.9, ch2: 5.9 }   →   gewichtet 4.3 h
+```
 
-## Verifikation
-1. Marker manuell löschen und Cron-Endpoint einmalig per `invoke-server-function` triggern → SVG aktualisiert sich, `pressure_map_last_status` enthält Call-Anzahl.
-2. Künstlicher 429 (z. B. mit unbekanntem Modell) → kein `daily`-Marker mehr, sondern transient.
-3. Nächste Tage beobachten: `cron.job_run_details` zeigt 5 Slots, mindestens einer davon erfolgreich.
+Spread 7.7 h ist riesig. AROME hat keine `sunshine_duration` (Open-Meteo liefert nichts). ICON-D2 sagt 8.6 h, CH1 nur 0.9 h. Trotz Gewichtung CH1+CH2 = 0.79 wird der Mittelwert auf 4.3 h hochgezogen, weil ICON-D2 mit 8.6 h ein Ausreisser ist. Der Text spricht von „recht sonnig" — passt zu D2, widerspricht CH1/CH2.
+
+### 3. Niederschlagswahrscheinlichkeit Samstag wirkt verdächtig: gleiche Werte wie Freitag
+
+Freitag (Tag 0):
+```
+precip_prob.by_model: { meteoswiss_icon_ch1: 73, meteoswiss_icon_ch2: 62 }
+```
+Samstag (Tag 1):
+```
+precip_prob.by_model: { meteoswiss_icon_ch1: 73, meteoswiss_icon_ch2: 62 }   ← identisch
+```
+
+Live-Probe gegen Open-Meteo, Samstag hourly `precipitation_probability`:
+
+| Modell | Stunden mit Werten | Max |
+|---|---|---|
+| ICON-CH1 | 10/24 (nur ~h+33) | 64 |
+| ICON-CH2 | 24/24             | 33 |
+| AROME    | 0/24              | – |
+| ICON-D2  | 0/24              | – |
+
+Die wahren Samstag-Maxima wären **ch1=64, ch2=33** — bei uns steht aber **73/62**, die exakten Tag-0-Werte. Das deutet auf einen Daten-Übernahme-Bug zwischen Tag 0 und Tag 1 in `refineDayFromHour` oder `formatDayData`. Effekt: Samstag wird mit zu hoher Niederschlagswahrscheinlichkeit (avg 68 %) gerechnet, obwohl der Konsens der Modelle bei ~30 % liegt.
+
+### 4. Konsequenz für `models_used`
+
+```
+models_used: meteoswiss_icon_ch1, meteoswiss_icon_ch2, meteofrance_arome_france_hd, icon_d2, arpege_europe
+```
+
+Die Liste suggeriert 5 Modelle — tatsächlich tragen je nach Variable nur 1–3 echte Modelle bei. Bewölkung: 1 (D2) + 1 ARPEGE-Lückenfüller. Wind-Max: 1 effektives Modell mit Gewicht 1.0. Niederschlagswahrscheinlichkeit: aktuell wahrscheinlich von Tag 0 dupliziert.
+
+---
+
+## Plan (Behebung in 4 Bausteinen)
+
+### Baustein A — Niederschlagswahrscheinlichkeit-Duplikat aufspüren
+Reproduktion durch lokales Aufrufen von `formatDayData(weather, 1)` und `refineDayFromHour(day, weather, 1, 0)` mit dem Live-Open-Meteo-Snapshot. Erwartung: einer der Pfade liest fälschlich `daily.precipitation_probability_max[0]` statt `[1]`. Wahrscheinlichste Verdächtige:
+
+* `collectModelValuesTiered` → `collectModelValues` mit dayIndex (Index-Off-by-one).
+* `fillFromDay` zieht aus dem Vortags-`day`-Objekt, weil `day` nicht für Tag 1 sondern Tag 0 übergeben wurde (Aufrufstelle prüfen).
+
+Fix punktuell, mit Unit-artigem Test im selben File.
+
+### Baustein B — Daily-Lücken bei CH-/AROME-Modellen aus Hourly nachrechnen
+Wenn `daily.<var>` für ein Modell `null` ist, aber `hourly.<var>_<modell>` Werte hat, **selbst aggregieren** statt das Modell zu verlieren. Das ist heute nur teilweise drin (`refineDayFromHour` macht's, aber für Bewölkung Samstag hat *auch hourly* nichts). Wenn auch hourly leer ist, das Modell **dokumentiert weglassen** statt heimlich durch ARPEGE zu ersetzen — und `models_used` ehrlich angeben.
+
+Konkret in `formatDayData` und `refineDayFromHour`:
+* Per-Variable berechnen, welche Modelle echte Daten lieferten.
+* `cloudcover.by_model` bekommt ein `missing: ['ch1','ch2','arome']` Feld (oder `coverage: { effective: 1, expected: 4 }`), das im UI/AI-Prompt sichtbar wird.
+* Wenn `<2 echte Hochauflösungs-Modelle` für eine Variable beitragen, `cloudcover_source` von `"model"` auf `"low_coverage"` setzen.
+
+### Baustein C — ICON-D2-Ausreisser bei Sonne/Bewölkung dämpfen
+ICON-D2 systematisch optimistischer als ICON-CH bei Sonne (vermutlich wegen anderer Wolkenschema). Im Mid-Tier-Aggregat schon Modellgewichte (`weights_used`); für Sonne/Bewölkung **Konsens-basiertes Trimming** einbauen: wenn ein Modell mehr als 1.5× p50 von p50 abweicht UND der Spread > X ist, runter-gewichten. Alternative: Median statt gewichtetes Mittel als Hauptwert wenn Spread > Schwelle.
+
+### Baustein D — AI-Prompt auf Datenqualität konditionieren
+Wenn `cloudcover_source === "low_coverage"` oder `n_effective < 2` für Bewölkung, präfixiert der Prompt: „Bewölkung nur aus 1 Modell — vorsichtig formulieren, lieber neutrale Floskeln." Verhindert „recht sonnig"-Aussagen auf dünner Datenbasis.
+
+## Reihenfolge
+
+1. **A zuerst** — der Datenduplikat-Bug ist ein klarer Fehler und kostet wenig.
+2. **B** — strukturelle Härtung, mittlerer Aufwand.
+3. **C/D** — feinere Justierung, abhängig davon ob A+B die Prognose schon ausreichend verbessern.
 
 ## Frage vor Umsetzung
-**Slot-Strategie für Baustein 3:** OK mit 04:15 / 06:15 / 09:15 / 13:15 / 17:15 UTC, oder lieber andere Zeiten (z. B. an Schweizer Tagesabläufe ankoppeln, etwa 06:00 / 09:00 / 12:00 / 15:00 / 18:00 lokal)?
+
+Soll ich direkt mit **Baustein A** beginnen (Niederschlagswahrscheinlichkeit-Duplikat-Bug suchen und fixen) und **Baustein B** in der gleichen Iteration mitmachen? Oder erst nur A, dann separat über B/C/D entscheiden?
