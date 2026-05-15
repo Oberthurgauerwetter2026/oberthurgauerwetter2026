@@ -101,6 +101,24 @@ function classify429Body(body: string): RateLimitTier {
   return "minutely";
 }
 
+// Wenn Open-Meteo "daily" sagt, aber WIR heute kaum Calls verbraucht haben,
+// ist es höchstwahrscheinlich der geteilte Cloudflare-Worker-Egress-IP
+// (andere Tenants füllen das OM-Tageslimit). Dann nicht ganztags pausieren,
+// sondern in 45 min nochmal probieren.
+async function isLikelySharedIpThrottle(): Promise<boolean> {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data } = await supabaseAdmin
+      .from("openmeteo_usage")
+      .select("total")
+      .eq("day", today)
+      .maybeSingle();
+    return (data?.total ?? 0) < 500;
+  } catch {
+    return false;
+  }
+}
+
 function ttlIsoForTier(tier: RateLimitTier, now = new Date()): string {
   if (tier === "daily") return nextUtcMidnightIso(now);
   const ms = tier === "hourly" ? 30 * 60 * 1000 : 2 * 60 * 1000;
@@ -109,13 +127,22 @@ function ttlIsoForTier(tier: RateLimitTier, now = new Date()): string {
 
 async function setRateLimited(tier: RateLimitTier = "daily", body = ""): Promise<void> {
   try {
-    const expiresAt = ttlIsoForTier(tier);
-    console.warn(`[pressure-map] negative-cache ${tier} → expires ${expiresAt} (body: ${body.slice(0, 200)})`);
+    let effectiveTier = tier;
+    let expiresAt: string;
+    if (tier === "daily" && (await isLikelySharedIpThrottle())) {
+      // 45-Minuten-Pause statt bis Mitternacht
+      effectiveTier = "hourly";
+      expiresAt = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+      console.warn(`[pressure-map] daily 429 mit niedriger Eigen-Nutzung → shared-IP throttle, kurzer Marker bis ${expiresAt}`);
+    } else {
+      expiresAt = ttlIsoForTier(tier);
+    }
+    console.warn(`[pressure-map] negative-cache ${effectiveTier} → expires ${expiresAt} (body: ${body.slice(0, 200)})`);
     await supabaseAdmin
       .from("weather_cache")
       .upsert({
         cache_key: RATELIMIT_CACHE_KEY,
-        payload: { reason: `Open-Meteo ${tier} limit exceeded`, tier },
+        payload: { reason: `Open-Meteo ${tier} limit (effective: ${effectiveTier})`, tier: effectiveTier },
         expires_at: expiresAt,
         fetched_at: new Date().toISOString(),
       }, { onConflict: "cache_key" });
@@ -134,9 +161,12 @@ async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless")
     }
   }
 
-  const BATCH = 50;
-  const CONCURRENCY = 2;
-  const BATCH_THROTTLE_MS = 150;
+  // 756 grid points → mit BATCH=200 nur 4 OM-Calls statt 16.
+  // Reduziert Druck auf den geteilten Cloudflare-Worker-Egress-IP, der
+  // sonst mit anderen Tenants ins Open-Meteo-Tageslimit läuft.
+  const BATCH = 200;
+  const CONCURRENCY = 1;
+  const BATCH_THROTTLE_MS = 400;
   const pressure: number[] = new Array(lats.length).fill(NaN);
   const t850: number[] = new Array(lats.length).fill(NaN);
   const precip: number[] = new Array(lats.length).fill(NaN);
