@@ -1,42 +1,37 @@
-## Plan — Bausteine C & D: Ausreisser dämpfen + AI-Prompt auf Datenqualität konditionieren
+# Plan — Bodendruckkarte wieder zuverlässig generieren
 
-Nach Baustein B (AROME-HD trägt jetzt zu Bewölkung Samstag bei) bleiben zwei strukturelle Schwächen offen, die zu „recht sonnig"-Aussagen auf dünner Datenbasis führen können.
+## Befund
 
-### Baustein C — Ausreisser-Trimming bei Sonne und Bewölkung
+- Die Cron-Jobs laufen: heute um 04:15, 06:15, 09:15 und 13:15 UTC wurden Requests ausgelöst.
+- Die Karte selbst ist aber alt: `europe-pressure-latest.svg` wurde zuletzt am 12.05. aktualisiert.
+- Die letzten HTTP-Antworten waren `429` mit: `Pausiert: Open-Meteo Tageslimit erreicht (auto-retry 00:00 UTC)`.
+- In der Datenbank liegt ein aktiver Rate-Limit-Marker `om:ratelimit:pressure-map` bis 16.05. 00:00 UTC.
+- Auffällig: Der aktuell im Code vorhandene Self-Heal würde diesen Marker bei niedriger Nutzung entfernen. Die Antworttexte kommen aber noch aus einer älteren veröffentlichten Version. Der Cron ruft die veröffentlichte URL auf, nicht die Preview-Version.
 
-Problem: ICON-D2 wich Samstag bei Sonnenscheindauer um 7.7 h von ICON-CH1 ab (8.6 h vs. 0.9 h). Der gewichtete Mittelwert (4.3 h) lag näher an D2 als am CH-Konsens.
+## Wahrscheinliche Ursache
 
-Umsetzung in `src/server/forecast.functions.ts`:
-- Neue Helper-Funktion `trimmedConsensus(values, weights, options)`:
-  - berechnet Median und Median-Absolute-Deviation (MAD) der Modellwerte
-  - wenn `spread (max-min) > schwelle` (Sonne: 4 h, Bewölkung: 40 %): Modelle, die mehr als 1.5×MAD vom Median abweichen, bekommen Gewicht ×0.3
-  - normalisiert Gewichte neu und liefert gewichtetes Mittel zurück
-- Anwendung nur für `sunshine_h` und `cloudcover` (Niederschlag/Wind unverändert — dort ist Spread aussagekräftig).
-- Im `by_model`-Objekt zusätzlich `trimmed: true` und `outliers: ['icon_d2']` ausweisen.
+Die Druckkarten-Cronjobs treffen noch auf die alte veröffentlichte Backend-Route. Dort blockiert ein als „daily limit” klassifizierter Marker alle Folgeversuche bis Mitternacht. Dadurch wird trotz laufendem Cron keine neue Karte erzeugt.
 
-### Baustein D — AI-Prompt auf Datenqualität konditionieren
+## Umsetzung
 
-Problem: AI-Text formuliert „recht sonnig" auch wenn nur 1 Modell zur Bewölkung beiträgt.
+1. **Sofort entsperren**
+   - Den aktiven Marker `om:ratelimit:pressure-map` löschen.
+   - Den Druckkarten-Status auf „entsperrt / nächster Lauf möglich” setzen.
 
-Umsetzung im AI-Prompt-Aufbau (gleicher File, Funktion die den OpenAI-Prompt baut):
-- Aus `by_model` pro Variable `n_effective` zählen (Modelle mit echtem Wert, ohne ARPEGE-Lückenfüller).
-- Neuer Block am Anfang des Prompts:
-  ```
-  DATENQUALITÄT:
-  - Bewölkung: nur 1 Modell — vorsichtig, neutrale Floskeln, keine Aussagen wie "sonnig"
-  - Sonne: Spread 7.7 h zwischen Modellen — Unsicherheit benennen
-  - Niederschlag: 4 Modelle einig — sicher
-  ```
-- Schwellen: `n_effective < 2` → „vorsichtig", `spread > schwelle` → „Unsicherheit benennen".
+2. **Route robuster machen**
+   - Statusmeldungen eindeutig versionieren, damit man sofort sieht, ob Cron Preview/aktuellen Code oder eine alte veröffentlichte Route trifft.
+   - Bei `daily`-Marker plus sehr niedriger gemessener Nutzung den Marker sicher löschen und weitergenerieren.
+   - Bei transienten Minutely/Burst-Limits keinen Tages-Pausenmarker setzen.
 
-### Reihenfolge & Verifikation
+3. **Cron-Ziel absichern**
+   - Prüfen, ob die Jobs weiterhin die veröffentlichte URL verwenden sollen.
+   - Nach dem Fix muss die App veröffentlicht werden, weil Cron aktuell gegen die veröffentlichte Route läuft.
 
-1. C zuerst (mechanische Aggregation) — Reproduktion mit Samstag-Daten: erwartetes Ergebnis Sonne ~2-3 h statt 4.3 h.
-2. D danach — manueller Prompt-Diff für Samstag prüfen.
-3. Beide Bausteine laufen erst beim nächsten Cron-Run (04:15 UTC) live; manueller Trigger via `/api/public/hooks/daily-forecast` für sofortigen Test.
+4. **Verifikation**
+   - Cron/HTTP-Response prüfen: kein 429-Pausenstatus mehr.
+   - Storage-Objekt prüfen: `europe-pressure-latest.svg` bekommt ein neues `updated_at`.
+   - Status in den Einstellungen zeigt „OK” mit neuem Zieltermin und Quelle.
 
-### Technische Details
+## Ergebnis
 
-- Keine Änderungen an DB-Schema oder UI nötig.
-- `by_model` bekommt zusätzliche Felder; Konsumenten (Frontend `WeatherDataView`) ignorieren unbekannte Felder bereits.
-- Gewichte für Trimming und Schwellen als Konstanten oben im File, damit später ohne Logik-Eingriff justierbar.
+Die Karte soll nicht mehr tagelang durch einen alten/stale Rate-Limit-Marker blockiert werden, und künftige Fehler zeigen klar, ob Cron, Open-Meteo oder eine nicht veröffentlichte Codeversion die Ursache ist.
