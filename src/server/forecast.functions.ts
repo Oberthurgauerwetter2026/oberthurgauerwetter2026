@@ -2147,7 +2147,10 @@ function formatDayData(weather: any, dayIndex: number) {
   const agg = (varName: string, perModel: Record<string, number>) =>
     aggregate(perModel, { variable: varName, regime, horizon });
 
-  const cloudPerModel = collectModelValuesTiered(weather, "cloudcover_mean", dayIndex);
+  const cloudPerModelDaily = collectModelValuesTiered(weather, "cloudcover_mean", dayIndex);
+  // Lücken aus Hourly-Layer-Synthese füllen: Modelle, die im Daily-Endpoint kein
+  // cloudcover_mean haben, aber ein synthetisiertes hourly cloudcover_<m> (s. fetchWeather).
+  const cloudPerModel = fillCloudcoverFromHourly(weather, dayIndex, cloudPerModelDaily);
   const cloudcoverRaw = agg("cloudcover_mean", cloudPerModel);
   const cloudWeighted = weightedCloudSunAvg(cloudPerModel);
   const cloudcover = cloudcoverRaw && cloudWeighted
