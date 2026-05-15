@@ -2138,6 +2138,36 @@ function weightedHourValue(
   return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
 
+// Füllt fehlende Modelle in einem daily cloudcover_mean-perModel-Map durch eine
+// hourly-Aggregation des (ggf. synthetisierten) `cloudcover_<model>`-Arrays.
+// Wird gebraucht, weil Open-Meteo daily cloudcover_mean für CH1/CH2/AROME oft null
+// liefert, obwohl die Hourly-Layer-Synthese (fetchWeather) Werte bereitstellt.
+function fillCloudcoverFromHourly(
+  weather: any,
+  dayIndex: number,
+  perModel: Record<string, number>,
+): Record<string, number> {
+  const h = weather?.hourly;
+  const dateStr = weather?.daily?.time?.[dayIndex];
+  if (!h?.time || !dateStr) return perModel;
+  const idx: number[] = [];
+  for (let i = 0; i < h.time.length; i++) {
+    if (typeof h.time[i] === "string" && h.time[i].startsWith(dateStr)) idx.push(i);
+  }
+  if (!idx.length) return perModel;
+  const known = getKnownModels(weather);
+  const out = { ...perModel };
+  for (const m of known) {
+    if (m === "default" || m in out) continue;
+    const arr = h[`cloudcover_${m}`];
+    if (!Array.isArray(arr)) continue;
+    const vals = idx.map((i) => arr[i]).filter((v: any) => v != null && Number.isFinite(v)) as number[];
+    if (!vals.length) continue;
+    out[m] = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+  }
+  return out;
+}
+
 function formatDayData(weather: any, dayIndex: number) {
   const d = weather.daily;
   if (!d || !d.time?.[dayIndex]) return null;
