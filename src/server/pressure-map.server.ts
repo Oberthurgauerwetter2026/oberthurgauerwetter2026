@@ -59,15 +59,35 @@ function nextUtcMidnightIso(now = new Date()): string {
   return d.toISOString();
 }
 
+// Daily-tier markers self-heal: if a "daily" pause is active but our actual
+// Open-Meteo usage today is well below the 10 000-call limit, the marker was
+// almost certainly a misclassified minutely/hourly burst → clear it and retry.
 async function isRateLimited(): Promise<boolean> {
   try {
     const { data } = await supabaseAdmin
       .from("weather_cache")
-      .select("expires_at")
+      .select("expires_at, payload")
       .eq("cache_key", RATELIMIT_CACHE_KEY)
       .maybeSingle();
     if (!data?.expires_at) return false;
-    return new Date(data.expires_at).getTime() > Date.now();
+    const active = new Date(data.expires_at).getTime() > Date.now();
+    if (!active) return false;
+    const tier = (data.payload as any)?.tier as string | undefined;
+    if (tier === "daily") {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: usage } = await supabaseAdmin
+        .from("openmeteo_usage")
+        .select("total")
+        .eq("day", today)
+        .maybeSingle();
+      const total = usage?.total ?? 0;
+      if (total < 9000) {
+        console.warn(`[pressure-map] clearing stale daily marker (usage=${total}/10000 today)`);
+        await supabaseAdmin.from("weather_cache").delete().eq("cache_key", RATELIMIT_CACHE_KEY);
+        return false;
+      }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -115,7 +135,8 @@ async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless")
   }
 
   const BATCH = 50;
-  const CONCURRENCY = 4;
+  const CONCURRENCY = 2;
+  const BATCH_THROTTLE_MS = 150;
   const pressure: number[] = new Array(lats.length).fill(NaN);
   const t850: number[] = new Array(lats.length).fill(NaN);
   const precip: number[] = new Array(lats.length).fill(NaN);
@@ -160,10 +181,16 @@ async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless")
             total429++;
             lastBody = body;
             lastTier = classify429Body(body);
-            if (lastTier === "daily" && consecutive429 >= 3) {
+            if (lastTier === "daily" && /daily/i.test(body) && consecutive429 >= 3) {
               console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive DAILY 429s (batch ${i})`);
               await setRateLimited("daily", body);
               aborted = new OpenMeteoRateLimitError();
+              throw aborted;
+            }
+            if (consecutive429 >= 3) {
+              // Burst gegen Minutely-Bucket → kein Marker, nächster Cron-Slot probiert es neu.
+              console.warn(`Open-Meteo: aborting after ${consecutive429} consecutive ${lastTier} 429s (batch ${i}) — no marker, transient`);
+              aborted = new OpenMeteoRateLimitError(`Open-Meteo ${lastTier} burst — transient`);
               throw aborted;
             }
             if (lastTier === "hourly") {
@@ -229,10 +256,15 @@ async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless")
   };
 
   // Worker pool: CONCURRENCY parallel runners pulling from a shared cursor.
+  // Throttle zwischen Batches eines Workers, damit der OM-Minutely-Bucket
+  // nicht in 1–2 Sekunden leergefeuert wird.
   const worker = async () => {
+    let first = true;
     while (!aborted) {
       const idx = cursor++;
       if (idx >= batchStarts.length) return;
+      if (!first) await new Promise((r) => setTimeout(r, BATCH_THROTTLE_MS));
+      first = false;
       await runBatch(batchStarts[idx]);
     }
   };
@@ -243,12 +275,22 @@ async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless")
     console.warn(`[pressure-map] fetchGrids took ${elapsed}ms (>25s)`);
   }
 
-  // Echte Limits (hourly/daily) → Marker setzen, damit weitere Aufrufe pausieren.
-  // Minutely → KEIN Marker; transient, heilt sich durch Backoff (65s) selbst.
+  // Echte Limits → Marker setzen, damit weitere Aufrufe pausieren.
+  // Daily-Marker NUR wenn der Body wirklich „daily" sagte (sonst false-positive
+  // → ganzer Tag blockiert obwohl nur Minutely-Burst). Hourly bleibt mit 30-min-Marker.
+  // Minutely → KEIN Marker; transient.
   const finalTier = lastTier as RateLimitTier;
-  if (total429 > 0 && total429 >= attempted / 2 && (finalTier === "daily" || finalTier === "hourly")) {
-    await setRateLimited(finalTier, lastBody);
-    throw new OpenMeteoRateLimitError();
+  if (total429 > 0 && total429 >= attempted / 2) {
+    if (finalTier === "daily" && /daily/i.test(lastBody)) {
+      await setRateLimited("daily", lastBody);
+      throw new OpenMeteoRateLimitError();
+    }
+    if (finalTier === "hourly") {
+      await setRateLimited("hourly", lastBody);
+      throw new OpenMeteoRateLimitError();
+    }
+    // sonst: transient, kein Marker, einfach werfen
+    throw new OpenMeteoRateLimitError(`Open-Meteo ${finalTier} burst — transient`);
   }
 
   return {
