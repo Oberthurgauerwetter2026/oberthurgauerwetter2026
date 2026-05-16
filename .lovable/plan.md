@@ -1,37 +1,40 @@
-# Plan — Bodendruckkarte wieder zuverlässig generieren
+# Externe Generierung der Bodendruckkarte
 
-## Befund
+## Ziel
+Die Druckkarte nicht mehr im Lovable-Backend (Cloudflare Worker) rendern, sondern in einer eigenen externen Umgebung mit eigener IP. Damit umgehen wir das geteilte 429-Limit von Open‑Meteo, das den aktuellen Worker blockiert.
 
-- Die Cron-Jobs laufen: heute um 04:15, 06:15, 09:15 und 13:15 UTC wurden Requests ausgelöst.
-- Die Karte selbst ist aber alt: `europe-pressure-latest.svg` wurde zuletzt am 12.05. aktualisiert.
-- Die letzten HTTP-Antworten waren `429` mit: `Pausiert: Open-Meteo Tageslimit erreicht (auto-retry 00:00 UTC)`.
-- In der Datenbank liegt ein aktiver Rate-Limit-Marker `om:ratelimit:pressure-map` bis 16.05. 00:00 UTC.
-- Auffällig: Der aktuell im Code vorhandene Self-Heal würde diesen Marker bei niedriger Nutzung entfernen. Die Antworttexte kommen aber noch aus einer älteren veröffentlichten Version. Der Cron ruft die veröffentlichte URL auf, nicht die Preview-Version.
+## Empfohlene Lösung: GitHub Actions als Generator
 
-## Wahrscheinliche Ursache
+GitHub Actions Runner haben eigene IPs (nicht geteilt mit dem Lovable-Pool), sind kostenlos für öffentliche Repos und bieten Cron‑Scheduling. Sie laden die Open‑Meteo‑Daten, rendern die SVG, und laden sie direkt in den vorhandenen Supabase Storage Bucket `weather-maps` hoch. Die App liest die Datei unverändert wie bisher.
 
-Die Druckkarten-Cronjobs treffen noch auf die alte veröffentlichte Backend-Route. Dort blockiert ein als „daily limit” klassifizierter Marker alle Folgeversuche bis Mitternacht. Dadurch wird trotz laufendem Cron keine neue Karte erzeugt.
+```text
+GitHub Actions (cron alle 3h)
+   └─ Node-Script: Open-Meteo holen → SVG bauen → Storage Upload
+        └─ Supabase Storage: weather-maps/europe-pressure-latest.svg
+             └─ Lovable App liest unverändert
+```
 
-## Umsetzung
+## Was sich ändert
+- Neues Repo (oder Unterordner im bestehenden Repo) `pressure-map-generator/` mit:
+  - `generate.mjs` — portierte Logik aus `src/server/pressure-map.server.ts` (ohne Worker‑Spezifika).
+  - `.github/workflows/pressure-map.yml` — Cron `15 4,6,9,13,17 * * *` UTC.
+- GitHub Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
+- Lovable‑seitig:
+  - Bestehenden pg_cron‑Job, der `/api/public/hooks/generate-pressure-map` aufruft, deaktivieren.
+  - Route + `pressure-map.server.ts` als Fallback behalten (manueller Trigger im Admin).
+  - `app_settings.pressure_map_last_run/status` weiterhin aktualisieren — entweder das GitHub‑Script schreibt direkt in die Tabelle, oder es ruft einen schmalen Webhook auf.
 
-1. **Sofort entsperren**
-   - Den aktiven Marker `om:ratelimit:pressure-map` löschen.
-   - Den Druckkarten-Status auf „entsperrt / nächster Lauf möglich” setzen.
+## Vorteile
+- Eigene IP → kein Shared‑IP‑Throttling mehr.
+- Keine Worker‑Runtime‑Limits (CPU, Speicher, Bundling von `sharp` etc. möglich, falls später PNG gewünscht).
+- Logs + Re‑Runs direkt in GitHub sichtbar.
 
-2. **Route robuster machen**
-   - Statusmeldungen eindeutig versionieren, damit man sofort sieht, ob Cron Preview/aktuellen Code oder eine alte veröffentlichte Route trifft.
-   - Bei `daily`-Marker plus sehr niedriger gemessener Nutzung den Marker sicher löschen und weitergenerieren.
-   - Bei transienten Minutely/Burst-Limits keinen Tages-Pausenmarker setzen.
+## Alternativen (kurz)
+- **Cloudflare Worker in eigenem Account**: gleiches Shared‑IP‑Risiko, kein Gewinn.
+- **Kleiner VPS / Fly.io Machine**: stabilste Lösung mit fixer IP, aber Betriebsaufwand und Kosten.
+- **Open‑Meteo Commercial Plan**: höhere Limits ohne Infra‑Wechsel, aber kostenpflichtig.
 
-3. **Cron-Ziel absichern**
-   - Prüfen, ob die Jobs weiterhin die veröffentlichte URL verwenden sollen.
-   - Nach dem Fix muss die App veröffentlicht werden, weil Cron aktuell gegen die veröffentlichte Route läuft.
-
-4. **Verifikation**
-   - Cron/HTTP-Response prüfen: kein 429-Pausenstatus mehr.
-   - Storage-Objekt prüfen: `europe-pressure-latest.svg` bekommt ein neues `updated_at`.
-   - Status in den Einstellungen zeigt „OK” mit neuem Zieltermin und Quelle.
-
-## Ergebnis
-
-Die Karte soll nicht mehr tagelang durch einen alten/stale Rate-Limit-Marker blockiert werden, und künftige Fehler zeigen klar, ob Cron, Open-Meteo oder eine nicht veröffentlichte Codeversion die Ursache ist.
+## Offene Fragen
+1. Eigenes GitHub‑Repo dafür anlegen, oder Generator‑Ordner ins bestehende Lovable‑Repo legen?
+2. Soll der Generator `app_settings` direkt via Service‑Role schreiben, oder lieber einen kleinen authentifizierten Webhook in Lovable aufrufen?
+3. Aktuelles Cron‑Intervall (04:15 / 06:15 / 09:15 / 13:15 / 17:15 UTC) beibehalten?
