@@ -1,0 +1,17 @@
+{
+  "name": "pressure-map-generator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "External generator for the Europe surface pressure map. Runs in GitHub Actions so it does not share Open-Meteo IP quota with the Cloudflare Worker pool.",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "d3-contour": "^4.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,35 @@
+name: Generate pressure map
+
+on:
+  schedule:
+    # 04:15, 06:15, 09:15, 13:15, 17:15 UTC — same cadence as the previous pg_cron job
+    - cron: "15 4,6,9,13,17 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pressure-map
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: pressure-map-generator/package.json
+
+      - name: Install deps
+        working-directory: pressure-map-generator
+        run: npm install --no-audit --no-fund
+
+      - name: Generate and upload map
+        working-directory: pressure-map-generator
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node generate.mjs
