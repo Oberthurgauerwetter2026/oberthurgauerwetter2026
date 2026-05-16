@@ -17,7 +17,14 @@ import { contours as d3contours } from "d3-contour";
 import { createClient } from "@supabase/supabase-js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = resolve(__dirname, "../src/data");
+// Geo data location:
+//  - in the Lovable repo: ../src/data (next to the app source)
+//  - in a standalone generator repo: ../data
+// We try both so the same script works in either layout.
+import { existsSync } from "node:fs";
+const DATA_DIR = existsSync(resolve(__dirname, "../src/data/europe-countries.json"))
+  ? resolve(__dirname, "../src/data")
+  : resolve(__dirname, "../data");
 const europeCountries = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-countries.json"), "utf8"));
 const europeOcean = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-ocean.json"), "utf8"));
 const europeLakes = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-lakes.json"), "utf8"));
