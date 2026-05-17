@@ -20,6 +20,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppForecastForecastIdRouteImport } from './routes/_app.forecast.$forecastId'
+import { Route as AppAdminRevealKeyRouteImport } from './routes/_app.admin.reveal-key'
 import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
 
 const SignupRoute = SignupRouteImport.update({
@@ -76,6 +77,11 @@ const AppForecastForecastIdRoute = AppForecastForecastIdRouteImport.update({
   path: '/forecast/$forecastId',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminRevealKeyRoute = AppAdminRevealKeyRouteImport.update({
+  id: '/admin/reveal-key',
+  path: '/admin/reveal-key',
+  getParentRoute: () => AppRoute,
+} as any)
 const ApiPublicHooksGeneratePressureMapRoute =
   ApiPublicHooksGeneratePressureMapRouteImport.update({
     id: '/api/public/hooks/generate-pressure-map',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
+  '/admin/reveal-key': typeof AppAdminRevealKeyRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
 }
@@ -106,6 +113,7 @@ export interface FileRoutesByTo {
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
+  '/admin/reveal-key': typeof AppAdminRevealKeyRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
 }
@@ -121,6 +129,7 @@ export interface FileRoutesById {
   '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
+  '/_app/admin/reveal-key': typeof AppAdminRevealKeyRoute
   '/_app/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
 }
@@ -136,6 +145,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/settings'
     | '/hooks/daily-forecast'
+    | '/admin/reveal-key'
     | '/forecast/$forecastId'
     | '/api/public/hooks/generate-pressure-map'
   fileRoutesByTo: FileRoutesByTo
@@ -149,6 +159,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/settings'
     | '/hooks/daily-forecast'
+    | '/admin/reveal-key'
     | '/forecast/$forecastId'
     | '/api/public/hooks/generate-pressure-map'
   id:
@@ -163,6 +174,7 @@ export interface FileRouteTypes {
     | '/_app/profile'
     | '/_app/settings'
     | '/hooks/daily-forecast'
+    | '/_app/admin/reveal-key'
     | '/_app/forecast/$forecastId'
     | '/api/public/hooks/generate-pressure-map'
   fileRoutesById: FileRoutesById
@@ -257,6 +269,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppForecastForecastIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin/reveal-key': {
+      id: '/_app/admin/reveal-key'
+      path: '/admin/reveal-key'
+      fullPath: '/admin/reveal-key'
+      preLoaderRoute: typeof AppAdminRevealKeyRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/api/public/hooks/generate-pressure-map': {
       id: '/api/public/hooks/generate-pressure-map'
       path: '/api/public/hooks/generate-pressure-map'
@@ -271,6 +290,7 @@ interface AppRouteChildren {
   AppDashboardRoute: typeof AppDashboardRoute
   AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
+  AppAdminRevealKeyRoute: typeof AppAdminRevealKeyRoute
   AppForecastForecastIdRoute: typeof AppForecastForecastIdRoute
 }
 
@@ -278,6 +298,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppDashboardRoute: AppDashboardRoute,
   AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,
+  AppAdminRevealKeyRoute: AppAdminRevealKeyRoute,
   AppForecastForecastIdRoute: AppForecastForecastIdRoute,
 }
 
