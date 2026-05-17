@@ -11,7 +11,7 @@ export const Route = createFileRoute("/_app/admin/reveal-key")({
 
 function RevealKeyPage() {
   const fn = useServerFn(revealServiceRoleKey);
-  const [data, setData] = useState<{ supabaseUrl: string; serviceRoleKey: string } | null>(null);
+  const [data, setData] = useState<{ supabaseUrl: string; serviceRoleKey: string; debug?: any } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -62,6 +62,11 @@ function RevealKeyPage() {
                   value={data.serviceRoleKey}
                 />
               </div>
+              {data.debug && (
+                <pre className="text-xs bg-muted p-2 rounded overflow-auto">
+                  {JSON.stringify(data.debug, null, 2)}
+                </pre>
+              )}
               <p className="text-sm text-muted-foreground">
                 Beide Werte in GitHub als Repository Secrets einfügen
                 (Settings → Secrets and variables → Actions). Danach sag Bescheid,
