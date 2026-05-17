@@ -1,35 +1,20 @@
-# "Eingeschränkter Modus" bei Prognosegenerierung beheben
+# Schlüssel-Anzeige reparieren
 
-## Was passiert aktuell
+## Problem
 
-Bei der Prognosegenerierung kommt manchmal die Warnung **„Open-Meteo Tageslimit erreicht — nur DWD-MOSMIX (Tag 1 + 2) verfügbar"**, obwohl wir das Tageslimit überhaupt nicht ausgereizt haben. Die Datenbank zeigt für heute nur **19 Calls** (Limit: 10 000) — wir sind also weit weg von einer echten Erschöpfung.
+Die Seite `/admin/reveal-key` lädt zwar, aber der Klick auf **„Schlüssel anzeigen“** erreicht die geschützte Server-Funktion weiterhin ohne gültigen Login-Header. Deshalb kommt serverseitig **401 Unauthorized** zurück und die Felder bleiben leer.
 
 ## Ursache
 
-Open-Meteo läuft im Hintergrund über einen geteilten Cloudflare-Server. Wenn andere Projekte auf derselben Cloudflare-IP das Tageslimit ausreizen, bekommen wir ebenfalls einen Tageslimit-Fehler („shared-IP throttle"). Die aktuelle Logik in der Prognose-Generierung glaubt diesem Fehler blind und schaltet bis Mitternacht UTC in den eingeschränkten Modus, obwohl unsere eigene Nutzung minimal ist.
+Die neue Seite ruft `revealServiceRoleKey` über `useServerFn()` auf. In diesem Projekt funktionieren die bestehenden geschützten Aktionen aber anders: sie rufen die Server-Funktion direkt auf und übergeben dort den `Authorization`-Header. Bei der Schlüssel-Seite wird dieser Header offenbar nicht zuverlässig an den Server weitergereicht.
 
-Für die **Druckkarten-Generierung** ist dieser Fall bereits clever behandelt (Self-Heal + 45-Min-Pause statt Ganztagspause). Für die **Prognose-Generierung** fehlt diese Behandlung.
+## Umsetzung
 
-## Lösung
+1. In `src/routes/_app.admin.reveal-key.tsx` den Aufruf von `useServerFn(revealServiceRoleKey)` entfernen.
+2. Den Button direkt `revealServiceRoleKey({ headers: { Authorization: ... } })` aufrufen lassen, analog zu den bestehenden funktionierenden Admin-/Forecast-Aktionen.
+3. Die Fehleranzeige so lassen bzw. leicht verbessern, damit bei 401/500 sofort sichtbar ist, was zurückkommt, statt leere Felder zu zeigen.
+4. Optional die Diagnose-Ausgabe beibehalten, bis die Werte sichtbar sind.
 
-Dieselbe „Shared-IP-Throttle"-Erkennung, die schon in `pressure-map.server.ts` existiert, in den Prognose-Pfad (`forecast.functions.ts`) übernehmen:
+## Ergebnis
 
-1. **Bevor** ein Open-Meteo-Marker als „daily" gesetzt wird: prüfen, wie viele Calls wir heute selbst gemacht haben.
-   - Eigene Nutzung < 500 Calls → es ist ein Shared-IP-Throttle, kein echtes Tageslimit. Marker nur für **45 Minuten** setzen, nicht bis Mitternacht.
-   - Eigene Nutzung ≥ 500 → echter Verdacht auf Tageslimit, Marker bis Mitternacht UTC (wie bisher).
-2. **Bei jedem Lese-Zugriff** auf einen aktiven „daily"-Marker: prüfen, ob die eigene Tagesnutzung unter 9 000 liegt. Wenn ja → stale Marker löschen und neu probieren („Self-Heal").
-3. Die Warnung im Prognose-Text bleibt unverändert — sie wird damit nur noch dann angezeigt, wenn wir tatsächlich Pech mit Open-Meteo haben.
-
-## Effekt
-
-- Bei der nächsten Generierung greift die Self-Heal-Logik sofort: der stale Marker wird gelöscht, Open-Meteo wird normal abgefragt, die volle Prognose (Tag 0–10) ist wieder verfügbar.
-- Künftige Shared-IP-Throttles legen die Prognose maximal 45 Minuten lahm statt bis Mitternacht.
-- Echte Tageslimit-Erschöpfung (>9 000 eigene Calls) wird weiterhin korrekt erkannt und respektiert.
-
-## Technische Details
-
-- Neue Helper-Funktionen `isOmDailyMarkerStale()` und `isOmLikelySharedIpThrottle()` in `src/server/forecast.functions.ts` (Logik 1:1 aus `pressure-map.server.ts` portiert, gleicher 500/9000-Schwellwert).
-- Anpassung in `fetchOpenMeteoOptional()`:
-  - Beim Cache-Lookup: bei aktivem `RATE_LIMIT_DAILY`-Marker zusätzlich Self-Heal-Check.
-  - Beim Setzen eines `RATE_LIMIT_DAILY`-Markers: bei niedriger Eigen-Nutzung Tier auf „hourly" (45 min TTL) downgraden.
-- Keine Datenbank-Migrationen, keine UI-Änderungen, keine neuen Abhängigkeiten.
+Nach Reload von `/admin/reveal-key` sollte der Klick dieselbe Auth-Übergabe nutzen wie die funktionierenden Admin-Aktionen und die Werte anzeigen oder zumindest eine klare Fehlermeldung ausgeben.
