@@ -4,6 +4,7 @@ import { useState } from "react";
 import { revealServiceRoleKey } from "@/lib/reveal-key.functions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/_app/admin/reveal-key")({
   component: RevealKeyPage,
@@ -11,6 +12,7 @@ export const Route = createFileRoute("/_app/admin/reveal-key")({
 
 function RevealKeyPage() {
   const fn = useServerFn(revealServiceRoleKey);
+  const { session } = useAuth();
   const [data, setData] = useState<{ supabaseUrl: string; serviceRoleKey: string; debug?: any } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -25,10 +27,13 @@ function RevealKeyPage() {
           {!data && (
             <Button
               onClick={async () => {
+                if (!session) { setErr("Nicht eingeloggt"); return; }
                 setLoading(true);
                 setErr(null);
                 try {
-                  const r = await fn();
+                  const r = await fn({
+                    headers: { Authorization: `Bearer ${session.access_token}` },
+                  } as any);
                   setData(r);
                 } catch (e: any) {
                   setErr(e?.message ?? String(e));
@@ -36,7 +41,7 @@ function RevealKeyPage() {
                   setLoading(false);
                 }
               }}
-              disabled={loading}
+              disabled={loading || !session}
             >
               {loading ? "Lade…" : "Schlüssel anzeigen"}
             </Button>
