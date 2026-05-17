@@ -1,67 +1,35 @@
-# Option A — Eigenes GitHub-Repo für den Druckkarten-Generator
+# "Eingeschränkter Modus" bei Prognosegenerierung beheben
 
-Du legst ein neues, leeres GitHub-Repo an und kopierst dort die fertigen Generator-Dateien rein. Lovable bleibt komplett unverändert — das Repo schreibt nur in den bestehenden Supabase Storage Bucket `weather-maps`, den die App ohnehin liest.
+## Was passiert aktuell
 
-## Schritt 1 — Neues Repo anlegen
+Bei der Prognosegenerierung kommt manchmal die Warnung **„Open-Meteo Tageslimit erreicht — nur DWD-MOSMIX (Tag 1 + 2) verfügbar"**, obwohl wir das Tageslimit überhaupt nicht ausgereizt haben. Die Datenbank zeigt für heute nur **19 Calls** (Limit: 10 000) — wir sind also weit weg von einer echten Erschöpfung.
 
-1. Auf github.com einloggen → oben rechts **+** → **New repository**
-2. Name z. B. `pressure-map-generator`
-3. **Public** oder **Private** ist egal (GitHub Actions sind in beiden Fällen kostenlos für dieses Volumen)
-4. Haken bei **Add a README** setzen, damit das Repo nicht leer ist
-5. **Create repository**
+## Ursache
 
-## Schritt 2 — Dateien aus Lovable ins Repo kopieren
+Open-Meteo läuft im Hintergrund über einen geteilten Cloudflare-Server. Wenn andere Projekte auf derselben Cloudflare-IP das Tageslimit ausreizen, bekommen wir ebenfalls einen Tageslimit-Fehler („shared-IP throttle"). Die aktuelle Logik in der Prognose-Generierung glaubt diesem Fehler blind und schaltet bis Mitternacht UTC in den eingeschränkten Modus, obwohl unsere eigene Nutzung minimal ist.
 
-Du brauchst genau diese vier Dateien aus dem Lovable-Projekt:
+Für die **Druckkarten-Generierung** ist dieser Fall bereits clever behandelt (Self-Heal + 45-Min-Pause statt Ganztagspause). Für die **Prognose-Generierung** fehlt diese Behandlung.
 
-```text
-pressure-map-generator/generate.mjs
-pressure-map-generator/package.json
-.github/workflows/pressure-map.yml
-src/data/europe-countries.json
-src/data/europe-ocean.json
-src/data/europe-lakes.json
-```
+## Lösung
 
-Wichtig: Der Generator liest die Geo-Daten aus `../src/data/`. Im neuen Repo legst du sie deshalb als `data/europe-*.json` ab und ich passe die drei Pfade in `generate.mjs` minimal an (`../src/data` → `../data`).
+Dieselbe „Shared-IP-Throttle"-Erkennung, die schon in `pressure-map.server.ts` existiert, in den Prognose-Pfad (`forecast.functions.ts`) übernehmen:
 
-Ziel-Struktur im neuen Repo:
+1. **Bevor** ein Open-Meteo-Marker als „daily" gesetzt wird: prüfen, wie viele Calls wir heute selbst gemacht haben.
+   - Eigene Nutzung < 500 Calls → es ist ein Shared-IP-Throttle, kein echtes Tageslimit. Marker nur für **45 Minuten** setzen, nicht bis Mitternacht.
+   - Eigene Nutzung ≥ 500 → echter Verdacht auf Tageslimit, Marker bis Mitternacht UTC (wie bisher).
+2. **Bei jedem Lese-Zugriff** auf einen aktiven „daily"-Marker: prüfen, ob die eigene Tagesnutzung unter 9 000 liegt. Wenn ja → stale Marker löschen und neu probieren („Self-Heal").
+3. Die Warnung im Prognose-Text bleibt unverändert — sie wird damit nur noch dann angezeigt, wenn wir tatsächlich Pech mit Open-Meteo haben.
 
-```text
-pressure-map-generator/
-  ├─ .github/workflows/pressure-map.yml
-  ├─ data/
-  │   ├─ europe-countries.json
-  │   ├─ europe-ocean.json
-  │   └─ europe-lakes.json
-  └─ generator/
-      ├─ generate.mjs
-      └─ package.json
-```
+## Effekt
 
-Hochladen geht in GitHub direkt im Browser: **Add file → Upload files**, Ordner per Drag-and-Drop. Kein Git nötig.
+- Bei der nächsten Generierung greift die Self-Heal-Logik sofort: der stale Marker wird gelöscht, Open-Meteo wird normal abgefragt, die volle Prognose (Tag 0–10) ist wieder verfügbar.
+- Künftige Shared-IP-Throttles legen die Prognose maximal 45 Minuten lahm statt bis Mitternacht.
+- Echte Tageslimit-Erschöpfung (>9 000 eigene Calls) wird weiterhin korrekt erkannt und respektiert.
 
-## Schritt 3 — Secrets im neuen Repo setzen
+## Technische Details
 
-Im neuen Repo: **Settings → Secrets and variables → Actions → New repository secret**
-
-- `SUPABASE_URL` = `https://kdolnotjbhgjieznmpgf.supabase.co`
-- `SUPABASE_SERVICE_ROLE_KEY` = (Service-Role-Key, gibt dir Lovable im Backend → API Keys)
-
-## Schritt 4 — Workflow starten
-
-Im neuen Repo: **Actions** → „Generate pressure map" → **Run workflow**. Danach läuft er automatisch 5×/Tag (04:15 / 06:15 / 09:15 / 13:15 / 17:15 UTC).
-
-## Schritt 5 — Alten Lovable-Cron abschalten
-
-Sobald der GitHub-Job stabil läuft, deaktiviere ich den alten pg_cron-Job in Lovable, damit nicht beides parallel rennt. Die Route `/api/public/hooks/generate-pressure-map` bleibt als manueller Fallback.
-
-## Was ich für dich vorbereite
-
-Wenn du diesen Plan freigibst:
-
-1. Ich passe `pressure-map-generator/generate.mjs` so an, dass die Geo-Daten aus `../data/` statt `../src/data/` geladen werden (damit du sie im neuen Repo nicht im `src`-Ordner liegen haben musst).
-2. Ich poste dir danach den vollständigen Inhalt aller 4 Dateien + Links zu den 3 Geo-JSONs als Copy-Paste-Block in den Chat, damit du sie 1:1 ins neue Repo übernehmen kannst.
-3. Du sagst Bescheid, wenn der erste Workflow-Lauf grün war — dann schalte ich den alten pg_cron-Job ab.
-
-Im Lovable-Codebase ändert sich nur diese eine Zeilen-Anpassung in `generate.mjs`. Keine App-Änderungen.
+- Neue Helper-Funktionen `isOmDailyMarkerStale()` und `isOmLikelySharedIpThrottle()` in `src/server/forecast.functions.ts` (Logik 1:1 aus `pressure-map.server.ts` portiert, gleicher 500/9000-Schwellwert).
+- Anpassung in `fetchOpenMeteoOptional()`:
+  - Beim Cache-Lookup: bei aktivem `RATE_LIMIT_DAILY`-Marker zusätzlich Self-Heal-Check.
+  - Beim Setzen eines `RATE_LIMIT_DAILY`-Markers: bei niedriger Eigen-Nutzung Tier auf „hourly" (45 min TTL) downgraden.
+- Keine Datenbank-Migrationen, keine UI-Änderungen, keine neuen Abhängigkeiten.
