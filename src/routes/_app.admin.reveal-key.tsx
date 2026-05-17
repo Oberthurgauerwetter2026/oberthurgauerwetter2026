@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import { revealServiceRoleKey } from "@/lib/reveal-key.functions";
 import { Button } from "@/components/ui/button";
@@ -11,7 +10,6 @@ export const Route = createFileRoute("/_app/admin/reveal-key")({
 });
 
 function RevealKeyPage() {
-  const fn = useServerFn(revealServiceRoleKey);
   const { session } = useAuth();
   const [data, setData] = useState<{ supabaseUrl: string; serviceRoleKey: string; debug?: any } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -31,7 +29,7 @@ function RevealKeyPage() {
                 setLoading(true);
                 setErr(null);
                 try {
-                  const r = await fn({
+                  const r = await revealServiceRoleKey({
                     headers: { Authorization: `Bearer ${session.access_token}` },
                   } as any);
                   setData(r);
