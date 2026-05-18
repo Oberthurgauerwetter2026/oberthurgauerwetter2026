@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequestHost, getRequestHeader } from "@tanstack/react-start/server";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 export const getPressureMapStatus = createServerFn({ method: "GET" })
@@ -10,8 +11,17 @@ export const getPressureMapStatus = createServerFn({ method: "GET" })
       .select("pressure_map_enabled, pressure_map_last_run, pressure_map_last_status")
       .limit(1)
       .maybeSingle();
-    const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string) ?? "";
-    const url = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/weather-maps/europe-pressure-latest.svg`;
+
+    let base = "";
+    try {
+      const host = getRequestHost();
+      const proto = getRequestHeader("x-forwarded-proto") ?? "https";
+      base = `${proto}://${host}`;
+    } catch {
+      base = "";
+    }
+    const url = `${base}/api/public/maps/europe-pressure-latest.svg`;
+
     return {
       enabled: data?.pressure_map_enabled ?? true,
       lastRun: data?.pressure_map_last_run ?? null,

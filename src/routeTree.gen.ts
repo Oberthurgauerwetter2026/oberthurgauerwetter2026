@@ -21,6 +21,7 @@ import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppForecastForecastIdRouteImport } from './routes/_app.forecast.$forecastId'
 import { Route as AppAdminRevealKeyRouteImport } from './routes/_app.admin.reveal-key'
+import { Route as ApiPublicMapsEuropePressureLatestDotsvgRouteImport } from './routes/api/public/maps/europe-pressure-latest[.]svg'
 import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
 
 const SignupRoute = SignupRouteImport.update({
@@ -82,6 +83,12 @@ const AppAdminRevealKeyRoute = AppAdminRevealKeyRouteImport.update({
   path: '/admin/reveal-key',
   getParentRoute: () => AppRoute,
 } as any)
+const ApiPublicMapsEuropePressureLatestDotsvgRoute =
+  ApiPublicMapsEuropePressureLatestDotsvgRouteImport.update({
+    id: '/api/public/maps/europe-pressure-latest.svg',
+    path: '/api/public/maps/europe-pressure-latest.svg',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksGeneratePressureMapRoute =
   ApiPublicHooksGeneratePressureMapRouteImport.update({
     id: '/api/public/hooks/generate-pressure-map',
@@ -102,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/admin/reveal-key': typeof AppAdminRevealKeyRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
+  '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -116,6 +124,7 @@ export interface FileRoutesByTo {
   '/admin/reveal-key': typeof AppAdminRevealKeyRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
+  '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -132,6 +141,7 @@ export interface FileRoutesById {
   '/_app/admin/reveal-key': typeof AppAdminRevealKeyRoute
   '/_app/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
+  '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -148,6 +158,7 @@ export interface FileRouteTypes {
     | '/admin/reveal-key'
     | '/forecast/$forecastId'
     | '/api/public/hooks/generate-pressure-map'
+    | '/api/public/maps/europe-pressure-latest.svg'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -162,6 +173,7 @@ export interface FileRouteTypes {
     | '/admin/reveal-key'
     | '/forecast/$forecastId'
     | '/api/public/hooks/generate-pressure-map'
+    | '/api/public/maps/europe-pressure-latest.svg'
   id:
     | '__root__'
     | '/'
@@ -177,6 +189,7 @@ export interface FileRouteTypes {
     | '/_app/admin/reveal-key'
     | '/_app/forecast/$forecastId'
     | '/api/public/hooks/generate-pressure-map'
+    | '/api/public/maps/europe-pressure-latest.svg'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -188,6 +201,7 @@ export interface RootRouteChildren {
   SignupRoute: typeof SignupRoute
   HooksDailyForecastRoute: typeof HooksDailyForecastRoute
   ApiPublicHooksGeneratePressureMapRoute: typeof ApiPublicHooksGeneratePressureMapRoute
+  ApiPublicMapsEuropePressureLatestDotsvgRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -276,6 +290,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminRevealKeyRouteImport
       parentRoute: typeof AppRoute
     }
+    '/api/public/maps/europe-pressure-latest.svg': {
+      id: '/api/public/maps/europe-pressure-latest.svg'
+      path: '/api/public/maps/europe-pressure-latest.svg'
+      fullPath: '/api/public/maps/europe-pressure-latest.svg'
+      preLoaderRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/generate-pressure-map': {
       id: '/api/public/hooks/generate-pressure-map'
       path: '/api/public/hooks/generate-pressure-map'
@@ -314,6 +335,8 @@ const rootRouteChildren: RootRouteChildren = {
   HooksDailyForecastRoute: HooksDailyForecastRoute,
   ApiPublicHooksGeneratePressureMapRoute:
     ApiPublicHooksGeneratePressureMapRoute,
+  ApiPublicMapsEuropePressureLatestDotsvgRoute:
+    ApiPublicMapsEuropePressureLatestDotsvgRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
