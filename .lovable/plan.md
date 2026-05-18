@@ -1,65 +1,33 @@
-# Stabile Karten-URL inline-tauglich machen
+# Kartenanzeige in den Settings reparieren
 
 ## Problem
 
-Die aktuelle URL
-`https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg`
-liefert HTTP 200 mit der korrekten SVG (1,5 MB), aber Supabase Storage setzt
-für SVGs aus Public-Buckets automatisch zwei Sicherheits-Header:
+Die Settings-Seite lädt die Karten-URL über `getPressureMapStatus`. In der Preview wird daraus aktuell:
 
-- `Content-Disposition: attachment` → Browser lädt die Datei herunter statt sie anzuzeigen
-- `Content-Security-Policy: default-src 'none'; sandbox` → blockiert Inline-Rendering
+```text
+https://localhost:8080/api/public/maps/europe-pressure-latest.svg
+```
 
-Resultat beim direkten Aufruf: leere Seite / `about:blank` / Download-Dialog.
-Im `<img>`-Tag der Settings-Card funktioniert es trotzdem, weil der Browser
-das SVG dort als Bildquelle einbettet.
+Diese URL ist aus dem Browser heraus nicht erreichbar, weil `localhost:8080` auf den Rechner des Besuchers zeigt und nicht auf die Lovable-Preview bzw. die veröffentlichte App. Dadurch bleibt das Bild leer.
 
-Für die Einbettung in WordPress und für eine teilbare "stabile URL" brauchen
-wir eine URL, die im Browser direkt das Bild anzeigt.
+Zusätzlich liefert die veröffentlichte Proxy-URL aktuell noch HTML statt SVG. Das deutet darauf hin, dass die letzte Änderung noch nicht veröffentlicht ist oder der Endpoint auf der veröffentlichten Version noch nicht aktiv greift.
 
-## Lösung: Proxy-Route in der App
+## Lösung
 
-Eine neue Public-Route `/api/public/maps/europe-pressure-latest.svg` (bzw.
-`.png`), die die Datei aus dem Supabase-Bucket lädt und mit korrekten Headern
-ausliefert:
+1. **Bild-URL relativ ausgeben**
+   - `getPressureMapStatus` soll statt einer absoluten `localhost`-URL nur noch die relative URL zurückgeben:
+     ```text
+     /api/public/maps/europe-pressure-latest.svg
+     ```
+   - Damit funktioniert die Vorschau automatisch auf Preview, Dev und nach Veröffentlichung auf der Live-Domain.
 
-- `Content-Type: image/svg+xml`
-- `Content-Disposition: inline`
-- **keine** restriktive CSP
-- `Cache-Control: public, max-age=300` (5 Min Edge-Cache, da der Inhalt sich
-  nur alle paar Stunden ändert)
-- `Access-Control-Allow-Origin: *` (für WordPress-Einbettung von externen
-  Domains)
+2. **WordPress-/Embed-URL im Frontend absolut machen**
+   - In der Settings-Card wird aus der relativen URL für Anzeige und Embed automatisch eine absolute URL mit `window.location.origin` erzeugt.
+   - Das HTML-Feld enthält dann eine echte vollständige URL, die in WordPress verwendet werden kann.
 
-Die App liest weiterhin die bestehende Supabase-Storage-URL intern; nur die
-nach außen kommunizierte "stabile URL" wechselt auf die neue Proxy-Route.
+3. **Proxy-Route beibehalten**
+   - Die Route `/api/public/maps/europe-pressure-latest.svg` bleibt die richtige Lösung, damit SVG inline angezeigt wird und nicht als Download bzw. `about:blank` endet.
 
-## Änderungen
+## Hinweis zur Veröffentlichung
 
-1. **Neue Datei** `src/routes/api/public/maps/europe-pressure-latest.svg.ts`
-   - GET-Handler, fetched die SVG aus dem Storage-Bucket
-   - Streamt sie mit den oben genannten Headern zurück
-   - Bei 404/Fehler: 502 mit kurzer Fehlermeldung
-
-2. **`src/lib/pressure-map.functions.ts`** anpassen
-   - `embedUrl` zeigt auf die neue Proxy-URL statt direkt auf Supabase-Storage
-   - Basis-URL aus dem Request ableiten bzw. `VITE_APP_URL`/relativ verwenden
-
-3. **Settings-Card** zeigt automatisch die neue URL (kommt aus `embedUrl`),
-   keine UI-Änderung nötig.
-
-## Technische Details
-
-- TanStack-Start Server-Route unter `/api/public/*` → keine Auth-Pflicht
-  (passt, das Bild ist sowieso public)
-- Kein Service-Role-Key nötig: der Bucket `weather-maps` ist public, einfacher
-  `fetch()` auf die Storage-URL reicht
-- SVG wird 1:1 weitergereicht (kein Re-Parsing) → keine Performance-Kosten,
-  Cloudflare cached die Antwort am Edge
-
-## Optional (nicht in diesem Schritt)
-
-- Zusätzlich PNG-Export im Generator anbieten — wäre kleiner und nativ
-  überall einbettbar, erfordert aber eine Render-Lib im GitHub-Action-Workflow.
-  Empfehlung: erstmal mit dem SVG-Proxy starten, PNG nur falls WordPress-User
-  das brauchen.
+Damit die stabile URL außerhalb der Preview funktioniert, muss die App danach veröffentlicht/aktualisiert werden. Die Preview zeigt die Karte direkt nach der Änderung mit der relativen URL an.
