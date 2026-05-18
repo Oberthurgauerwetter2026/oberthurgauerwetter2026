@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 const STORAGE_URL =
   "https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg";
 
-export const Route = createFileRoute("/api/public/maps/europe-pressure-latest/svg")({
+export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.svg")({
   server: {
     handlers: {
       GET: async () => {
