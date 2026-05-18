@@ -1,5 +1,4 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getRequestHost, getRequestHeader } from "@tanstack/react-start/server";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 export const getPressureMapStatus = createServerFn({ method: "GET" })
@@ -12,15 +11,7 @@ export const getPressureMapStatus = createServerFn({ method: "GET" })
       .limit(1)
       .maybeSingle();
 
-    let base = "";
-    try {
-      const host = getRequestHost();
-      const proto = getRequestHeader("x-forwarded-proto") ?? "https";
-      base = `${proto}://${host}`;
-    } catch {
-      base = "";
-    }
-    const url = `${base}/api/public/maps/europe-pressure-latest.svg`;
+    const url = `/api/public/maps/europe-pressure-latest.svg`;
 
     return {
       enabled: data?.pressure_map_enabled ?? true,

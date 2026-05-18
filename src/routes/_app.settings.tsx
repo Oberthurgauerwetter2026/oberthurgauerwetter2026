@@ -672,7 +672,9 @@ function PressureMapCard({ session }: { session: any }) {
   }
   useEffect(() => { load(); }, [session]);
 
-  const embed = status?.embedUrl ?? "";
+  const relEmbed = status?.embedUrl ?? "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const embed = relEmbed.startsWith("http") ? relEmbed : `${origin}${relEmbed}`;
   const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
   const html = `<img src="${embed}" alt="${altText}" style="max-width:100%;height:auto" />`;
 
