@@ -8,7 +8,7 @@ export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.sv
     handlers: {
       GET: async () => {
         try {
-          const upstream = await fetch(STORAGE_URL, { cf: { cacheTtl: 300 } as any });
+          const upstream = await fetch(STORAGE_URL);
           if (!upstream.ok) {
             return new Response(`Upstream ${upstream.status}`, {
               status: 502,
