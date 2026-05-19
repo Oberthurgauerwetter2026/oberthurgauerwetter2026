@@ -514,7 +514,9 @@ async function main() {
       t850: fillAndSmooth(raw.t850, 0, 2),
       precip: fillAndSmooth(raw.precip, 0, 1),
     };
-    svg = buildSvg(grids, usedTarget);
+    const baseExtrema = findExtrema(grids.pressure);
+    const namedExtrema = await attachFuBerlinNames(baseExtrema);
+    svg = buildSvg(grids, usedTarget, namedExtrema);
     bytes = new TextEncoder().encode(svg);
   } catch (e) {
     throw new PhaseError("svg-build", 4, e);
