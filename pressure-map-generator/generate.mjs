@@ -429,15 +429,40 @@ function shiftHour(iso, deltaH) {
   return d.toISOString().slice(0, 16);
 }
 
+// Exit codes:
+//   1 = missing / invalid secrets
+//   2 = no usable weather data
+//   3 = upload failed
+//   4 = SVG build failed
+//  99 = unexpected/unknown error
+class PhaseError extends Error {
+  constructor(phase, code, cause) {
+    super(`[${phase}] ${cause?.message ?? cause}`);
+    this.phase = phase;
+    this.code = code;
+    this.cause = cause;
+  }
+}
+
 async function main() {
+  console.log("[gen] phase=env-check");
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!SUPABASE_URL || !SERVICE_KEY) {
-    console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env");
-    process.exit(1);
+    throw new PhaseError("env-check", 1, new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env"));
   }
+  try {
+    const u = new URL(SUPABASE_URL);
+    if (!/^https?:$/.test(u.protocol)) throw new Error("SUPABASE_URL must be http(s)");
+    console.log(`[gen] SUPABASE_URL host=${u.host}, service key length=${SERVICE_KEY.length}`);
+  } catch (e) {
+    throw new PhaseError("env-check", 1, e);
+  }
+
+  console.log("[gen] phase=client-init");
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
 
+  console.log("[gen] phase=fetch");
   const targetUtc = pickTargetTime();
   const attempts = [
     { model: "icon_seamless", target: targetUtc, label: "icon_seamless" },
@@ -447,45 +472,53 @@ async function main() {
     { model: "icon_seamless", target: shiftHour(targetUtc, +6), label: "icon_seamless@+6h" },
   ];
 
-  let raw = null, usedLabel = "", usedTarget = targetUtc, lastValid = 0;
+  let raw = null, usedLabel = "", usedTarget = targetUtc, lastValid = 0, lastLabel = "";
   for (const a of attempts) {
     try {
       const candidate = await fetchGrids(a.target, a.model);
       const valid = candidate.pressure.values.filter((v) => Number.isFinite(v)).length;
       console.log(`[gen] ${a.label} target=${a.target}: ${valid}/${candidate.pressure.values.length} valid`);
       lastValid = valid;
+      lastLabel = a.label;
       if (valid >= 100) { raw = candidate; usedLabel = a.label; usedTarget = a.target; break; }
     } catch (e) {
-      console.warn(`[gen] attempt ${a.label} threw:`, e);
+      console.warn(`[gen] attempt ${a.label} threw:`, e?.stack ?? e);
     }
   }
   if (!raw) {
-    console.error(`Zu wenige gültige Druckwerte (${lastValid}/${COLS * ROWS})`);
-    process.exit(2);
+    throw new PhaseError("fetch", 2, new Error(
+      `Zu wenige gültige Druckwerte (last=${lastValid}/${COLS * ROWS}, lastModel=${lastLabel}, target=${targetUtc})`
+    ));
   }
 
-  const grids = {
-    pressure: fillAndSmooth(raw.pressure, 1013, 3),
-    t850: fillAndSmooth(raw.t850, 0, 2),
-    precip: fillAndSmooth(raw.precip, 0, 1),
-  };
-  const svg = buildSvg(grids, usedTarget);
-  const bytes = new TextEncoder().encode(svg);
+  console.log("[gen] phase=svg-build");
+  let svg, bytes;
+  try {
+    const grids = {
+      pressure: fillAndSmooth(raw.pressure, 1013, 3),
+      t850: fillAndSmooth(raw.t850, 0, 2),
+      precip: fillAndSmooth(raw.precip, 0, 1),
+    };
+    svg = buildSvg(grids, usedTarget);
+    bytes = new TextEncoder().encode(svg);
+  } catch (e) {
+    throw new PhaseError("svg-build", 4, e);
+  }
+
+  console.log(`[gen] phase=upload (${bytes.length} bytes)`);
   const latestPath = "europe-pressure-latest.svg";
   const archivePath = `archive/europe-pressure-${usedTarget.slice(0, 10)}.svg`;
-
   for (const path of [latestPath, archivePath]) {
     const { error } = await supabase.storage.from("weather-maps").upload(path, bytes, {
       contentType: "image/svg+xml", cacheControl: "3600", upsert: true,
     });
     if (error) {
-      console.error(`Upload ${path} failed: ${error.message}`);
-      process.exit(3);
+      throw new PhaseError("upload", 3, new Error(`Upload ${path} failed: ${error.message}`));
     }
     console.log(`[gen] uploaded ${path}`);
   }
 
-  // Update app_settings status
+  console.log("[gen] phase=status-update");
   try {
     const { data: row } = await supabase.from("app_settings").select("id").limit(1).maybeSingle();
     if (row?.id) {
@@ -495,10 +528,18 @@ async function main() {
       }).eq("id", row.id);
     }
   } catch (e) {
-    console.warn("[gen] could not update app_settings:", e);
+    console.warn("[gen] could not update app_settings:", e?.stack ?? e);
   }
 
   console.log(`[gen] done: ${usedLabel}, target ${usedTarget}, ${bytes.length} bytes`);
 }
 
-main().catch((e) => { console.error(e); process.exit(99); });
+main().catch((e) => {
+  if (e instanceof PhaseError) {
+    console.error(`[gen] FAILED in phase=${e.phase} code=${e.code}: ${e.message}`);
+    if (e.cause?.stack) console.error(e.cause.stack);
+    process.exit(e.code);
+  }
+  console.error("[gen] FAILED with unexpected error:", e?.stack ?? e);
+  process.exit(99);
+});
