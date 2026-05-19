@@ -19,22 +19,28 @@ export const revealServiceRoleKey = createServerFn({ method: "POST" })
       ?? process.env.VITE_SUPABASE_URL
       ?? "";
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+    const lovableKey = process.env.LOVABLE_API_KEY ?? "";
 
     // Diagnostics in server logs (key value never logged)
     console.log("[reveal-key] env present:", {
       SUPABASE_URL: !!process.env.SUPABASE_URL,
       VITE_SUPABASE_URL: !!process.env.VITE_SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      LOVABLE_API_KEY: !!process.env.LOVABLE_API_KEY,
       keyLength: key.length,
+      lovableKeyLength: lovableKey.length,
     });
 
     return {
       supabaseUrl: url,
       serviceRoleKey: key,
+      lovableApiKey: lovableKey,
       debug: {
         hasUrl: !!process.env.SUPABASE_URL,
         hasKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+        hasLovableKey: !!process.env.LOVABLE_API_KEY,
         keyLength: key.length,
+        lovableKeyLength: lovableKey.length,
       },
     };
   });
