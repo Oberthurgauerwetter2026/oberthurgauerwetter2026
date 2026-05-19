@@ -290,7 +290,7 @@ function precipStyle(mm) {
   return { fill: "#4c1d95", opacity: 0.85 };
 }
 
-function buildSvg(grids, targetUtcIso) {
+function buildSvg(grids, targetUtcIso, extremaOverride) {
   const { pressure: grid, t850, precip } = grids;
 
   const t850Thresholds = [];
