@@ -15,6 +15,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { contours as d3contours } from "d3-contour";
 import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Geo data location:
@@ -460,7 +461,10 @@ async function main() {
   }
 
   console.log("[gen] phase=client-init");
-  const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+  const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
+    auth: { persistSession: false },
+    realtime: { transport: ws },
+  });
 
   console.log("[gen] phase=fetch");
   const targetUtc = pickTargetTime();
