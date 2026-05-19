@@ -1,18 +1,21 @@
-## Plan: GitHub Workflow weiterhin „gleiche Meldung“ beheben
+## Plan: GitHub Action endgültig vom npm-/Cache-Fehler befreien
 
 ### Ziel
-Der GitHub Action Workflow `Generate pressure map` soll zuverlässig durchlaufen, ohne an Node/npm-Setup oder fehlendem Lockfile zu scheitern.
+Der Workflow `Generate pressure map` soll auf GitHub unabhängig von Lovable-internen npm-Einstellungen installieren und bis zum Schritt `Generate and upload map` weiterlaufen.
 
-### Diagnose
-- Die Workflow-Datei enthält inzwischen kein `setup-node`-Caching mehr.
-- Im Ordner `pressure-map-generator/` fehlt weiterhin `package-lock.json`.
-- Wenn GitHub noch dieselbe Lockfile-/Cache-Meldung zeigt, ist entweder die Änderung noch nicht bei GitHub angekommen oder die robustere Lösung ist, das erwartete Lockfile einzuchecken.
+### Aktuelles Problem
+- Die Workflow-Datei nutzt zwar kein explizites `setup-node`-Caching mehr.
+- Das neu erzeugte `pressure-map-generator/package-lock.json` enthält aber Download-URLs aus einem Lovable-internen npm-Cache.
+- GitHub Actions kann diese internen URLs nicht zuverlässig abrufen. Dadurch kann der Fehler trotz Lockfile weiter wie ein npm-/Cache-/Dependency-Problem aussehen.
 
 ### Umsetzung
-1. In `pressure-map-generator/` ein `package-lock.json` aus `package.json` erzeugen.
-2. Keine Secrets ändern.
-3. Keine App-UI ändern.
-4. Danach den Workflow erneut manuell starten.
+1. Das Lockfile im Generator so neu erzeugen, dass alle Pakete auf die öffentliche npm-Registry zeigen.
+2. Den Workflow zusätzlich explizit gegen automatisches `setup-node` Package-Manager-Caching absichern.
+3. Die Installation im Workflow auf die öffentliche npm-Registry festnageln und dann mit dem Lockfile installieren.
+4. Keine App-UI ändern und keine Secrets ändern.
 
 ### Erwartetes Ergebnis
-GitHub Actions kann die Dependencies eindeutig installieren und der Workflow kommt zum eigentlichen Schritt `Generate and upload map` weiter.
+GitHub Actions verwendet keine Lovable-internen npm-Cache-URLs mehr und kann die Generator-Abhängigkeiten sauber installieren.
+
+### Danach
+Nach dem Sync zu GitHub den Workflow manuell erneut starten. Falls er dann weiterkommt und an Secrets scheitert, ist das ein separater Fehler bei den GitHub Repository Secrets.
