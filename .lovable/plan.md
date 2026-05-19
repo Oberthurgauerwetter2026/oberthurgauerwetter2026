@@ -1,63 +1,59 @@
-# Workflow läuft auf alter GitHub-Version — Sync prüfen
+# Fix-Plan: GitHub Action Warnung + Exit Code 99
 
 ## Befund
 
-Im Lovable-Projekt ist die Workflow-Datei `.github/workflows/pressure-map.yml`
-bereits korrekt: die ungültige Zeile `package-manager-cache: false` ist raus
-(verifiziert mit `rg` — 0 Treffer).
+Die neue Meldung besteht aus zwei getrennten Themen:
 
-Aktueller Inhalt der Datei in Lovable:
+1. **Warnung:** `actions/checkout@v4` und `actions/setup-node@v4` laufen noch auf der GitHub-internen Node-20-Runtime. Das ist eine Deprecation-Warnung der Action selbst, nicht des Generators.
+2. **Fehler:** `Process completed with exit code 99` kommt aus `pressure-map-generator/generate.mjs` ganz am Ende:
 
-```yaml
-- uses: actions/setup-node@v4
-  with:
-    node-version: "20"
-    registry-url: "https://registry.npmjs.org"
+```js
+main().catch((e) => { console.error(e); process.exit(99); });
 ```
 
-Trotzdem zeigt GitHub Actions weiterhin exakt:
+Das bedeutet: irgendwo in `main()` wird eine Exception geworfen, aber der aktuelle Log sagt nicht sauber, in welcher Phase.
 
-> Unexpected input(s) 'package-manager-cache'
+## Geplanter Fix
 
-Das ist nur möglich, wenn GitHub eine **ältere Version** der Datei ausführt.
+### 1. Workflow auf Node-24-kompatible Actions vorbereiten
 
-## Ursache (drei mögliche)
+In `.github/workflows/pressure-map.yml`:
 
-1. Lovable hat die Änderung noch nicht zu GitHub gepusht (Sync hängt /
-   ist langsam / GitHub-Connection unterbrochen).
-2. Du schaust im GitHub-UI auf einen **alten Run** (vor dem Fix). Alte Runs
-   ändern sich nicht — sie zeigen für immer den Fehler des damaligen Codes.
-3. „Run workflow" wurde auf einem alten Branch oder einem alten Commit-SHA
-   gestartet.
+- `actions/checkout` auf die aktuelle Node-24-kompatible Major-Version aktualisieren, falls verfügbar.
+- `actions/setup-node` auf die aktuelle Node-24-kompatible Major-Version aktualisieren, falls verfügbar.
+- Zusätzlich `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` im Job setzen, damit GitHub die neue Runtime jetzt schon verwendet.
+- Die Generator-Node-Version für `node generate.mjs` vorerst auf Node 20 lassen, weil die Dependencies aktuell `node >=20` verlangen und der eigentliche Generator damit kompatibel ist.
 
-## Was zu tun ist (du, im GitHub-UI)
+### 2. Generator-Fehler sichtbar machen
 
-### Schritt 1 — Sync prüfen
-Öffne dein GitHub-Repo und gehe zu `.github/workflows/pressure-map.yml`.
-Bestätige: enthält die Datei dort die Zeile `package-manager-cache: false`?
+In `pressure-map-generator/generate.mjs`:
 
-- **Ja → Sync-Problem.** In Lovable oben rechts auf GitHub-Status klicken,
-  „Sync" / „Push" auslösen, ggf. die GitHub-Integration neu verbinden.
-- **Nein → Schritt 2.**
+- Jede Hauptphase klar loggen: Env-Check, Client-Erstellung, Wetterdaten-Fetch, SVG-Build, Upload, Status-Update.
+- Vor `createClient` `SUPABASE_URL` validieren, ohne Secrets auszugeben.
+- Bei unerwarteten Fehlern Stacktrace und Phase ausgeben, damit GitHub nicht nur `exit code 99` zeigt.
+- Exit Codes vereinheitlichen, damit Fehler unterscheidbar sind:
+  - `1` fehlende/ungültige Secrets
+  - `2` zu wenige Wetterdaten
+  - `3` Upload fehlgeschlagen
+  - `4` SVG-Erzeugung fehlgeschlagen
+  - `99` nur noch echter unbekannter Fallback
 
-### Schritt 2 — Neuen Run starten (nicht alten ansehen)
-1. Im Repo auf `Actions` → links `Generate pressure map`.
-2. Rechts `Run workflow` → Branch `main` (Default) → `Run workflow`.
-3. **Den neu entstehenden Run** öffnen (oberster, mit aktueller Uhrzeit) —
-   nicht einen früheren.
+### 3. Robustheit gegen Open-Meteo-Ausfälle verbessern
 
-### Schritt 3 — Falls neue Meldung
-Wenn der neue Run jetzt eine andere Meldung zeigt (z.B. zu Secrets, Upload
-oder „exit code 99" aus `generate.mjs`), screenshot davon machen — das ist
-dann ein separates Problem, das ich gezielt fixen kann.
+- Wenn ein Open-Meteo-Batch kein passendes Ziel-Zeitfenster enthält, zusätzlich verfügbare Zeiten im Log nennen.
+- Bei zu wenigen gültigen Druckwerten den zuletzt getesteten Modellnamen und Zieltermin loggen.
+- Keine sensiblen Schlüssel ausgeben.
 
-## Was ich in Lovable NICHT mehr ändern muss
+## Ergebnis nach Umsetzung
 
-Code, Workflow und `package-lock.json` sind in Ordnung. Verifiziert:
-- `node --check pressure-map-generator/generate.mjs` → ok
-- Storage-Bucket `weather-maps` existiert und ist public
-- `app_settings.pressure_map_last_run` / `_last_status` Spalten existieren
-- `package-manager-cache` ist in der Workflow-Datei nicht mehr enthalten
+Der nächste GitHub-Run sollte entweder erfolgreich durchlaufen oder eine konkrete Ursache zeigen, z.B. ungültige Repository-Secrets, Open-Meteo-Datenlücke, SVG-Fehler oder Upload-Fehler. Die Node-20-Action-Warnung sollte ebenfalls verschwinden oder deutlich reduziert sein.
 
-Es gibt aktuell nichts Sinnvolles, das ich am Code ändern könnte, das die
-GitHub-Meldung verändern würde — die liegt zu 100% am Sync/Run-Stand.
+## Danach testen
+
+Nach der Änderung im GitHub-UI einen neuen manuellen Run starten:
+
+```text
+Actions → Generate pressure map → Run workflow → Branch main
+```
+
+Falls der Run dann noch fehlschlägt, reicht der vollständige Log des Schritts **Generate and upload map**; dann ist die Ursache eindeutig sichtbar.
