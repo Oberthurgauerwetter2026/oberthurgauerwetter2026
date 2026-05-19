@@ -1,39 +1,27 @@
-# Plan: GitHub-Workflow-Logs gezielt analysieren
+# Plan: GitHub-Workflow-Fix für Node/WebSocket-Fehler
 
-## Ziel
+## Ursache
 
-Die Ursache des weiterhin fehlschlagenden GitHub-Workflows soll nicht mehr geraten, sondern anhand des vollständigen Logs eindeutig bestimmt werden.
+Der Fehler entsteht beim Initialisieren des Storage-Clients im Generator. Die aktuell installierte Client-Version initialisiert intern Realtime/WebSocket. Unter Node 20 fehlt dafür die native WebSocket-Unterstützung, deshalb bricht `createClient(...)` schon vor dem Upload ab.
 
-## Was ich brauche
+## Änderung
 
-Bitte den kompletten Log des fehlgeschlagenen GitHub-Schritts kopieren:
+1. Im Generator-Paket die kleine `ws`-Abhängigkeit hinzufügen.
+2. In `pressure-map-generator/generate.mjs` `ws` importieren.
+3. Beim `createClient(...)` die Realtime-Option so setzen, dass unter Node 20 der `ws`-Transport verwendet wird.
+4. Den Workflow unverändert lassen: Er kann weiterhin Node 20 nutzen; der Node-20-Deprecation-Hinweis der GitHub-Actions wurde bereits separat über Actions v5/Node-24-Runtime adressiert.
+
+## Technischer Zielzustand
 
 ```text
-Actions → Generate pressure map → fehlgeschlagener Run → Job generate → Schritt "Generate and upload map"
+import ws from "ws";
+
+createClient(SUPABASE_URL, SERVICE_KEY, {
+  auth: { persistSession: false },
+  realtime: { transport: ws },
+});
 ```
 
-Wichtig sind besonders die Zeilen direkt vor:
+## Prüfung danach
 
-```text
-Process completed with exit code ...
-```
-
-Falls dort neue Phasenlogs stehen, bitte alles ab der ersten Zeile mit `[phase:` oder `[OM]` bis zum Ende des Schritts mitschicken.
-
-## Analyse-Schritte
-
-1. Den tatsächlichen Fehlerblock aus dem Schritt **Generate and upload map** identifizieren.
-2. Prüfen, ob der Fehler aus Secrets, Open-Meteo-Daten, SVG-Erzeugung oder Upload kommt.
-3. Nur die konkret betroffene Stelle ändern, statt den Workflow erneut breit umzubauen.
-4. Danach eine kurze Testanweisung für einen manuellen GitHub-Run geben.
-
-## Mögliche Ergebnisse
-
-- Fehlende oder falsch benannte Repository-Secrets.
-- Open-Meteo liefert für den Zielzeitpunkt zu wenige Druckwerte.
-- Upload in den Speicher-Bucket schlägt fehl.
-- Die GitHub-Seite führt noch einen alten Commit aus, in dem die letzten Änderungen noch nicht enthalten sind.
-
-## Kein Code-Änderungsschritt ohne Log
-
-Ich nehme erst wieder Code-Änderungen vor, wenn der vollständige Fehlerlog die Ursache zeigt.
+Nach der Änderung den GitHub-Workflow manuell starten. Erwartung: Der Schritt kommt über `phase=client-init` hinaus und schlägt, falls überhaupt, nicht mehr mit dem Node/WebSocket-Fehler fehl.
