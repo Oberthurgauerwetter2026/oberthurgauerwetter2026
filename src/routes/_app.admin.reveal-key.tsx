@@ -65,13 +65,22 @@ function RevealKeyPage() {
                   value={data.serviceRoleKey}
                 />
               </div>
+              <div>
+                <p className="text-sm font-medium mb-1">LOVABLE_API_KEY</p>
+                <textarea
+                  readOnly
+                  className="w-full font-mono text-xs p-2 border rounded bg-muted"
+                  rows={4}
+                  value={data.lovableApiKey}
+                />
+              </div>
               {data.debug && (
                 <pre className="text-xs bg-muted p-2 rounded overflow-auto">
                   {JSON.stringify(data.debug, null, 2)}
                 </pre>
               )}
               <p className="text-sm text-muted-foreground">
-                Beide Werte in GitHub als Repository Secrets einfügen
+                Alle drei Werte in GitHub als Repository Secrets eintragen
                 (Settings → Secrets and variables → Actions). Danach sag Bescheid,
                 dann entferne ich diese Seite wieder.
               </p>
