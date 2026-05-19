@@ -2,7 +2,7 @@ name: Generate pressure map
 
 on:
   schedule:
-    # 04:15, 06:15, 09:15, 13:15, 17:15 UTC — same cadence as the previous pg_cron job
+    # 04:15, 06:15, 09:15, 13:15, 17:15 UTC
     - cron: "15 4,6,9,13,17 * * *"
   workflow_dispatch:
 
@@ -10,17 +10,21 @@ concurrency:
   group: pressure-map
   cancel-in-progress: false
 
+env:
+  # Opt into the new Node 24 runtime for JavaScript actions ahead of the
+  # June 2026 forced switch — silences the deprecation warning.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
-          # Cache stays disabled because no setup-node `cache` input is set.
           registry-url: "https://registry.npmjs.org"
 
       - name: Install deps
