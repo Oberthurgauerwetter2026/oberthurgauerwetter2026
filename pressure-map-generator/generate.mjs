@@ -419,7 +419,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   ${pItems.join("\n  ")}
   ${pLabels.join("\n  ")}
   <text x="${pLgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Niederschlag 6 h (mm)</text>
-  <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch · external-gen</text>
+  <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · Namen: Aktion Wetterpate, FU Berlin · oberthurgauerwetter.ch</text>
 </svg>`;
 }
 
