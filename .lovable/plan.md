@@ -1,21 +1,24 @@
-## Plan: GitHub Action endgültig vom npm-/Cache-Fehler befreien
+# Fix GitHub Workflow: Ungültiger setup-node Input
 
-### Ziel
-Der Workflow `Generate pressure map` soll auf GitHub unabhängig von Lovable-internen npm-Einstellungen installieren und bis zum Schritt `Generate and upload map` weiterlaufen.
+## Problem
 
-### Aktuelles Problem
-- Die Workflow-Datei nutzt zwar kein explizites `setup-node`-Caching mehr.
-- Das neu erzeugte `pressure-map-generator/package-lock.json` enthält aber Download-URLs aus einem Lovable-internen npm-Cache.
-- GitHub Actions kann diese internen URLs nicht zuverlässig abrufen. Dadurch kann der Fehler trotz Lockfile weiter wie ein npm-/Cache-/Dependency-Problem aussehen.
+Der Workflow `pressure-map.yml` schlägt mit Exit Code 99 fehl. Der Screenshot zeigt die echte Ursache:
 
-### Umsetzung
-1. Das Lockfile im Generator so neu erzeugen, dass alle Pakete auf die öffentliche npm-Registry zeigen.
-2. Den Workflow zusätzlich explizit gegen automatisches `setup-node` Package-Manager-Caching absichern.
-3. Die Installation im Workflow auf die öffentliche npm-Registry festnageln und dann mit dem Lockfile installieren.
-4. Keine App-UI ändern und keine Secrets ändern.
+> Unexpected input(s) 'package-manager-cache', valid inputs are ['always-auth', 'node-version', 'node-version-file', 'architecture', 'check-latest', 'registry-url', 'scope', 'token', 'cache', 'cache-…']
 
-### Erwartetes Ergebnis
-GitHub Actions verwendet keine Lovable-internen npm-Cache-URLs mehr und kann die Generator-Abhängigkeiten sauber installieren.
+`package-manager-cache` ist kein gültiger Input für `actions/setup-node@v4`. Ich hatte ihn in einer vorherigen Iteration fälschlich hinzugefügt, um den npm-Cache zu deaktivieren — aber der Cache ist sowieso standardmäßig aus, solange `cache:` nicht gesetzt wird.
 
-### Danach
-Nach dem Sync zu GitHub den Workflow manuell erneut starten. Falls er dann weiterkommt und an Secrets scheitert, ist das ein separater Fehler bei den GitHub Repository Secrets.
+## Fix
+
+Eine Zeile aus `.github/workflows/pressure-map.yml` entfernen:
+
+```yaml
+- uses: actions/setup-node@v4
+  with:
+    node-version: "20"
+    registry-url: "https://registry.npmjs.org"
+```
+
+(Zeile `package-manager-cache: false` löschen.)
+
+Keine weiteren Änderungen — `package-lock.json` und `npm ci` bleiben wie sie sind.
