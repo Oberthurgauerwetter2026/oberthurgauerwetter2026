@@ -26,6 +26,9 @@ Frontend-Änderungen nötig.
    - `SUPABASE_URL` → `https://kdolnotjbhgjieznmpgf.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY` → der Service-Role-Key (in Lovable unter
      Cloud → Backend → API Keys verfügbar).
+   - `LOVABLE_API_KEY` → für den Wetterpate-Namens-Layer (Lovable AI Gateway,
+     Gemini-Vision liest die Hoch-/Tief-Namen aus der FU-Berlin-Karte).
+     Optional – fehlt der Key, wird die Karte ohne Namen erzeugt.
 3. **Workflow aktivieren**: unter `Actions` einmal manuell „Generate pressure
    map → Run workflow" starten. Danach läuft er nach Cron-Plan
    (04:15 / 06:15 / 09:15 / 13:15 / 17:15 UTC).
