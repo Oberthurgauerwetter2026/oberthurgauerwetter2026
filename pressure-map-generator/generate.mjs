@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { contours as d3contours } from "d3-contour";
 import { createClient } from "@supabase/supabase-js";
 import ws from "ws";
+import { attachFuBerlinNames } from "./fu-berlin-names.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Geo data location:
