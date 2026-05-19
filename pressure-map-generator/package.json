@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
-    "d3-contour": "^4.0.2"
+    "d3-contour": "^4.0.2",
+    "ws": "^8.20.1"
   },
   "engines": {
     "node": ">=20"
