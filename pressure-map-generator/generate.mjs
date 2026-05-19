@@ -447,15 +447,23 @@ class PhaseError extends Error {
 
 async function main() {
   console.log("[gen] phase=env-check");
-  const SUPABASE_URL = process.env.SUPABASE_URL;
-  const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const rawUrl = process.env.SUPABASE_URL ?? "";
+  const rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  const SUPABASE_URL = rawUrl.replace(/[\r\n\t ]+/g, "").trim();
+  const SERVICE_KEY = rawKey.replace(/[\r\n\t]/g, "").trim();
   if (!SUPABASE_URL || !SERVICE_KEY) {
     throw new PhaseError("env-check", 1, new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env"));
+  }
+  if (rawKey.length !== SERVICE_KEY.length) {
+    console.warn(`[gen] SERVICE key contained whitespace/newlines — stripped ${rawKey.length - SERVICE_KEY.length} chars`);
+  }
+  if (/[^\x20-\x7E]/.test(SERVICE_KEY)) {
+    throw new PhaseError("env-check", 1, new Error("SUPABASE_SERVICE_ROLE_KEY contains non-ASCII characters"));
   }
   try {
     const u = new URL(SUPABASE_URL);
     if (!/^https?:$/.test(u.protocol)) throw new Error("SUPABASE_URL must be http(s)");
-    console.log(`[gen] SUPABASE_URL host=${u.host}, service key length=${SERVICE_KEY.length}`);
+    console.log(`[gen] SUPABASE_URL host=${u.host}, service key length=${SERVICE_KEY.length} (raw=${rawKey.length})`);
   } catch (e) {
     throw new PhaseError("env-check", 1, e);
   }
