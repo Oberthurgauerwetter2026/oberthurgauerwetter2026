@@ -1,45 +1,42 @@
-# Plan: Service-Role-Key sicher per Base64 nach GitHub bringen
+# FU-Berlin-Namen für Hochs und Tiefs übernehmen
 
-## Problem
+## Ausgangslage
 
-Beim Einfügen des Service-Role-Keys ins GitHub-Secret-Feld passt der Wert nur mit Zeilenumbruch hinein — und genau dieser Umbruch landet im Header und führt zu `Headers.set: invalid header value`. Der bereits eingebaute Whitespace-Filter würde das zwar abfangen, aber wir wollen das Problem an der Quelle vermeiden, damit nichts Unsichtbares (z. B. Non-Breaking-Spaces, Word-„Smart Quotes") durchrutscht.
+Die FU Berlin („Aktion Wetterpate") vergibt Vornamen für Hoch- und Tiefdruckgebiete. Diese Namen tauchen aber **nur als Text-Label im GIF** (`emtbkna.gif` / `anabwkna.gif`) auf. Auf wetterpate.de gibt es zwar eine Liste der vergebenen Namen, aber **ohne Koordinaten** – also keine Information, welcher Name zu welchem H/T auf unserer Karte gehört.
 
-## Lösung: zweiter Secret-Slot in Base64
+Es gibt keinen offiziellen JSON-/Text-Feed mit Name + Position.
 
-Wir erlauben dem Generator, den Key wahlweise aus einer Base64-Variante zu lesen. Base64 enthält nur ASCII-Buchstaben/Zahlen + `+ /  =`, hat keine Zeilenumbrüche und ist beim Kopieren harmlos.
+## Vorschlag: OCR im GitHub-Action-Generator
 
-### Code-Änderung in `pressure-map-generator/generate.mjs`
+Da unser Generator bereits als GitHub Action läuft (Ubuntu-Runner, freie IP), können wir dort einmal pro Lauf das FU-Berlin-Prognose-GIF holen, per OCR die Namens-Labels samt Bildkoordinaten extrahieren, und sie unseren erkannten Druckzentren zuordnen.
 
-In der `env-check`-Phase zusätzlich `SUPABASE_SERVICE_ROLE_KEY_B64` lesen:
+### Ablauf pro Lauf
 
-- Wenn gesetzt → mit `Buffer.from(value, "base64").toString("utf8")` dekodieren und das Ergebnis als Service-Key verwenden.
-- Sonst → wie bisher `SUPABASE_SERVICE_ROLE_KEY` (mit Whitespace-Filter).
+1. `emtbkna.gif` von `page.met.fu-berlin.de` herunterladen.
+2. Mit **Tesseract** (deutsche Sprachdatei) OCR über das Bild, Wort-Bounding-Boxes auslesen.
+3. Wörter filtern, die wie Vornamen aussehen (Großbuchstabe + Kleinbuchstaben, kein Zahlencode, in der Nähe eines „H" oder „T"-Symbols).
+4. Bildpixel-Koordinaten der FU-Karte → geografische Koordinaten transformieren (die FU-Karte nutzt eine bekannte stereographische Projektion über Europa; einmalig kalibriert über 3–4 Referenzpunkte).
+5. Unsere bestehenden Hoch-/Tief-Zentren (haben wir bereits aus dem Druckfeld) → für jedes Zentrum nächstgelegenes OCR-Label im Umkreis von z. B. 500 km zuordnen.
+6. SVG-Render: zusätzlich zum „H 1024" / „T 998" den zugeordneten Namen drunter setzen (kleinere kursive Schrift, z. B. „Zeno", „Inga").
 
-Anschließend wie gehabt prüfen: nicht leer, nur ASCII, gültige Länge loggen.
+### Fallbacks
 
-### Workflow-Datei `.github/workflows/pressure-map.yml`
+- OCR liefert keinen Treffer in der Nähe → wir rendern wie bisher nur H/T + Druck, ohne Name.
+- GIF-Download schlägt fehl → Lauf bricht nicht ab, Karte wird ohne Namen generiert.
+- Falls Tesseract zu unzuverlässig ist: Wechsel auf Lovable AI Gateway (`google/gemini-2.5-flash` mit Bild-Input) als Alternativ-Extraktor.
 
-Im `env:`-Block zusätzlich `SUPABASE_SERVICE_ROLE_KEY_B64: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY_B64 }}` durchreichen. Der alte Eintrag bleibt als Fallback bestehen.
+### Attribution
 
-## Aktion vom Nutzer
+In der SVG-Fußzeile zusätzlich: „Namen: Aktion Wetterpate, FU Berlin" mit Link auf wetterpate.de. Die Namen selbst sind Fakten, das GIF wird nicht weiterverbreitet.
 
-1. Den Service-Role-Key einmal lokal in Base64 verpacken. Auf macOS:
+## Technische Details
 
-   ```bash
-   printf %s 'DEIN_LANGER_JWT_KEY' | base64
-   ```
+- Neue Datei `pressure-map-generator/fu-berlin-names.mjs` mit Funktionen `fetchFuBerlinMap()`, `ocrPressureLabels(buffer)`, `pixelToLatLon(x,y)`, `matchNamesToCenters(centers, labels)`.
+- `generate.mjs`: nach Berechnung der Zentren `matchNamesToCenters(...)` aufrufen, Namen ins SVG-Render-Modell schreiben.
+- GitHub-Action `pressure-map.yml`: `apt-get install -y tesseract-ocr tesseract-ocr-deu` vor dem Node-Step.
+- Keine neuen Secrets nötig.
+- Keine App-Änderungen – die App liest weiter dieselbe Storage-SVG.
 
-   (Wichtig: `printf %s`, damit kein Newline angehängt wird. Bei Windows PowerShell:
-   `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('DEIN_KEY'))`.)
+## Offene Frage
 
-2. Das Ergebnis als neues GitHub-Secret `SUPABASE_SERVICE_ROLE_KEY_B64` anlegen (Repository → Settings → Secrets and variables → Actions → New repository secret). Der Base64-String ist eine einzige Zeile ohne Sonderzeichen, das Einfügen ist problemlos.
-
-3. Workflow `Generate pressure map` manuell starten. Erwartetes Log:
-
-   ```text
-   [gen] using base64-encoded service key
-   [gen] phase=upload (...)
-   uploaded europe-pressure-latest.svg
-   ```
-
-Den alten Secret `SUPABASE_SERVICE_ROLE_KEY` brauchst du dann nicht mehr — kannst ihn aber für später drinlassen.
+Soll ich direkt mit **Tesseract** starten (kostenlos, deterministisch, aber bei dichten Beschriftungen u. U. ungenau) oder gleich mit **Lovable AI / Gemini Flash** (robuster bei verrauschten GIFs, minimale Kosten pro Lauf)?
