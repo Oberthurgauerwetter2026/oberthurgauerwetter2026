@@ -1,29 +1,45 @@
-# Plan: Upload-Fehler wegen Zeilenumbrüchen im Service-Role-Key
+# Plan: Service-Role-Key sicher per Base64 nach GitHub bringen
 
-## Ursache
+## Problem
 
-Der Generator kommt jetzt bis zum Upload. Dort scheitert er an:
+Beim Einfügen des Service-Role-Keys ins GitHub-Secret-Feld passt der Wert nur mit Zeilenumbruch hinein — und genau dieser Umbruch landet im Header und führt zu `Headers.set: invalid header value`. Der bereits eingebaute Whitespace-Filter würde das zwar abfangen, aber wir wollen das Problem an der Quelle vermeiden, damit nichts Unsichtbares (z. B. Non-Breaking-Spaces, Word-„Smart Quotes") durchrutscht.
 
-```text
-Headers.set: "***\n\n***" is an invalid header value.
-```
+## Lösung: zweiter Secret-Slot in Base64
 
-Das heißt: Der Wert von `SUPABASE_SERVICE_ROLE_KEY` enthält Zeilenumbrüche. Die maskierte Form `***\n\n***` zeigt zwei maskierte Teile mit Newline dazwischen. Auch die Schlüssellänge 261 ist verdächtig — ein normaler Service-Role-JWT ist um die 220 Zeichen lang. HTTP-Header dürfen keine Zeilenumbrüche enthalten, deshalb bricht der Upload-Aufruf ab.
+Wir erlauben dem Generator, den Key wahlweise aus einer Base64-Variante zu lesen. Base64 enthält nur ASCII-Buchstaben/Zahlen + `+ /  =`, hat keine Zeilenumbrüche und ist beim Kopieren harmlos.
 
-## Änderung im Code
+### Code-Änderung in `pressure-map-generator/generate.mjs`
 
-In `pressure-map-generator/generate.mjs` direkt nach dem Einlesen der beiden Env-Variablen die Werte robust säubern:
+In der `env-check`-Phase zusätzlich `SUPABASE_SERVICE_ROLE_KEY_B64` lesen:
 
-- `SUPABASE_URL` und `SUPABASE_SERVICE_ROLE_KEY` mit `trim()` und Entfernen aller `\r` / `\n` im Inneren.
-- Wenn nach dem Säubern noch immer ungültige Zeichen drin sind, mit Exit-Code 1 (Phase `env-check`) sauber abbrechen, statt erst im Upload zu scheitern.
-- Beim Logging der Schlüssellänge zusätzlich angeben, ob der Key Whitespace enthielt — als klare Diagnose.
+- Wenn gesetzt → mit `Buffer.from(value, "base64").toString("utf8")` dekodieren und das Ergebnis als Service-Key verwenden.
+- Sonst → wie bisher `SUPABASE_SERVICE_ROLE_KEY` (mit Whitespace-Filter).
 
-## Aktion vom Nutzer (parallel)
+Anschließend wie gehabt prüfen: nicht leer, nur ASCII, gültige Länge loggen.
 
-Im GitHub-Repository unter `Settings → Secrets and variables → Actions` den Secret `SUPABASE_SERVICE_ROLE_KEY` einmal komplett löschen und neu einfügen — als eine einzige Zeile, ohne Zeilenumbruch am Ende. Den Wert vorher in einem einfachen Editor (nicht Word/Pages) prüfen.
+### Workflow-Datei `.github/workflows/pressure-map.yml`
 
-Der Service-Role-Key ist in Lovable Cloud unter `Backend → API Keys` zu finden.
+Im `env:`-Block zusätzlich `SUPABASE_SERVICE_ROLE_KEY_B64: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY_B64 }}` durchreichen. Der alte Eintrag bleibt als Fallback bestehen.
 
-## Test danach
+## Aktion vom Nutzer
 
-Workflow `Generate pressure map` manuell starten (`Actions → Run workflow`). Erwartet: der Schritt durchläuft `phase=upload` ohne Fehler und meldet `uploaded europe-pressure-latest.svg`.
+1. Den Service-Role-Key einmal lokal in Base64 verpacken. Auf macOS:
+
+   ```bash
+   printf %s 'DEIN_LANGER_JWT_KEY' | base64
+   ```
+
+   (Wichtig: `printf %s`, damit kein Newline angehängt wird. Bei Windows PowerShell:
+   `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('DEIN_KEY'))`.)
+
+2. Das Ergebnis als neues GitHub-Secret `SUPABASE_SERVICE_ROLE_KEY_B64` anlegen (Repository → Settings → Secrets and variables → Actions → New repository secret). Der Base64-String ist eine einzige Zeile ohne Sonderzeichen, das Einfügen ist problemlos.
+
+3. Workflow `Generate pressure map` manuell starten. Erwartetes Log:
+
+   ```text
+   [gen] using base64-encoded service key
+   [gen] phase=upload (...)
+   uploaded europe-pressure-latest.svg
+   ```
+
+Den alten Secret `SUPABASE_SERVICE_ROLE_KEY` brauchst du dann nicht mehr — kannst ihn aber für später drinlassen.
