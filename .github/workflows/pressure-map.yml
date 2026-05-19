@@ -20,10 +20,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          package-manager-cache: false
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install deps
         working-directory: pressure-map-generator
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --registry=https://registry.npmjs.org/
 
       - name: Generate and upload map
         working-directory: pressure-map-generator
