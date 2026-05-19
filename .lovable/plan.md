@@ -1,33 +1,74 @@
-# Kartenanzeige in den Settings reparieren
+# Bodendruckkarte über Cyon.ch ausliefern (PHP-Proxy)
 
-## Problem
+## Idee
 
-Die Settings-Seite lädt die Karten-URL über `getPressureMapStatus`. In der Preview wird daraus aktuell:
+Statt das SVG über Lovable auszuliefern, holt ein kleines PHP-Skript auf deinem Cyon-Webspace die Karte direkt vom Lovable-Cloud-Storage und gibt sie mit den richtigen Headern (`image/svg+xml`, inline, Caching) aus. WordPress bindet dann nur noch eine URL auf deiner eigenen Domain ein — keine Lovable-Preview- oder Publish-Probleme mehr.
 
-```text
-https://localhost:8080/api/public/maps/europe-pressure-latest.svg
+Die Karte wird ohnehin alle paar Stunden vom GitHub-Workflow neu generiert und in den Storage geladen. Das PHP-Skript ist nur ein Durchreicher mit lokalem Zwischenspeicher.
+
+## Was du tun musst
+
+1. Die Datei `druckkarte.php` (Inhalt unten) per FTP/SFTP auf deinen Cyon-Webspace laden, z. B. nach `/public_html/wetter/druckkarte.php`.
+2. Sicherstellen, dass der Ordner für PHP schreibbar ist (für den Cache). Falls nicht, im Skript `$cacheFile = null;` setzen — dann wird ohne lokalen Cache jedes Mal direkt von Lovable Cloud geholt.
+3. Die URL `https://deine-domain.tld/wetter/druckkarte.php` in WordPress als Bild einbinden:
+   ```html
+   <img src="https://deine-domain.tld/wetter/druckkarte.php"
+        alt="Aktuelle Bodendruckkarte Europa"
+        style="max-width:100%;height:auto;" />
+   ```
+
+## Skript: `druckkarte.php`
+
+```php
+<?php
+// Quelle: Lovable-Cloud-Storage (öffentliches SVG, alle paar Stunden aktualisiert)
+$source    = 'https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg';
+$cacheFile = __DIR__ . '/druckkarte-cache.svg';
+$cacheTtl  = 600; // 10 Minuten lokaler Cache
+
+// Wenn Cache frisch genug ist → direkt ausliefern
+if ($cacheFile && is_readable($cacheFile) && (time() - filemtime($cacheFile) < $cacheTtl)) {
+    header('Content-Type: image/svg+xml; charset=utf-8');
+    header('Content-Disposition: inline; filename="druckkarte.svg"');
+    header('Cache-Control: public, max-age=300');
+    readfile($cacheFile);
+    exit;
+}
+
+// Sonst frisch holen
+$ctx = stream_context_create(['http' => ['timeout' => 10, 'header' => "User-Agent: druckkarte-proxy\r\n"]]);
+$svg = @file_get_contents($source, false, $ctx);
+
+if ($svg === false || strlen($svg) < 100) {
+    // Fallback: alten Cache liefern, falls vorhanden
+    if ($cacheFile && is_readable($cacheFile)) {
+        header('Content-Type: image/svg+xml; charset=utf-8');
+        header('Cache-Control: public, max-age=60');
+        readfile($cacheFile);
+        exit;
+    }
+    http_response_code(502);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'Karte konnte nicht geladen werden.';
+    exit;
+}
+
+// Cache aktualisieren (best effort)
+if ($cacheFile) @file_put_contents($cacheFile, $svg);
+
+header('Content-Type: image/svg+xml; charset=utf-8');
+header('Content-Disposition: inline; filename="druckkarte.svg"');
+header('Cache-Control: public, max-age=300');
+echo $svg;
 ```
 
-Diese URL ist aus dem Browser heraus nicht erreichbar, weil `localhost:8080` auf den Rechner des Besuchers zeigt und nicht auf die Lovable-Preview bzw. die veröffentlichte App. Dadurch bleibt das Bild leer.
+## Was sich in der Lovable-App ändert
 
-Zusätzlich liefert die veröffentlichte Proxy-URL aktuell noch HTML statt SVG. Das deutet darauf hin, dass die letzte Änderung noch nicht veröffentlicht ist oder der Endpoint auf der veröffentlichten Version noch nicht aktiv greift.
+Auf der Settings-Seite passe ich die WordPress-Embed-Anleitung so an, dass dort deine eigene Cyon-URL als empfohlene Einbindung steht (mit Eingabefeld für die genaue URL, falls du sie anders ablegst). Die bestehende Vorschau im Admin-Bereich bleibt unverändert und nutzt weiter die Lovable-interne URL — nur das, was du an WordPress weitergibst, zeigt auf Cyon.
 
-## Lösung
+## Vorteile
 
-1. **Bild-URL relativ ausgeben**
-   - `getPressureMapStatus` soll statt einer absoluten `localhost`-URL nur noch die relative URL zurückgeben:
-     ```text
-     /api/public/maps/europe-pressure-latest.svg
-     ```
-   - Damit funktioniert die Vorschau automatisch auf Preview, Dev und nach Veröffentlichung auf der Live-Domain.
-
-2. **WordPress-/Embed-URL im Frontend absolut machen**
-   - In der Settings-Card wird aus der relativen URL für Anzeige und Embed automatisch eine absolute URL mit `window.location.origin` erzeugt.
-   - Das HTML-Feld enthält dann eine echte vollständige URL, die in WordPress verwendet werden kann.
-
-3. **Proxy-Route beibehalten**
-   - Die Route `/api/public/maps/europe-pressure-latest.svg` bleibt die richtige Lösung, damit SVG inline angezeigt wird und nicht als Download bzw. `about:blank` endet.
-
-## Hinweis zur Veröffentlichung
-
-Damit die stabile URL außerhalb der Preview funktioniert, muss die App danach veröffentlicht/aktualisiert werden. Die Preview zeigt die Karte direkt nach der Änderung mit der relativen URL an.
+- Karte wird über deine eigene Domain ausgeliefert (sauberer für SEO und WordPress).
+- Kein `about:blank`, kein 404, keine Abhängigkeit von Lovable-Preview-/Publish-Status.
+- Lokaler 10-Minuten-Cache → schnell und schont den Lovable-Storage.
+- Automatischer Fallback auf alten Cache, falls Lovable Cloud kurz nicht erreichbar ist.
