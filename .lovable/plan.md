@@ -1,59 +1,39 @@
-# Fix-Plan: GitHub Action Warnung + Exit Code 99
+# Plan: GitHub-Workflow-Logs gezielt analysieren
 
-## Befund
+## Ziel
 
-Die neue Meldung besteht aus zwei getrennten Themen:
+Die Ursache des weiterhin fehlschlagenden GitHub-Workflows soll nicht mehr geraten, sondern anhand des vollständigen Logs eindeutig bestimmt werden.
 
-1. **Warnung:** `actions/checkout@v4` und `actions/setup-node@v4` laufen noch auf der GitHub-internen Node-20-Runtime. Das ist eine Deprecation-Warnung der Action selbst, nicht des Generators.
-2. **Fehler:** `Process completed with exit code 99` kommt aus `pressure-map-generator/generate.mjs` ganz am Ende:
+## Was ich brauche
 
-```js
-main().catch((e) => { console.error(e); process.exit(99); });
-```
-
-Das bedeutet: irgendwo in `main()` wird eine Exception geworfen, aber der aktuelle Log sagt nicht sauber, in welcher Phase.
-
-## Geplanter Fix
-
-### 1. Workflow auf Node-24-kompatible Actions vorbereiten
-
-In `.github/workflows/pressure-map.yml`:
-
-- `actions/checkout` auf die aktuelle Node-24-kompatible Major-Version aktualisieren, falls verfügbar.
-- `actions/setup-node` auf die aktuelle Node-24-kompatible Major-Version aktualisieren, falls verfügbar.
-- Zusätzlich `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` im Job setzen, damit GitHub die neue Runtime jetzt schon verwendet.
-- Die Generator-Node-Version für `node generate.mjs` vorerst auf Node 20 lassen, weil die Dependencies aktuell `node >=20` verlangen und der eigentliche Generator damit kompatibel ist.
-
-### 2. Generator-Fehler sichtbar machen
-
-In `pressure-map-generator/generate.mjs`:
-
-- Jede Hauptphase klar loggen: Env-Check, Client-Erstellung, Wetterdaten-Fetch, SVG-Build, Upload, Status-Update.
-- Vor `createClient` `SUPABASE_URL` validieren, ohne Secrets auszugeben.
-- Bei unerwarteten Fehlern Stacktrace und Phase ausgeben, damit GitHub nicht nur `exit code 99` zeigt.
-- Exit Codes vereinheitlichen, damit Fehler unterscheidbar sind:
-  - `1` fehlende/ungültige Secrets
-  - `2` zu wenige Wetterdaten
-  - `3` Upload fehlgeschlagen
-  - `4` SVG-Erzeugung fehlgeschlagen
-  - `99` nur noch echter unbekannter Fallback
-
-### 3. Robustheit gegen Open-Meteo-Ausfälle verbessern
-
-- Wenn ein Open-Meteo-Batch kein passendes Ziel-Zeitfenster enthält, zusätzlich verfügbare Zeiten im Log nennen.
-- Bei zu wenigen gültigen Druckwerten den zuletzt getesteten Modellnamen und Zieltermin loggen.
-- Keine sensiblen Schlüssel ausgeben.
-
-## Ergebnis nach Umsetzung
-
-Der nächste GitHub-Run sollte entweder erfolgreich durchlaufen oder eine konkrete Ursache zeigen, z.B. ungültige Repository-Secrets, Open-Meteo-Datenlücke, SVG-Fehler oder Upload-Fehler. Die Node-20-Action-Warnung sollte ebenfalls verschwinden oder deutlich reduziert sein.
-
-## Danach testen
-
-Nach der Änderung im GitHub-UI einen neuen manuellen Run starten:
+Bitte den kompletten Log des fehlgeschlagenen GitHub-Schritts kopieren:
 
 ```text
-Actions → Generate pressure map → Run workflow → Branch main
+Actions → Generate pressure map → fehlgeschlagener Run → Job generate → Schritt "Generate and upload map"
 ```
 
-Falls der Run dann noch fehlschlägt, reicht der vollständige Log des Schritts **Generate and upload map**; dann ist die Ursache eindeutig sichtbar.
+Wichtig sind besonders die Zeilen direkt vor:
+
+```text
+Process completed with exit code ...
+```
+
+Falls dort neue Phasenlogs stehen, bitte alles ab der ersten Zeile mit `[phase:` oder `[OM]` bis zum Ende des Schritts mitschicken.
+
+## Analyse-Schritte
+
+1. Den tatsächlichen Fehlerblock aus dem Schritt **Generate and upload map** identifizieren.
+2. Prüfen, ob der Fehler aus Secrets, Open-Meteo-Daten, SVG-Erzeugung oder Upload kommt.
+3. Nur die konkret betroffene Stelle ändern, statt den Workflow erneut breit umzubauen.
+4. Danach eine kurze Testanweisung für einen manuellen GitHub-Run geben.
+
+## Mögliche Ergebnisse
+
+- Fehlende oder falsch benannte Repository-Secrets.
+- Open-Meteo liefert für den Zielzeitpunkt zu wenige Druckwerte.
+- Upload in den Speicher-Bucket schlägt fehl.
+- Die GitHub-Seite führt noch einen alten Commit aus, in dem die letzten Änderungen noch nicht enthalten sind.
+
+## Kein Code-Änderungsschritt ohne Log
+
+Ich nehme erst wieder Code-Änderungen vor, wenn der vollständige Fehlerlog die Ursache zeigt.
