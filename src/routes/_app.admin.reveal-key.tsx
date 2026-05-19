@@ -11,7 +11,7 @@ export const Route = createFileRoute("/_app/admin/reveal-key")({
 
 function RevealKeyPage() {
   const { session } = useAuth();
-  const [data, setData] = useState<{ supabaseUrl: string; serviceRoleKey: string; debug?: any } | null>(null);
+  const [data, setData] = useState<{ supabaseUrl: string; serviceRoleKey: string; lovableApiKey: string; debug?: any } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
