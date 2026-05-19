@@ -658,9 +658,16 @@ function SettingsPage() {
   );
 }
 
+const SUPABASE_MAP_URL =
+  "https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg";
+
 function PressureMapCard({ session }: { session: any }) {
   const [status, setStatus] = useState<{ enabled: boolean; lastRun: string | null; lastStatus: string | null; embedUrl: string } | null>(null);
   const [bust] = useState(Date.now());
+  const [cyonUrl, setCyonUrl] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem("pressureMapCyonUrl") ?? "";
+  });
 
   async function load() {
     if (!session) return;
@@ -672,11 +679,15 @@ function PressureMapCard({ session }: { session: any }) {
   }
   useEffect(() => { load(); }, [session]);
 
-  const relEmbed = status?.embedUrl ?? "";
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const embed = relEmbed.startsWith("http") ? relEmbed : `${origin}${relEmbed}`;
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("pressureMapCyonUrl", cyonUrl);
+    }
+  }, [cyonUrl]);
+
   const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
-  const html = `<img src="${embed}" alt="${altText}" style="max-width:100%;height:auto" />`;
+  const embedUrlForWordpress = cyonUrl.trim() || SUPABASE_MAP_URL;
+  const html = `<img src="${embedUrlForWordpress}" alt="${altText}" style="max-width:100%;height:auto" />`;
 
   return (
     <Card>
@@ -684,8 +695,7 @@ function PressureMapCard({ session }: { session: any }) {
         <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
         <CardDescription>
           Tägliche Vorhersagekarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
-          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Cron-Lauf täglich um 06:00 UTC für den
-          Folgetag. Die Bild-URL bleibt stabil und kann direkt in WordPress eingebettet werden.
+          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Cron-Lauf täglich um 06:00 UTC.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -698,25 +708,63 @@ function PressureMapCard({ session }: { session: any }) {
           {status?.lastStatus && <Badge variant="secondary">{status.lastStatus}</Badge>}
         </div>
 
-        {embed && (
-          <div className="space-y-2">
-            <div className="rounded border bg-muted/30 p-2">
-              <img
-                src={`${embed}?v=${bust}`}
-                alt={altText}
-                className="w-full h-auto"
-                onError={() => { /* noop */ }}
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Einbettungs-HTML (in WordPress als Custom-HTML einfügen)</Label>
-              <Textarea readOnly rows={2} value={html} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
-            </div>
-            <div className="text-xs text-muted-foreground">
-              Stabile URL: <a href={embed} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">{embed}</a>
-            </div>
+        <div className="rounded border bg-muted/30 p-2">
+          <img
+            src={`${SUPABASE_MAP_URL}?v=${bust}`}
+            alt={altText}
+            className="w-full h-auto"
+          />
+        </div>
+
+        <div className="rounded-md border border-dashed p-4 space-y-3 bg-muted/20">
+          <div>
+            <Label className="text-sm font-medium">Auslieferung über deinen Cyon-Host (empfohlen)</Label>
+            <p className="text-xs text-muted-foreground mt-1">
+              Lade die Datei <code className="font-mono">druckkarte.php</code> (siehe Anleitung unten) per FTP/SFTP
+              auf deinen Cyon-Webspace, z. B. nach <code className="font-mono">/wetter/druckkarte.php</code>.
+              Trage anschliessend die öffentliche URL hier ein — damit wird der WordPress-Einbettungscode
+              automatisch auf deine eigene Domain umgestellt.
+            </p>
           </div>
-        )}
+          <div className="space-y-2">
+            <Label htmlFor="cyon-url" className="text-xs">Cyon-URL der Druckkarte</Label>
+            <Input
+              id="cyon-url"
+              value={cyonUrl}
+              onChange={(e) => setCyonUrl(e.target.value)}
+              placeholder="https://deine-domain.ch/wetter/druckkarte.php"
+              className="font-mono text-xs"
+            />
+            <p className="text-xs text-muted-foreground">
+              Leer lassen, um direkt von Lovable Cloud zu laden (funktioniert auch, ist aber von Lovable abhängig).
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs">Einbettungs-HTML (in WordPress als Custom-HTML einfügen)</Label>
+          <Textarea readOnly rows={2} value={html} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+          <div className="text-xs text-muted-foreground">
+            Aktive Bild-URL:{" "}
+            <a href={embedUrlForWordpress} target="_blank" rel="noreferrer" className="text-primary hover:underline break-all">
+              {embedUrlForWordpress}
+            </a>
+          </div>
+        </div>
+
+        <details className="text-xs text-muted-foreground rounded border p-3">
+          <summary className="cursor-pointer font-medium text-foreground">Anleitung: druckkarte.php auf Cyon</summary>
+          <ol className="list-decimal pl-5 mt-2 space-y-1">
+            <li>Lade die Datei <code className="font-mono">druckkarte.php</code> (im Chat bereitgestellt) per FTP/SFTP in einen Ordner deiner Wahl, z. B. <code className="font-mono">/public_html/wetter/</code>.</li>
+            <li>Öffne die URL einmal im Browser, um zu prüfen, dass die SVG-Karte erscheint.</li>
+            <li>Trage genau diese URL oben im Feld „Cyon-URL der Druckkarte" ein.</li>
+            <li>Kopiere den Einbettungscode in WordPress (Block „Custom HTML").</li>
+          </ol>
+          <p className="mt-2">
+            Das PHP-Skript holt die Karte direkt vom Lovable-Cloud-Storage und cached sie 10 Minuten lokal.
+            Es ist robust gegen kurze Ausfälle (Fallback auf letzten Cache).
+          </p>
+        </details>
       </CardContent>
     </Card>
   );
