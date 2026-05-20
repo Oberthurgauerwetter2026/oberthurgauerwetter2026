@@ -119,6 +119,22 @@ export function OpenMeteoUsageCard() {
           </div>
         )}
 
+        {(data.cacheEntries ?? 0) > 0 && (
+          <div className="text-xs text-muted-foreground">
+            Aktive Cache-Einträge: {data.cacheEntries}
+            {Object.keys(data.cacheByPrefix ?? {}).length > 0 && (
+              <>
+                {" "}(
+                {Object.entries(data.cacheByPrefix ?? {})
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([k, n]) => `${k} ${n}`)
+                  .join(" · ")}
+                )
+              </>
+            )}
+          </div>
+        )}
+
         {data.last429At && (
           <div className="text-xs text-destructive">
             Letzter 429-Fehler: {formatTime(data.last429At)} ({SOURCE_LABELS[data.last429Source ?? ""] ?? data.last429Source})
