@@ -959,8 +959,14 @@ async function fetchWeather(
   midModels = normalizeModels(midModels);
   longModels = normalizeModels(longModels);
   // Avoid rate-limit bursts: query the model tiers sequentially and tolerate one tier failing.
-  // Short-tier (Tag 0-1) ist immer live; mid/long werden bis Mitternacht gecacht.
-  const shortData = await fetchOpenMeteoOptional(lat, lon, shortModels, true);
+  // Short-tier (Tag 0-1): 15 min Cache — ICON-CH1/CH2 aktualisieren stündlich, AROME alle 3 h,
+  // also genügt 15 min Frische, spart aber ~60 % Calls bei mehrfachen Aufrufen pro Stunde.
+  // Mid/long werden bis Mitternacht gecacht.
+  const shortData = await getOrSetCache(
+    `om:short:${lat.toFixed(4)},${lon.toFixed(4)}:${shortModels}`,
+    () => fetchOpenMeteoOptional(lat, lon, shortModels, true),
+    15 * 60 * 1000,
+  );
   await wait(500);
   const midData = await getOrSetCache(
     `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,

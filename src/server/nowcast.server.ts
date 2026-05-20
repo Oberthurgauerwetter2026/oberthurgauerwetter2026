@@ -46,7 +46,7 @@ async function fetchOMCurrent(lat: number, lon: number) {
       cloud_pct: typeof c.cloudcover === "number" ? c.cloudcover : null,
       wind_kmh: typeof c.windspeed_10m === "number" ? c.windspeed_10m : null,
     };
-  }, 10 * 60 * 1000); // 10 min
+  }, 20 * 60 * 1000); // 20 min
 }
 
 // Mittelt SMN-Stationen über die jüngste verfügbare Stunde (innerhalb der letzten 3h).
