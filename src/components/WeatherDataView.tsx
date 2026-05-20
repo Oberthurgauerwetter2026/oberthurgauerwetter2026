@@ -285,6 +285,54 @@ function RegimeBadges({ wind_regime, snow_line }: { wind_regime?: any; snow_line
   );
 }
 
+const CONFIDENCE_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  high: "default",
+  medium: "secondary",
+  low: "destructive",
+};
+
+const CONFIDENCE_LABELS: Record<string, string> = {
+  high: "Sicherheit: hoch",
+  medium: "Sicherheit: mittel",
+  low: "Sicherheit: tief",
+};
+
+function EnsembleConfidenceBlock({ conf }: { conf: any }) {
+  if (!conf?.level) return null;
+  const variant = CONFIDENCE_VARIANTS[conf.level] ?? "outline";
+  const label = CONFIDENCE_LABELS[conf.level] ?? conf.level;
+  const tip =
+    `Basierend auf ${conf.members_count ?? "?"} ICON-EPS-Membern. ` +
+    (conf.tmax_spread != null ? `Tmax-Spread ±${fmt(conf.tmax_spread, 1)}°C` : "");
+  const probs: Array<[string, number | null]> = [
+    ["P(>1mm)", conf.prob_precip_gt_1mm],
+    ["P(>5mm)", conf.prob_precip_gt_5mm],
+    ["P(>10mm)", conf.prob_precip_gt_10mm],
+    ["P(Wind>50)", conf.prob_wind_gt_50kmh],
+  ];
+  const visibleProbs = probs.filter(([, v]) => typeof v === "number" && v > 0);
+  return (
+    <div className="rounded-md border bg-muted/30 p-2 space-y-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={variant} title={tip}>{label}</Badge>
+        <span className="text-muted-foreground">
+          ICON-EPS · {conf.members_count ?? "?"} Member
+          {conf.tmax_spread != null && <> · Tmax ±{fmt(conf.tmax_spread, 1)}°C</>}
+          {conf.tmax_p10_p90 && Array.isArray(conf.tmax_p10_p90) && (
+            <> · Tmax-Band {fmt(conf.tmax_p10_p90[0], 1)}–{fmt(conf.tmax_p10_p90[1], 1)}°C</>
+          )}
+        </span>
+      </div>
+      {visibleProbs.length > 0 && (
+        <div className="flex flex-wrap gap-2 text-muted-foreground">
+          {visibleProbs.map(([k, v]) => (
+            <span key={k} className="tabular-nums">{k}: <span className="text-foreground font-medium">{v}%</span></span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
 function TopographyBlock({ topo }: { topo: any }) {
   if (!topo) return null;
   return (
