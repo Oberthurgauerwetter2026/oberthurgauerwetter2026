@@ -13,7 +13,8 @@ export type OmSource =
   | "nowcast"
   | "elevation"
   | "historical_bias"
-  | "synoptic_trend";
+  | "synoptic_trend"
+  | "ensemble";
 
 export const OPEN_METEO_DAILY_LIMIT = 10000;
 

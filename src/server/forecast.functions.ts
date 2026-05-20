@@ -9,6 +9,7 @@ import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-c
 import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type NowcastResult } from "./nowcast.server";
 import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
 import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
+import { fetchEnsembleSummary, applyEnsembleConfidenceToDay, type EnsembleDay } from "./ensemble.server";
 import { fetchOpenMeteo as fetchOMTracked } from "./openmeteo-quota.server";
 import { generateTextNominal as runNominal } from "./nominal-style.server";
 import { fetchSynopticTrend, buildTrendUserPrompt } from "./synoptic-trend.server";
@@ -3218,12 +3219,15 @@ export const generateForecast = createServerFn({ method: "POST" })
     const bias: BiasResult | null = biasEnabled && biasStations.length
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
-    const [pressureSeries, snowSeries, nowcastInputs] = await Promise.all([
+    const [pressureSeries, snowSeries, nowcastInputs, ensembleByDate] = await Promise.all([
       fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
       fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
       (settings?.nowcast_enabled !== false)
         ? fetchNowcastInputs(lat, lon, biasStations).catch((e) => { console.warn("nowcast inputs failed", e); return null; })
         : Promise.resolve(null),
+      (settings?.ensemble_enabled !== false)
+        ? fetchEnsembleSummary(lat, lon, 7).catch((e) => { console.warn("ensemble fetch failed", e); return new Map<string, EnsembleDay>(); })
+        : Promise.resolve(new Map<string, EnsembleDay>()),
     ]);
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
@@ -3249,6 +3253,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
+      out = applyEnsembleConfidenceToDay(out, ensembleByDate);
       if (out.precip_distribution && dayIndex <= 1) {
         const elev = out?.topography?.elev_median ?? 450;
         const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
@@ -3366,12 +3371,15 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
 
-    const [pressureSeries, snowSeries, nowcastInputs] = await Promise.all([
+    const [pressureSeries, snowSeries, nowcastInputs, ensembleByDate] = await Promise.all([
       fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
       fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
       (settings?.nowcast_enabled !== false)
         ? fetchNowcastInputs(lat, lon, biasStations).catch((e) => { console.warn("nowcast inputs failed", e); return null; })
         : Promise.resolve(null),
+      (settings?.ensemble_enabled !== false)
+        ? fetchEnsembleSummary(lat, lon, 7).catch((e) => { console.warn("ensemble fetch failed", e); return new Map<string, EnsembleDay>(); })
+        : Promise.resolve(new Map<string, EnsembleDay>()),
     ]);
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
@@ -3414,6 +3422,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
+      out = applyEnsembleConfidenceToDay(out, ensembleByDate);
       if (out.precip_distribution && dayIndex <= 1) {
         const elev = out?.topography?.elev_median ?? 450;
         const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
