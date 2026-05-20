@@ -3219,12 +3219,15 @@ export const generateForecast = createServerFn({ method: "POST" })
     const bias: BiasResult | null = biasEnabled && biasStations.length
       ? await computeBiasCorrection(biasStations, biasLookback, biasStrength).catch((e) => { console.warn("bias compute failed", e); return null; })
       : null;
-    const [pressureSeries, snowSeries, nowcastInputs] = await Promise.all([
+    const [pressureSeries, snowSeries, nowcastInputs, ensembleByDate] = await Promise.all([
       fetchPressureGradient().catch((e) => { console.warn("pressure-gradient failed", e); return [] as DayPressure[]; }),
       fetchSnowLine(lat, lon).catch((e) => { console.warn("snow-line failed", e); return [] as DaySnowLine[]; }),
       (settings?.nowcast_enabled !== false)
         ? fetchNowcastInputs(lat, lon, biasStations).catch((e) => { console.warn("nowcast inputs failed", e); return null; })
         : Promise.resolve(null),
+      (settings?.ensemble_enabled !== false)
+        ? fetchEnsembleSummary(lat, lon, 7).catch((e) => { console.warn("ensemble fetch failed", e); return new Map<string, EnsembleDay>(); })
+        : Promise.resolve(new Map<string, EnsembleDay>()),
     ]);
     const pressureByDate = new Map(pressureSeries.map((p) => [p.date, p]));
     const snowByDate = new Map(snowSeries.map((s) => [s.date, s]));
