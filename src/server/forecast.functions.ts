@@ -3422,6 +3422,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       }
       applyRadarToDay(out, dayIndex, radarSnapshot, settings);
       applyRegimeToDay(out, pressureByDate, snowByDate);
+      out = applyEnsembleConfidenceToDay(out, ensembleByDate);
       if (out.precip_distribution && dayIndex <= 1) {
         const elev = out?.topography?.elev_median ?? 450;
         const phase = assessPrecipPhase(weather, dayIndex, out.snow_line ?? null, elev, out.precip_distribution);
