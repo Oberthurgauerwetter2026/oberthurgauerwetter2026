@@ -193,6 +193,7 @@ function DayTable({ data, title }: { data: Record<string, any>; title?: string }
       {((data as any).wind_regime || (data as any).snow_line) && (
         <RegimeBadges wind_regime={(data as any).wind_regime} snow_line={(data as any).snow_line} />
       )}
+      {(data as any).ensemble_confidence && <EnsembleConfidenceBlock conf={(data as any).ensemble_confidence} />}
       {(data as any).topography && <TopographyBlock topo={(data as any).topography} />}
       {(data as any).stations && <StationsBlock stations={(data as any).stations} />}
       {(data as any).precip_distribution && <PrecipDistributionBlock dist={(data as any).precip_distribution} />}
