@@ -9,6 +9,7 @@ import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-c
 import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type NowcastResult } from "./nowcast.server";
 import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
 import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
+import { fetchEnsembleSummary, applyEnsembleConfidenceToDay, type EnsembleDay } from "./ensemble.server";
 import { fetchOpenMeteo as fetchOMTracked } from "./openmeteo-quota.server";
 import { generateTextNominal as runNominal } from "./nominal-style.server";
 import { fetchSynopticTrend, buildTrendUserPrompt } from "./synoptic-trend.server";
