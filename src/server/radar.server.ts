@@ -123,7 +123,7 @@ export async function fetchRadarSnapshot(lat: number, lon: number): Promise<Rada
         return null;
       }
     },
-    5 * 60 * 1000, // 5 min TTL
+    10 * 60 * 1000, // 10 min TTL
   );
 }
 
