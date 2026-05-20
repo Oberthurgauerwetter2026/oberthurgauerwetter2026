@@ -2,8 +2,8 @@ name: Generate pressure map
 
 on:
   schedule:
-    # 04:15, 06:15, 09:15, 13:15, 17:15 UTC
-    - cron: "15 4,6,9,13,17 * * *"
+    # 04:15 UTC (= 05:15 CH-Winter / 06:15 CH-Sommer) — 1× täglich vor dem morgendlichen Wetterbericht
+    - cron: "15 4 * * *"
   workflow_dispatch:
 
 concurrency:
