@@ -45,6 +45,23 @@ export const getOpenMeteoUsage = createServerFn({ method: "GET" })
     const activeMarkers = rlAll ?? [];
     const isRateLimited = activeMarkers.length > 0;
 
+    // Aktive Open-Meteo-Cache-Einträge (ohne Rate-Limit-Marker)
+    const { data: cacheRows } = await supabaseAdmin
+      .from("weather_cache")
+      .select("cache_key")
+      .like("cache_key", "om:%")
+      .gt("expires_at", nowIso);
+    const cacheByPrefix: Record<string, number> = {};
+    let cacheEntries = 0;
+    for (const r of cacheRows ?? []) {
+      const key = r.cache_key as string;
+      if (key.startsWith(RATELIMIT_KEY_PREFIX)) continue;
+      cacheEntries++;
+      // om:short:..., om:mid:..., om:long:..., om:current:...
+      const bucket = key.split(":")[1] ?? "other";
+      cacheByPrefix[bucket] = (cacheByPrefix[bucket] ?? 0) + 1;
+    }
+
     return {
       day,
       total: row?.total ?? 0,
@@ -56,6 +73,8 @@ export const getOpenMeteoUsage = createServerFn({ method: "GET" })
       isRateLimited,
       activeMarkerCount: activeMarkers.length,
       resetAtIso: nextUtcMidnightIso(),
+      cacheEntries,
+      cacheByPrefix,
     };
   });
 
