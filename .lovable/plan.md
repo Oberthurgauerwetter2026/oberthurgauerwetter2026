@@ -1,56 +1,67 @@
-# Bodendruckkarte: zuverlässigere automatische Generierung
+# Druckkarten-Generator: Skip-Logik gegen Doppel-Calls
 
-## Befund
+## Problem
 
-Der GitHub-Workflow funktioniert **grundsätzlich** — der Lauf von heute 14:31 UTC hat die Karte für 2026-05-22 erfolgreich erzeugt (Status `OK · external-gen · icon_seamless`). Aber der geplante Cron um **04:15 UTC** hat heute morgen nicht generiert (Archiv `europe-pressure-2026-05-21.svg` fehlt mit heutigem Datum).
+Der GitHub-Workflow läuft jetzt 3× pro Tag (04:15 / 07:15 / 17:15 UTC), damit die Karte zuverlässig erscheint. Aber: der Generator (`pressure-map-generator/generate.mjs`) hat **keine** Skip-Prüfung. Jeder Lauf ruft Open-Meteo voll ab — also bis zu 3× so viele Calls wie nötig, obwohl die Karte für denselben Zieltag schon existiert.
 
-Ursache: GitHub Actions führt Scheduled Workflows auf Free-Plan-Runnern **nicht garantiert pünktlich** aus — bei hoher Last werden Cron-Slots verspätet oder ganz übersprungen, ohne Fehlermeldung. Mit nur **einem** Slot pro Tag ist das fragil.
+Beispiel: Wenn der 04:15-Slot die Karte für den Folgetag erfolgreich erzeugt, würden 07:15 und 17:15 sie unnötig nochmal generieren.
 
-## Lösung: Mehrere Cron-Slots + Skip-Logik
+## Ziel
 
-Statt einem Slot um 04:15 UTC fügen wir **drei Slots** ein. Der Generator hat bereits eine Skip-Logik (`already current for target X`), die verhindert, dass ein bereits aktueller Tag erneut hochgeladen wird — d. h. zusätzliche Slots verursachen praktisch keine Open-Meteo-Quota-Kosten.
+Pro Zieltag soll Open-Meteo **nur einmal** abgefragt werden. Die zusätzlichen Cron-Slots dienen nur als Backup, falls der erste fehlgeschlagen ist.
 
-Neue Cron-Zeiten (`.github/workflows/pressure-map.yml`):
+## Lösung
 
-```text
-15 4  * * *    04:15 UTC  (05:15 / 06:15 CH)  — primärer Morgen-Slot
-15 7  * * *    07:15 UTC  (08:15 / 09:15 CH)  — Backup falls 04:15 ausfällt
-15 17 * * *    17:15 UTC  (18:15 / 19:15 CH)  — Abend-Slot für Folgetag-Karte
-```
+Skip-Check ganz am Anfang von `main()` in `generate.mjs`, **bevor** der erste Open-Meteo-Fetch passiert:
 
-Begründung:
-- 04:15: aktueller Slot, deckt 00Z-Modelllauf ab
-- 07:15: fängt verspäteten Cron + 06Z-Modelllauf ab
-- 17:15: erzeugt nach 12Z-Modelllauf bereits die Karte für den Folgetag (passend zum abendlichen Wetterbericht)
+1. Zieltag bestimmen (`pickTargetTime()` — macht der Code schon).
+2. `app_settings.pressure_map_last_status` lesen.
+3. Wenn der Status mit `OK ·` beginnt **und** das Ziel-Datum darin (`target YYYY-MM-DD`) gleich dem aktuellen Zieltag ist → sofort beenden, Status auf `Skip · bereits aktuell für <target>` setzen, **keine** Open-Meteo-Calls.
+4. Manueller Trigger (`workflow_dispatch`) soll die Skip-Logik überspringen können — via Env-Variable `FORCE_REGENERATE=1` aus dem Workflow.
 
-## Zusätzlich: Sichtbarkeit im Admin-UI
+## Erwartetes Ergebnis
 
-Das Settings-Panel zeigt aktuell `pressure_map_last_run` + `pressure_map_last_status`. Ergänzung: ein **Health-Badge** ("aktuell" / "verspätet > 18 h" / "fehlt") basierend auf Alter des letzten erfolgreichen `OK · external-gen`-Eintrags, damit du auf einen Blick siehst, ob die Automatik läuft.
+- Normalfall: 1 erfolgreicher Lauf/Tag mit ~1–3 Open-Meteo-Calls. Die anderen 2 Slots beenden in <2 Sekunden mit 0 Calls.
+- Fehlerfall: Wenn 04:15 schiefging (kein `OK ·` Status), läuft 07:15 normal durch und versucht es neu — das ist der Backup-Zweck.
+- Open-Meteo-Tagesnutzung für die Druckkarte fällt von potenziell ~9 auf ~3 Calls.
 
 ## Technische Details
 
-**Datei 1: `.github/workflows/pressure-map.yml`**
-- `on.schedule` von 1 auf 3 Einträge erweitern
-- `concurrency.group: pressure-map` bleibt — verhindert parallele Läufe
-- Kein zusätzlicher Quota-Verbrauch dank vorhandener Skip-Logik in `generate.mjs` (vergleicht `targetUtc` mit zuletzt erzeugter Datei)
+**Datei 1: `pressure-map-generator/generate.mjs`** — am Anfang von `main()`, direkt nach `client-init`:
 
-**Datei 2: `src/components/OpenMeteoUsageCard.tsx` oder dediziertes Pressure-Map-Status-Widget in `src/routes/_app.settings.tsx`**
-- Bestehende `getPressureMapStatus`-Server-Function liefert bereits `lastRun` + `lastStatus`
-- Frontend-Logik: parse Alter aus `lastRun`, zeige Badge
-  - < 18 h und Status beginnt mit `OK`: grünes Badge "aktuell"
-  - 18–36 h: gelbes Badge "verzögert"
-  - \> 36 h oder Status enthält `Fehler`/`Pausiert`: rotes Badge "Problem"
+```js
+const targetUtc = pickTargetTime();
+const targetDay = targetUtc.slice(0, 10);
 
-**Keine DB-Migration nötig.** Keine neuen Secrets nötig.
+if (!process.env.FORCE_REGENERATE) {
+  const { data: cur } = await supabase
+    .from("app_settings")
+    .select("id, pressure_map_last_status")
+    .limit(1)
+    .maybeSingle();
+  const status = cur?.pressure_map_last_status ?? "";
+  const match = status.match(/target (\d{4}-\d{2}-\d{2})/);
+  if (status.startsWith("OK ·") && match?.[1] === targetDay) {
+    console.log(`[gen] skip: Karte für ${targetDay} bereits aktuell`);
+    if (cur?.id) {
+      await supabase.from("app_settings").update({
+        pressure_map_last_run: new Date().toISOString(),
+        pressure_map_last_status: `Skip · external-gen · bereits aktuell für ${targetDay}`,
+      }).eq("id", cur.id);
+    }
+    return;
+  }
+}
+```
 
-## Was sich für dich ändert
+**Datei 2: `.github/workflows/pressure-map.yml`** — beim `workflow_dispatch`-Lauf `FORCE_REGENERATE=1` setzen, damit manuelle Trigger immer neu rendern:
 
-- Karte wird täglich 3× geprüft/generiert statt 1× → praktisch keine Ausfälle mehr
-- Abends erscheint bereits die Folgetag-Karte (für deinen 18 Uhr-Bericht)
-- Im Settings siehst du auf einen Blick, ob die Generierung läuft
+```yaml
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  LOVABLE_API_KEY: ${{ secrets.LOVABLE_API_KEY }}
+  FORCE_REGENERATE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+```
 
-## Was nicht geändert wird
-
-- In-App-Worker-Route (`/api/public/hooks/generate-pressure-map`) bleibt als Fallback erhalten
-- Storage-Pfade, Bucket, Datei-Namen unverändert — Frontend braucht keine Anpassung
-- Bestehender pg_cron-Job kann später deaktiviert werden (separater Schritt)
+Keine DB-Migration, keine neuen Secrets, keine Frontend-Änderungen.
