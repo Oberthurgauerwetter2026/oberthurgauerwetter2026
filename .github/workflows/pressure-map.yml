@@ -2,8 +2,11 @@ name: Generate pressure map
 
 on:
   schedule:
-    # 04:15 UTC (= 05:15 CH-Winter / 06:15 CH-Sommer) — 1× täglich vor dem morgendlichen Wetterbericht
-    - cron: "15 4 * * *"
+    # Drei Slots pro Tag — GitHub-Free-Cron ist nicht garantiert pünktlich,
+    # mit mehreren Slots + Skip-Logik im Generator wird die Karte zuverlässig aktuell gehalten.
+    - cron: "15 4 * * *"   # 04:15 UTC (05:15/06:15 CH) — primärer Morgen-Slot, 00Z-Modelllauf
+    - cron: "15 7 * * *"   # 07:15 UTC (08:15/09:15 CH) — Backup, 06Z-Modelllauf
+    - cron: "15 17 * * *"  # 17:15 UTC (18:15/19:15 CH) — Abend-Slot für Folgetag-Karte, 12Z-Modelllauf
   workflow_dispatch:
 
 concurrency:
