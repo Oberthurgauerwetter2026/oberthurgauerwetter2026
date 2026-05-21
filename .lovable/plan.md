@@ -1,75 +1,56 @@
-# Ensemble-Layer: ICON-CH1-EPS & ICON-CH2-EPS als Vertrauens-Schicht
+# Bodendruckkarte: zuverlässigere automatische Generierung
 
-## Ziel
+## Befund
 
-Die deterministischen Modelle (`meteoswiss_icon_ch1`, `meteoswiss_icon_ch2`, AROME, ECMWF, GFS) bleiben unverändert das Rückgrat des Forecasts. Zusätzlich wird ein **Ensemble-Layer** eingezogen, der pro Tag und Parameter (Tmax, Tmin, Niederschlag, Wind) **Streuung und Wahrscheinlichkeiten** liefert. Diese Information wird:
+Der GitHub-Workflow funktioniert **grundsätzlich** — der Lauf von heute 14:31 UTC hat die Karte für 2026-05-22 erfolgreich erzeugt (Status `OK · external-gen · icon_seamless`). Aber der geplante Cron um **04:15 UTC** hat heute morgen nicht generiert (Archiv `europe-pressure-2026-05-21.svg` fehlt mit heutigem Datum).
 
-1. intern zur **Gewichtung von Ausreissern** im bestehenden Ensemble-Mix verwendet,
-2. in der UI als **Vertrauens-Badge** und **Wahrscheinlichkeiten** angezeigt.
+Ursache: GitHub Actions führt Scheduled Workflows auf Free-Plan-Runnern **nicht garantiert pünktlich** aus — bei hoher Last werden Cron-Slots verspätet oder ganz übersprungen, ohne Fehlermeldung. Mit nur **einem** Slot pro Tag ist das fragil.
 
-Es werden keine bestehenden Modelle entfernt.
+## Lösung: Mehrere Cron-Slots + Skip-Logik
 
-## Was der Nutzer sehen wird
+Statt einem Slot um 04:15 UTC fügen wir **drei Slots** ein. Der Generator hat bereits eine Skip-Logik (`already current for target X`), die verhindert, dass ein bereits aktueller Tag erneut hochgeladen wird — d. h. zusätzliche Slots verursachen praktisch keine Open-Meteo-Quota-Kosten.
 
-Pro Forecast-Tag auf der Forecast-Karte ein zusätzliches kleines Element:
+Neue Cron-Zeiten (`.github/workflows/pressure-map.yml`):
 
-- Badge "Sicherheit: hoch / mittel / tief" basierend auf EPS-Spread bei Tmax
-- Optional: "70% Wahrscheinlichkeit > 5mm Niederschlag" statt nur eines Mittelwerts
-- In der Detail-Ansicht: Min/Max-Bandbreite der 21 Member als feine Linie um den Forecast-Wert
+```text
+15 4  * * *    04:15 UTC  (05:15 / 06:15 CH)  — primärer Morgen-Slot
+15 7  * * *    07:15 UTC  (08:15 / 09:15 CH)  — Backup falls 04:15 ausfällt
+15 17 * * *    17:15 UTC  (18:15 / 19:15 CH)  — Abend-Slot für Folgetag-Karte
+```
 
-Keine bestehenden Werte ändern sich optisch dramatisch — der Layer ist additiv.
+Begründung:
+- 04:15: aktueller Slot, deckt 00Z-Modelllauf ab
+- 07:15: fängt verspäteten Cron + 06Z-Modelllauf ab
+- 17:15: erzeugt nach 12Z-Modelllauf bereits die Karte für den Folgetag (passend zum abendlichen Wetterbericht)
 
-## Technische Umsetzung
+## Zusätzlich: Sichtbarkeit im Admin-UI
 
-### 1. Neuer Server-Modul `src/server/ensemble.server.ts`
+Das Settings-Panel zeigt aktuell `pressure_map_last_run` + `pressure_map_last_status`. Ergänzung: ein **Health-Badge** ("aktuell" / "verspätet > 18 h" / "fehlt") basierend auf Alter des letzten erfolgreichen `OK · external-gen`-Eintrags, damit du auf einen Blick siehst, ob die Automatik läuft.
 
-- Holt Daten vom Open-Meteo **Ensemble-Endpoint** `/v1/ensemble` (anderer Endpoint als `/v1/forecast`)
-- Modelle: `icon_seamless` als CH1-EPS + CH2-EPS Kombination (Open-Meteo bündelt MeteoSwiss EPS unter eigenen Keys — beim Implementieren verifizieren, ggf. `icon_d2_eps` als Fallback)
-- Parameter: `temperature_2m_max`, `temperature_2m_min`, `precipitation_sum`, `wind_speed_10m_max`
-- Cache: 6h (analog Druckkarte-Logik), Key pro Standort + Tag
-- Output pro Tag:
-  ```ts
-  {
-    tmax: { mean, p10, p50, p90, spread }
-    tmin: { ... }
-    precip: { mean, p50, p90, prob_gt_1mm, prob_gt_5mm, prob_gt_10mm }
-    wind:  { mean, p90, prob_gt_50kmh }
-    members_count: number
-  }
-  ```
-- Quota-Tracking analog `openmeteo-quota.server.ts` (eigene Source `ensemble`)
+## Technische Details
 
-### 2. Integration in `forecast.functions.ts`
+**Datei 1: `.github/workflows/pressure-map.yml`**
+- `on.schedule` von 1 auf 3 Einträge erweitern
+- `concurrency.group: pressure-map` bleibt — verhindert parallele Läufe
+- Kein zusätzlicher Quota-Verbrauch dank vorhandener Skip-Logik in `generate.mjs` (vergleicht `targetUtc` mit zuletzt erzeugter Datei)
 
-- Neue Funktion `mergeEnsembleConfidence(day, eps)` die das Tagesobjekt um ein Feld `confidence` ergänzt
-- `confidence.level`: "high" wenn Tmax-Spread < 2°C, "medium" < 4°C, sonst "low"
-- `confidence.precip_probabilities`: aus EPS übernommen
-- **Ausreisser-Dämpfung**: Wenn ein deterministisches Modell mehr als 2·sigma vom EPS-Median abweicht, sein Gewicht im bestehenden Mix halbieren (sanft, nicht 0)
+**Datei 2: `src/components/OpenMeteoUsageCard.tsx` oder dediziertes Pressure-Map-Status-Widget in `src/routes/_app.settings.tsx`**
+- Bestehende `getPressureMapStatus`-Server-Function liefert bereits `lastRun` + `lastStatus`
+- Frontend-Logik: parse Alter aus `lastRun`, zeige Badge
+  - < 18 h und Status beginnt mit `OK`: grünes Badge "aktuell"
+  - 18–36 h: gelbes Badge "verzögert"
+  - \> 36 h oder Status enthält `Fehler`/`Pausiert`: rotes Badge "Problem"
 
-### 3. UI-Erweiterung in `WeatherDataView.tsx` / Forecast-Karte
+**Keine DB-Migration nötig.** Keine neuen Secrets nötig.
 
-- Kleines Badge oben rechts pro Tag: farbcodiert (grün/gelb/orange)
-- Tooltip: "Basierend auf 21 ICON-CH2-EPS-Membern, Spread Tmax ±X°C"
-- Niederschlags-Anzeige bekommt zusätzlich "P(>5mm): 70%" als sekundäre Zeile
+## Was sich für dich ändert
 
-### 4. Cron / Abruf-Frequenz
+- Karte wird täglich 3× geprüft/generiert statt 1× → praktisch keine Ausfälle mehr
+- Abends erscheint bereits die Folgetag-Karte (für deinen 18 Uhr-Bericht)
+- Im Settings siehst du auf einen Blick, ob die Generierung läuft
 
-EPS läuft im normalen täglichen Forecast-Zyklus mit — kein separater Cron nötig. Pro Forecast-Generation 1 Ensemble-Call pro Hauptstandort.
+## Was nicht geändert wird
 
-## Kosten
-
-- Open-Meteo zählt Ensemble-Anfragen höher (~Faktor 3–5 wegen Member-Anzahl) als normale Forecast-Calls
-- Erwartet: bei 1× täglicher Forecast-Generation für ~3 Standorte: ~50–100 Call-Units/Tag zusätzlich
-- Bleibt innerhalb des Free-Tier-Budgets (10'000/Tag)
-- Quota-Card im Admin zeigt die neue Source `ensemble` separat
-
-## Out of Scope (bewusst nicht in diesem Plan)
-
-- Komplette Umstellung auf EPS-only (würde Forecast-Schärfe kosten — siehe vorherige Diskussion)
-- Eigene EPS-Visualisierung (Plume-Diagramme etc.) — erstmal nur Badges + Wahrscheinlichkeiten
-- Anwendung auf den KI-Wetterbericht-Text (kann später ergänzt werden, sobald der Layer steht)
-
-## Risiken / zu verifizieren
-
-- **Open-Meteo Ensemble-Modell-Keys für MeteoSwiss EPS**: Beim Implementieren prüfen, ob `meteoswiss_icon_ch1_eps` / `meteoswiss_icon_ch2_eps` als eigene Modelle verfügbar sind oder ob sie nur via `icon_seamless` im Ensemble-Endpoint kommen. Fallback: `icon_d2_eps` (DWD, deckt CH gut ab).
-- **Cache-Konsistenz**: EPS-Cache und Forecast-Cache müssen denselben Lauf-Zeitstempel teilen, sonst gibt's Versatz zwischen Badge und Werten.
+- In-App-Worker-Route (`/api/public/hooks/generate-pressure-map`) bleibt als Fallback erhalten
+- Storage-Pfade, Bucket, Datei-Namen unverändert — Frontend braucht keine Anpassung
+- Bestehender pg_cron-Job kann später deaktiviert werden (separater Schritt)
