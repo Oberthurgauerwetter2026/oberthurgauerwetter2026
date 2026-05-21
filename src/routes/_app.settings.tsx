@@ -695,17 +695,31 @@ function PressureMapCard({ session }: { session: any }) {
         <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
         <CardDescription>
           Tägliche Vorhersagekarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
-          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Cron-Lauf täglich um 06:00 UTC.
+          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Generierung via GitHub Action 3× täglich
+          (04:15 / 07:15 / 17:15 UTC), Skip wenn bereits aktuell.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-3 text-sm">
+          {(() => {
+            if (!status?.lastRun) return <Badge variant="destructive">noch kein Lauf</Badge>;
+            const ageH = (Date.now() - new Date(status.lastRun).getTime()) / 3600_000;
+            const s = status.lastStatus ?? "";
+            const isOk = s.startsWith("OK");
+            const isProblem = /Fehler|Pausiert/i.test(s);
+            let variant: "default" | "secondary" | "destructive" = "secondary";
+            let label = "unbekannt";
+            if (isProblem || ageH > 36) { variant = "destructive"; label = ageH > 36 ? `Problem · ${ageH.toFixed(0)} h alt` : "Problem"; }
+            else if (isOk && ageH < 18) { variant = "default"; label = "aktuell"; }
+            else if (ageH < 36) { variant = "secondary"; label = `verzögert · ${ageH.toFixed(0)} h alt`; }
+            return <Badge variant={variant}>{label}</Badge>;
+          })()}
           {status?.lastRun && (
             <span className="text-muted-foreground">
               Letzter Lauf: {new Date(status.lastRun).toLocaleString("de-CH")}
             </span>
           )}
-          {status?.lastStatus && <Badge variant="secondary">{status.lastStatus}</Badge>}
+          {status?.lastStatus && <Badge variant="outline" className="font-normal">{status.lastStatus}</Badge>}
         </div>
 
         <div className="rounded border bg-muted/30 p-2">
