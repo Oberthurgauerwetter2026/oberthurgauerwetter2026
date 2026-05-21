@@ -478,8 +478,36 @@ async function main() {
     realtime: { transport: ws },
   });
 
-  console.log("[gen] phase=fetch");
   const targetUtc = pickTargetTime();
+  const targetDay = targetUtc.slice(0, 10);
+
+  // Skip-Check: spart Open-Meteo-Calls, wenn die Karte für diesen Zieltag bereits
+  // erfolgreich erzeugt wurde. Manueller Trigger umgeht via FORCE_REGENERATE.
+  if (!process.env.FORCE_REGENERATE) {
+    try {
+      const { data: cur } = await supabase
+        .from("app_settings")
+        .select("id, pressure_map_last_status")
+        .limit(1)
+        .maybeSingle();
+      const status = cur?.pressure_map_last_status ?? "";
+      const match = status.match(/target (\d{4}-\d{2}-\d{2})/);
+      if (status.startsWith("OK ·") && match?.[1] === targetDay) {
+        console.log(`[gen] skip: Karte für ${targetDay} bereits aktuell (status: ${status})`);
+        if (cur?.id) {
+          await supabase.from("app_settings").update({
+            pressure_map_last_run: new Date().toISOString(),
+            pressure_map_last_status: `Skip · external-gen · bereits aktuell für ${targetDay}`,
+          }).eq("id", cur.id);
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn("[gen] skip-check failed, fahre mit Generierung fort:", e?.message ?? e);
+    }
+  }
+
+  console.log("[gen] phase=fetch");
   const attempts = [
     { model: "icon_seamless", target: targetUtc, label: "icon_seamless" },
     { model: "ecmwf_ifs025", target: targetUtc, label: "ecmwf_ifs025" },
