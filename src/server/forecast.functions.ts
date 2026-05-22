@@ -898,6 +898,25 @@ function nextUtcMidnightIso(): string {
   return new Date(capped).toISOString();
 }
 
+// Wenn Open-Meteo "daily" sagt, aber WIR heute kaum Calls verbraucht haben,
+// ist es höchstwahrscheinlich der geteilte Cloudflare-Worker-Egress-IP
+// (andere Tenants füllen das OM-Tageslimit). Dann nicht ganztags pausieren,
+// sondern in 45 min nochmal probieren.
+async function isLikelySharedIpThrottle(): Promise<boolean> {
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const today = new Date().toISOString().slice(0, 10);
+    const { data } = await supabaseAdmin
+      .from("openmeteo_usage")
+      .select("total")
+      .eq("day", today)
+      .maybeSingle();
+    return (data?.total ?? 0) < 500;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, includeHourly: boolean) {
   // Check negative cache first — skip the HTTP call entirely if recently rate-limited.
   const negKey = rateLimitCacheKey(models);
