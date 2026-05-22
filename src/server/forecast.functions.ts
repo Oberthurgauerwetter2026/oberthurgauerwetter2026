@@ -949,13 +949,24 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
     ) {
       try {
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const ttlMs = ttlForRateLimit(e.code);
-        const expiresAt =
-          ttlMs < 0 ? nextUtcMidnightIso() : new Date(Date.now() + ttlMs).toISOString();
-        console.warn(`[open-meteo] negative-cache ${e.code} for ${models} → expires ${expiresAt}`);
+        let effectiveCode = e.code;
+        let expiresAt: string;
+        if (e.code === "RATE_LIMIT_DAILY" && (await isLikelySharedIpThrottle())) {
+          // Shared-IP-Throttle: nicht ganztags pausieren, nur 45 min.
+          effectiveCode = "RATE_LIMIT_HOURLY";
+          expiresAt = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+          console.warn(
+            `[open-meteo] daily 429 mit niedriger Eigen-Nutzung → shared-IP throttle, kurzer Marker bis ${expiresAt} (${models})`,
+          );
+        } else {
+          const ttlMs = ttlForRateLimit(e.code);
+          expiresAt =
+            ttlMs < 0 ? nextUtcMidnightIso() : new Date(Date.now() + ttlMs).toISOString();
+        }
+        console.warn(`[open-meteo] negative-cache ${effectiveCode} for ${models} → expires ${expiresAt}`);
         await supabaseAdmin.from("weather_cache").upsert({
           cache_key: rateLimitCacheKey(models),
-          payload: { rate_limited: true, models, code: e.code },
+          payload: { rate_limited: true, models, code: effectiveCode, original_code: e.code },
           fetched_at: new Date().toISOString(),
           expires_at: expiresAt,
         });
