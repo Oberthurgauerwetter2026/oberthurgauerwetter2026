@@ -990,33 +990,50 @@ async function fetchWeather(
   midModels = normalizeModels(midModels);
   longModels = normalizeModels(longModels);
   // Avoid rate-limit bursts: query the model tiers sequentially and tolerate one tier failing.
-  // Short-tier (Tag 0-1): 15 min Cache — ICON-CH1/CH2 aktualisieren stündlich, AROME alle 3 h,
-  // also genügt 15 min Frische, spart aber ~60 % Calls bei mehrfachen Aufrufen pro Stunde.
-  // Mid/long werden bis Mitternacht gecacht.
-  const shortData = await getOrSetCache(
+  // Stale-Fallback: bei temporären Drosselungen darf eine abgelaufene Cache-Version
+  // verwendet werden, damit kein MOSMIX-only-Bericht gespeichert wird.
+  //   - Short-Term: max. 3h stale (zeitnah, sonst sind die Stundenwerte irreführend).
+  //   - Mid-Term:   max. 18h stale.
+  //   - Long-Term:  max. 36h stale (Tag 3–10 driften wenig).
+  const staleAges: string[] = [];
+  const shortRes = await getOrSetCacheWithStale(
     `om:short:${lat.toFixed(4)},${lon.toFixed(4)}:${shortModels}`,
     () => fetchOpenMeteoOptional(lat, lon, shortModels, true),
     15 * 60 * 1000,
+    3 * 60 * 60 * 1000,
   );
+  const shortData = shortRes.value;
+  if (shortRes.stale) staleAges.push(`short:${Math.round((shortRes.staleAgeMs ?? 0) / 60000)}m`);
   await wait(500);
-  const midData = await getOrSetCache(
+  const midRes = await getOrSetCacheWithStale(
     `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
     () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+    undefined,
+    18 * 60 * 60 * 1000,
   );
+  const midData = midRes.value;
+  if (midRes.stale) staleAges.push(`mid:${Math.round((midRes.staleAgeMs ?? 0) / 60000)}m`);
   await wait(500);
-  const longData = await getOrSetCache(
+  const longRes = await getOrSetCacheWithStale(
     `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
     () => fetchOpenMeteoOptional(lat, lon, longModels, false),
+    undefined,
+    36 * 60 * 60 * 1000,
   );
+  const longData = longRes.value;
+  if (longRes.stale) staleAges.push(`long:${Math.round((longRes.staleAgeMs ?? 0) / 60000)}m`);
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
   if (!daily) {
-    // All Open-Meteo tiers failed. Throw a typed error so the generation path
-    // can decide whether to fall back to MOSMIX-only mode.
+    // All Open-Meteo tiers failed (auch kein Stale-Cache verfügbar). Typed error
+    // so the generation path can decide between MOSMIX-only oder Retry-Aufforderung.
     const err = new Error(
-      "Open-Meteo liefert aktuell keine Wetterdaten (vermutlich Tageslimit erreicht).",
+      "Open-Meteo liefert aktuell keine Wetterdaten und es ist kein Cache verfügbar.",
     ) as Error & { code?: string };
     err.code = "WEATHER_UNAVAILABLE";
     throw err;
+  }
+  if (staleAges.length) {
+    console.warn(`[forecast] using stale Open-Meteo cache: ${staleAges.join(", ")}`);
   }
   // Cloudcover-Synthese: Open-Meteo liefert für CH1/CH2/AROME bei Tag 1+ häufig
   // `cloudcover_<model>` als null, obwohl die Layer-Daten (low/mid/high) vorhanden
@@ -1036,6 +1053,7 @@ async function fetchWeather(
     byModel: { short: shortData, mid: midData, long: longData },
     modelLists: { short: shortModels, mid: midModels, long: longModels },
     cloudcover_synthesized: Array.from(synthesized),
+    stale_cache_used: staleAges.length > 0 ? staleAges : null,
   };
 }
 
