@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { getOrSetCache } from "./weather-cache.server";
+import { getOrSetCache, getOrSetCacheWithStale } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
 import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
@@ -10,7 +10,7 @@ import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type Nowca
 import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
 import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
 import { fetchEnsembleSummary, applyEnsembleConfidenceToDay, type EnsembleDay } from "./ensemble.server";
-import { fetchOpenMeteo as fetchOMTracked } from "./openmeteo-quota.server";
+import { fetchOpenMeteo as fetchOMTracked, getGlobalThrottle } from "./openmeteo-quota.server";
 import { generateTextNominal as runNominal } from "./nominal-style.server";
 import { fetchSynopticTrend, buildTrendUserPrompt } from "./synoptic-trend.server";
 
