@@ -1,9 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { OPEN_METEO_DAILY_LIMIT } from "@/server/openmeteo-quota.server";
+import { OPEN_METEO_DAILY_LIMIT, getGlobalThrottle } from "@/server/openmeteo-quota.server";
 
 const RATELIMIT_KEY_PREFIX = "om:ratelimit:";
+const GLOBAL_THROTTLE_KEY = "om:global-throttle";
 
 function utcDay(): string {
   return new Date().toISOString().slice(0, 10);
