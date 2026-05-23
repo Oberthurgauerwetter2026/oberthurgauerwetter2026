@@ -1135,6 +1135,10 @@ function buildMosmixOnlyWeather(
 // Tries Open-Meteo first; on total failure falls back to MOSMIX-only mode (Tag 0+1).
 // Throws a user-facing error only when both sources are empty. Returns the MOSMIX
 // map alongside `weather` so callers don't fetch it twice.
+//
+// Wichtig: Bei einem TEMPORÄREN Shared-IP-Throttle (≠ echtem Tageslimit) wird KEIN
+// dauerhafter MOSMIX-only-Bericht erzeugt, sondern ein typisierter Fehler geworfen
+// (`OPEN_METEO_TEMPORARY_THROTTLE`), damit der Aufrufer den Run zurückstellen kann.
 async function fetchWeatherWithFallback(
   lat: number, lon: number,
   shortModels: string | undefined,
@@ -1159,7 +1163,29 @@ async function fetchWeatherWithFallback(
     return { weather, mosmixByDate, degraded: false };
   } catch (e: any) {
     if (e?.code !== "WEATHER_UNAVAILABLE") throw e;
-    // Open-Meteo komplett ausgefallen — MOSMIX-only Modus versuchen.
+
+    // Unterscheidung: temporärer Shared-IP-Throttle vs. echtes Tageslimit.
+    const throttle = await getGlobalThrottle();
+    const isTemporary = throttle.active && (
+      throttle.kind === "shared_ip_daily" ||
+      throttle.kind === "hourly" ||
+      throttle.kind === "minutely"
+    );
+
+    if (isTemporary) {
+      const until = throttle.until ? new Date(throttle.until) : null;
+      const mins = until ? Math.max(1, Math.round((until.getTime() - Date.now()) / 60000)) : 45;
+      const err = new Error(
+        `Open-Meteo ist gerade temporär gedrosselt (geteiltes IP-Limit). ` +
+        `Bitte in ca. ${mins} Minuten erneut generieren — dann sind wieder vollständige ` +
+        `Modelldaten verfügbar. Es wurde absichtlich kein MOSMIX-only-Bericht gespeichert.`,
+      ) as Error & { code?: string; retryAfterMinutes?: number };
+      err.code = "OPEN_METEO_TEMPORARY_THROTTLE";
+      err.retryAfterMinutes = mins;
+      throw err;
+    }
+
+    // Echtes Tageslimit (oder Open-Meteo dauerhaft down) → MOSMIX-only Modus versuchen.
     const mosmixByDate = await mosmixPromise;
     const fallback = buildMosmixOnlyWeather(mosmixByDate);
     if (!fallback) {
@@ -1167,7 +1193,7 @@ async function fetchWeatherWithFallback(
         "Open-Meteo Tageslimit erreicht und DWD-MOSMIX liefert ebenfalls keine Daten. Bitte morgen erneut versuchen.",
       );
     }
-    console.warn("[forecast] degraded mode: MOSMIX-only (Open-Meteo unavailable)");
+    console.warn("[forecast] degraded mode: MOSMIX-only (Open-Meteo unavailable, kind=" + (throttle.kind ?? "unknown") + ")");
     return { weather: fallback, mosmixByDate, degraded: true };
   }
 }
