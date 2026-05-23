@@ -67,9 +67,16 @@ export function OpenMeteoUsageCard() {
   }
 
   const pct = Math.min(100, Math.round((data.total / data.limit) * 100));
+  const throttle: any = (data as any).globalThrottle ?? { active: false };
   let statusBadge: { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: typeof CheckCircle2 };
-  if (data.isRateLimited) {
-    statusBadge = { label: "Pausiert bis 00:00 UTC", variant: "destructive", icon: AlertTriangle };
+  if (throttle.active && throttle.kind === "shared_ip_daily") {
+    statusBadge = { label: "Temporär gedrosselt (Shared-IP)", variant: "secondary", icon: Clock };
+  } else if (throttle.active && throttle.kind === "real_daily") {
+    statusBadge = { label: "Tageslimit erreicht", variant: "destructive", icon: AlertTriangle };
+  } else if (throttle.active) {
+    statusBadge = { label: `Throttle: ${throttle.kind}`, variant: "secondary", icon: Clock };
+  } else if (data.isRateLimited) {
+    statusBadge = { label: "Rate-Limit aktiv", variant: "secondary", icon: Clock };
   } else if (pct >= 90) {
     statusBadge = { label: "Limit fast erreicht", variant: "destructive", icon: AlertTriangle };
   } else if (pct >= 70) {
@@ -141,14 +148,39 @@ export function OpenMeteoUsageCard() {
           </div>
         )}
 
-        {(data.isRateLimited || (data.activeMarkerCount ?? 0) > 0) && (
+        {throttle.active && (
+          <div className="rounded-md border border-dashed p-2 text-xs space-y-0.5">
+            <div className="font-medium text-foreground">
+              {throttle.kind === "shared_ip_daily"
+                ? "Geteilter IP-Throttle aktiv"
+                : throttle.kind === "real_daily"
+                ? "Eigenes Tageslimit erreicht"
+                : `Throttle aktiv (${throttle.kind})`}
+            </div>
+            <div className="text-muted-foreground">
+              {throttle.kind === "shared_ip_daily"
+                ? "Open-Meteo Public-Endpoint von anderen Tenants zugespammt. Forecast nutzt während dieser Zeit den letzten gültigen Cache und wird nicht degradiert gespeichert."
+                : throttle.kind === "real_daily"
+                ? "Reset um 00:00 UTC."
+                : "Wird in wenigen Minuten automatisch gelöst."}
+              {throttle.until && (
+                <> Bis: <span className="tabular-nums">{formatTime(throttle.until)}</span></>
+              )}
+              {throttle.source && (
+                <> · Auslöser: <span className="font-medium">{SOURCE_LABELS[throttle.source] ?? throttle.source}</span></>
+              )}
+            </div>
+          </div>
+        )}
+
+        {(throttle.active || data.isRateLimited || (data.activeMarkerCount ?? 0) > 0) && (
           <div className="flex items-center justify-between gap-2 pt-2 border-t">
             <span className="text-xs text-muted-foreground">
-              {data.activeMarkerCount ?? 0} aktive Rate-Limit-Marker
+              {data.activeMarkerCount ?? 0} aktive Marker
             </span>
             <Button size="sm" variant="outline" onClick={handleClearRateLimit} disabled={clearing}>
               {clearing ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-2 h-3 w-3" />}
-              Rate-Limit zurücksetzen
+              Throttle zurücksetzen
             </Button>
           </div>
         )}

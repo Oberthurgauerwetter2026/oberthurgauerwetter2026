@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { getOrSetCache } from "./weather-cache.server";
+import { getOrSetCache, getOrSetCacheWithStale } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
 import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
@@ -10,7 +10,7 @@ import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type Nowca
 import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
 import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
 import { fetchEnsembleSummary, applyEnsembleConfidenceToDay, type EnsembleDay } from "./ensemble.server";
-import { fetchOpenMeteo as fetchOMTracked } from "./openmeteo-quota.server";
+import { fetchOpenMeteo as fetchOMTracked, getGlobalThrottle } from "./openmeteo-quota.server";
 import { generateTextNominal as runNominal } from "./nominal-style.server";
 import { fetchSynopticTrend, buildTrendUserPrompt } from "./synoptic-trend.server";
 
@@ -990,33 +990,50 @@ async function fetchWeather(
   midModels = normalizeModels(midModels);
   longModels = normalizeModels(longModels);
   // Avoid rate-limit bursts: query the model tiers sequentially and tolerate one tier failing.
-  // Short-tier (Tag 0-1): 15 min Cache — ICON-CH1/CH2 aktualisieren stündlich, AROME alle 3 h,
-  // also genügt 15 min Frische, spart aber ~60 % Calls bei mehrfachen Aufrufen pro Stunde.
-  // Mid/long werden bis Mitternacht gecacht.
-  const shortData = await getOrSetCache(
+  // Stale-Fallback: bei temporären Drosselungen darf eine abgelaufene Cache-Version
+  // verwendet werden, damit kein MOSMIX-only-Bericht gespeichert wird.
+  //   - Short-Term: max. 3h stale (zeitnah, sonst sind die Stundenwerte irreführend).
+  //   - Mid-Term:   max. 18h stale.
+  //   - Long-Term:  max. 36h stale (Tag 3–10 driften wenig).
+  const staleAges: string[] = [];
+  const shortRes = await getOrSetCacheWithStale(
     `om:short:${lat.toFixed(4)},${lon.toFixed(4)}:${shortModels}`,
     () => fetchOpenMeteoOptional(lat, lon, shortModels, true),
     15 * 60 * 1000,
+    3 * 60 * 60 * 1000,
   );
+  const shortData = shortRes.value;
+  if (shortRes.stale) staleAges.push(`short:${Math.round((shortRes.staleAgeMs ?? 0) / 60000)}m`);
   await wait(500);
-  const midData = await getOrSetCache(
+  const midRes = await getOrSetCacheWithStale(
     `om:mid:${lat.toFixed(4)},${lon.toFixed(4)}:${midModels}`,
     () => fetchOpenMeteoOptional(lat, lon, midModels, false),
+    undefined,
+    18 * 60 * 60 * 1000,
   );
+  const midData = midRes.value;
+  if (midRes.stale) staleAges.push(`mid:${Math.round((midRes.staleAgeMs ?? 0) / 60000)}m`);
   await wait(500);
-  const longData = await getOrSetCache(
+  const longRes = await getOrSetCacheWithStale(
     `om:long:${lat.toFixed(4)},${lon.toFixed(4)}:${longModels}`,
     () => fetchOpenMeteoOptional(lat, lon, longModels, false),
+    undefined,
+    36 * 60 * 60 * 1000,
   );
+  const longData = longRes.value;
+  if (longRes.stale) staleAges.push(`long:${Math.round((longRes.staleAgeMs ?? 0) / 60000)}m`);
   const daily = midData?.daily ?? longData?.daily ?? shortData?.daily;
   if (!daily) {
-    // All Open-Meteo tiers failed. Throw a typed error so the generation path
-    // can decide whether to fall back to MOSMIX-only mode.
+    // All Open-Meteo tiers failed (auch kein Stale-Cache verfügbar). Typed error
+    // so the generation path can decide between MOSMIX-only oder Retry-Aufforderung.
     const err = new Error(
-      "Open-Meteo liefert aktuell keine Wetterdaten (vermutlich Tageslimit erreicht).",
+      "Open-Meteo liefert aktuell keine Wetterdaten und es ist kein Cache verfügbar.",
     ) as Error & { code?: string };
     err.code = "WEATHER_UNAVAILABLE";
     throw err;
+  }
+  if (staleAges.length) {
+    console.warn(`[forecast] using stale Open-Meteo cache: ${staleAges.join(", ")}`);
   }
   // Cloudcover-Synthese: Open-Meteo liefert für CH1/CH2/AROME bei Tag 1+ häufig
   // `cloudcover_<model>` als null, obwohl die Layer-Daten (low/mid/high) vorhanden
@@ -1036,6 +1053,7 @@ async function fetchWeather(
     byModel: { short: shortData, mid: midData, long: longData },
     modelLists: { short: shortModels, mid: midModels, long: longModels },
     cloudcover_synthesized: Array.from(synthesized),
+    stale_cache_used: staleAges.length > 0 ? staleAges : null,
   };
 }
 
@@ -1117,6 +1135,10 @@ function buildMosmixOnlyWeather(
 // Tries Open-Meteo first; on total failure falls back to MOSMIX-only mode (Tag 0+1).
 // Throws a user-facing error only when both sources are empty. Returns the MOSMIX
 // map alongside `weather` so callers don't fetch it twice.
+//
+// Wichtig: Bei einem TEMPORÄREN Shared-IP-Throttle (≠ echtem Tageslimit) wird KEIN
+// dauerhafter MOSMIX-only-Bericht erzeugt, sondern ein typisierter Fehler geworfen
+// (`OPEN_METEO_TEMPORARY_THROTTLE`), damit der Aufrufer den Run zurückstellen kann.
 async function fetchWeatherWithFallback(
   lat: number, lon: number,
   shortModels: string | undefined,
@@ -1141,7 +1163,29 @@ async function fetchWeatherWithFallback(
     return { weather, mosmixByDate, degraded: false };
   } catch (e: any) {
     if (e?.code !== "WEATHER_UNAVAILABLE") throw e;
-    // Open-Meteo komplett ausgefallen — MOSMIX-only Modus versuchen.
+
+    // Unterscheidung: temporärer Shared-IP-Throttle vs. echtes Tageslimit.
+    const throttle = await getGlobalThrottle();
+    const isTemporary = throttle.active && (
+      throttle.kind === "shared_ip_daily" ||
+      throttle.kind === "hourly" ||
+      throttle.kind === "minutely"
+    );
+
+    if (isTemporary) {
+      const until = throttle.until ? new Date(throttle.until) : null;
+      const mins = until ? Math.max(1, Math.round((until.getTime() - Date.now()) / 60000)) : 45;
+      const err = new Error(
+        `Open-Meteo ist gerade temporär gedrosselt (geteiltes IP-Limit). ` +
+        `Bitte in ca. ${mins} Minuten erneut generieren — dann sind wieder vollständige ` +
+        `Modelldaten verfügbar. Es wurde absichtlich kein MOSMIX-only-Bericht gespeichert.`,
+      ) as Error & { code?: string; retryAfterMinutes?: number };
+      err.code = "OPEN_METEO_TEMPORARY_THROTTLE";
+      err.retryAfterMinutes = mins;
+      throw err;
+    }
+
+    // Echtes Tageslimit (oder Open-Meteo dauerhaft down) → MOSMIX-only Modus versuchen.
     const mosmixByDate = await mosmixPromise;
     const fallback = buildMosmixOnlyWeather(mosmixByDate);
     if (!fallback) {
@@ -1149,7 +1193,7 @@ async function fetchWeatherWithFallback(
         "Open-Meteo Tageslimit erreicht und DWD-MOSMIX liefert ebenfalls keine Daten. Bitte morgen erneut versuchen.",
       );
     }
-    console.warn("[forecast] degraded mode: MOSMIX-only (Open-Meteo unavailable)");
+    console.warn("[forecast] degraded mode: MOSMIX-only (Open-Meteo unavailable, kind=" + (throttle.kind ?? "unknown") + ")");
     return { weather: fallback, mosmixByDate, degraded: true };
   }
 }

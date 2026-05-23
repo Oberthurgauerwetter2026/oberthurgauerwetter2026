@@ -1,9 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { OPEN_METEO_DAILY_LIMIT } from "@/server/openmeteo-quota.server";
+import { OPEN_METEO_DAILY_LIMIT, getGlobalThrottle } from "@/server/openmeteo-quota.server";
 
 const RATELIMIT_KEY_PREFIX = "om:ratelimit:";
+const GLOBAL_THROTTLE_KEY = "om:global-throttle";
 
 function utcDay(): string {
   return new Date().toISOString().slice(0, 10);
@@ -75,6 +76,7 @@ export const getOpenMeteoUsage = createServerFn({ method: "GET" })
       resetAtIso: nextUtcMidnightIso(),
       cacheEntries,
       cacheByPrefix,
+      globalThrottle: await getGlobalThrottle(),
     };
   });
 
@@ -84,11 +86,18 @@ export const clearOpenMeteoRateLimits = createServerFn({ method: "POST" })
     const { supabase, userId } = context;
     await ensureAdmin(supabase, userId);
 
-    const { data, error } = await supabaseAdmin
+    // Sowohl per-Modell-Marker als auch globalen Throttle-Marker entfernen.
+    const { data: perModel, error: e1 } = await supabaseAdmin
       .from("weather_cache")
       .delete()
       .like("cache_key", `${RATELIMIT_KEY_PREFIX}%`)
       .select("cache_key");
-    if (error) throw new Error(error.message);
-    return { cleared: data?.length ?? 0 };
+    if (e1) throw new Error(e1.message);
+    const { data: global, error: e2 } = await supabaseAdmin
+      .from("weather_cache")
+      .delete()
+      .eq("cache_key", GLOBAL_THROTTLE_KEY)
+      .select("cache_key");
+    if (e2) throw new Error(e2.message);
+    return { cleared: (perModel?.length ?? 0) + (global?.length ?? 0) };
   });

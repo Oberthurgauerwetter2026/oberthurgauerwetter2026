@@ -66,3 +66,75 @@ export async function getOrSetCache<T>(
   }
   return payload;
 }
+
+/**
+ * Wie getOrSetCache, aber wenn der Fetcher null/undefined liefert ODER wirft,
+ * darf als Fallback ein abgelaufener Eintrag bis max. `maxStaleMs` Alter
+ * zurückgegeben werden. Nützlich für temporäre Open-Meteo-Drosselungen.
+ */
+export async function getOrSetCacheWithStale<T>(
+  cacheKey: string,
+  fetcher: () => Promise<T | null>,
+  ttlMs: number | undefined,
+  maxStaleMs: number,
+): Promise<{ value: T | null; stale: boolean; staleAgeMs?: number }> {
+  const nowIso = new Date().toISOString();
+  let existing: { payload: any; expires_at: string | null; fetched_at: string | null } | null = null;
+  try {
+    const { data } = await supabaseAdmin
+      .from("weather_cache")
+      .select("payload, expires_at, fetched_at")
+      .eq("cache_key", cacheKey)
+      .maybeSingle();
+    existing = (data as any) ?? null;
+    if (existing?.expires_at && existing.expires_at > nowIso) {
+      console.log(`[weather-cache] HIT ${cacheKey}`);
+      return { value: existing.payload as T, stale: false };
+    }
+  } catch (e) {
+    console.warn(`[weather-cache] read failed for ${cacheKey}`, e);
+  }
+
+  let fresh: T | null = null;
+  let fetcherError: unknown = null;
+  try {
+    fresh = await fetcher();
+  } catch (e) {
+    fetcherError = e;
+    console.warn(`[weather-cache] fetcher failed for ${cacheKey}`, e);
+  }
+
+  if (fresh != null) {
+    const expiresAt = ttlMs != null
+      ? new Date(Date.now() + ttlMs).toISOString()
+      : nextMidnightZurich();
+    try {
+      await supabaseAdmin.from("weather_cache").upsert({
+        cache_key: cacheKey,
+        payload: fresh as any,
+        fetched_at: nowIso,
+        expires_at: expiresAt,
+      });
+    } catch (e) {
+      console.warn(`[weather-cache] write failed for ${cacheKey}`, e);
+    }
+    return { value: fresh, stale: false };
+  }
+
+  // Stale-Fallback
+  if (existing?.fetched_at) {
+    const age = Date.now() - new Date(existing.fetched_at).getTime();
+    if (age <= maxStaleMs && existing.payload != null) {
+      console.warn(
+        `[weather-cache] STALE ${cacheKey} (age=${Math.round(age / 60000)}min, maxStale=${Math.round(maxStaleMs / 60000)}min)`,
+      );
+      return { value: existing.payload as T, stale: true, staleAgeMs: age };
+    }
+  }
+
+  if (fetcherError) {
+    // Fetcher hat geworfen UND kein Stale-Fallback verfügbar → Fehler weitergeben.
+    throw fetcherError;
+  }
+  return { value: null, stale: false };
+}
