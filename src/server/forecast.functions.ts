@@ -3828,10 +3828,11 @@ export const inviteUser = createServerFn({ method: "POST" })
     const { supabase, userId } = context;
     await ensureAdmin(supabase, userId);
 
-    const tempPassword = crypto.randomUUID().replace(/-/g, "") + "Aa1!";
+    // Create the user with a throw-away random password we never return.
+    const throwaway = crypto.randomUUID().replace(/-/g, "") + "Aa1!";
     const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
       email: data.email,
-      password: tempPassword,
+      password: throwaway,
       email_confirm: true,
       user_metadata: { display_name: data.display_name },
     });
@@ -3843,14 +3844,17 @@ export const inviteUser = createServerFn({ method: "POST" })
       .insert({ user_id: createdUserId, role: data.role });
     if (roleError) throw new Error(roleError.message);
 
-    await supabaseAdmin.auth.admin
-      .generateLink({
-        type: "recovery",
-        email: data.email,
-      })
-      .catch(() => {});
+    // Generate a one-time recovery link the admin shares with the new user.
+    // The plaintext password is never returned.
+    const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin
+      .generateLink({ type: "recovery", email: data.email });
+    if (linkError) {
+      console.warn("[inviteUser] recovery link generation failed:", linkError.message);
+    }
+    const recoveryLink =
+      (linkData as any)?.properties?.action_link ?? null;
 
-    return { ok: true, userId: createdUserId, tempPassword };
+    return { ok: true, userId: createdUserId, recoveryLink };
   });
 
 export const setUserRole = createServerFn({ method: "POST" })

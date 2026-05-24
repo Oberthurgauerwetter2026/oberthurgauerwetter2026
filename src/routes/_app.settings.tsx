@@ -63,7 +63,7 @@ function SettingsPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteForm, setInviteForm] = useState({ email: "", display_name: "", role: "editor" as "admin" | "editor" });
   const [inviting, setInviting] = useState(false);
-  const [tempPwd, setTempPwd] = useState<string | null>(null);
+  const [recoveryLink, setRecoveryLink] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -145,7 +145,7 @@ function SettingsPage() {
         data: inviteForm,
         headers: { Authorization: `Bearer ${session.access_token}` },
       } as any);
-      setTempPwd(res.tempPassword);
+      setRecoveryLink(res.recoveryLink ?? null);
       toast.success("Benutzer angelegt");
       setInviteForm({ email: "", display_name: "", role: "editor" });
       load();
@@ -575,20 +575,20 @@ function SettingsPage() {
               <CardTitle className="text-base">Benutzer</CardTitle>
               <CardDescription>Verwalte Redakteure und Admins</CardDescription>
             </div>
-            <Dialog open={inviteOpen} onOpenChange={(o) => { setInviteOpen(o); if (!o) setTempPwd(null); }}>
+            <Dialog open={inviteOpen} onOpenChange={(o) => { setInviteOpen(o); if (!o) setRecoveryLink(null); }}>
               <DialogTrigger asChild>
                 <Button size="sm"><UserPlus className="mr-1 h-4 w-4" /> Neuer Benutzer</Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Benutzer hinzufügen</DialogTitle>
-                  <DialogDescription>Der Benutzer erhält ein temporäres Passwort, das er beim ersten Login ändern kann.</DialogDescription>
+                  <DialogDescription>Der Benutzer erhält einen einmaligen Recovery-Link, mit dem er sein Passwort setzen kann.</DialogDescription>
                 </DialogHeader>
-                {tempPwd ? (
+                {recoveryLink ? (
                   <div className="space-y-3">
-                    <p className="text-sm">Benutzer angelegt. Temporäres Passwort (jetzt kopieren, wird nicht erneut angezeigt):</p>
-                    <code className="block rounded bg-muted p-2 text-xs break-all">{tempPwd}</code>
-                    <Button onClick={() => { setTempPwd(null); setInviteOpen(false); }}>OK</Button>
+                    <p className="text-sm">Benutzer angelegt. Einmaligen Recovery-Link an den Benutzer weitergeben (jetzt kopieren, wird nicht erneut angezeigt):</p>
+                    <code className="block rounded bg-muted p-2 text-xs break-all">{recoveryLink}</code>
+                    <Button onClick={() => { setRecoveryLink(null); setInviteOpen(false); }}>OK</Button>
                   </div>
                 ) : (
                   <div className="space-y-3">
