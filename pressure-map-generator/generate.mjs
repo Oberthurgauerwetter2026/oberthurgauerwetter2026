@@ -283,12 +283,12 @@ const T850_STOPS = [
 const t850Color = (v) => interpColor(v, T850_STOPS);
 function precipStyle(mm) {
   if (!Number.isFinite(mm) || mm < 0.5) return null;
-  if (mm < 1) return { fill: "#bfdbfe", opacity: 0.45 };
-  if (mm < 2) return { fill: "#93c5fd", opacity: 0.55 };
-  if (mm < 5) return { fill: "#60a5fa", opacity: 0.65 };
-  if (mm < 10) return { fill: "#3b82f6", opacity: 0.7 };
-  if (mm < 20) return { fill: "#1d4ed8", opacity: 0.78 };
-  return { fill: "#4c1d95", opacity: 0.85 };
+  if (mm < 1) return { fill: "#a7f3a0", opacity: 0.5 };
+  if (mm < 2) return { fill: "#4ade80", opacity: 0.6 };
+  if (mm < 5) return { fill: "#facc15", opacity: 0.7 };
+  if (mm < 10) return { fill: "#fb923c", opacity: 0.78 };
+  if (mm < 20) return { fill: "#ef4444", opacity: 0.82 };
+  return { fill: "#a21caf", opacity: 0.88 };
 }
 
 function buildSvg(grids, targetUtcIso, extremaOverride) {
