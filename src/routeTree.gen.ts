@@ -22,6 +22,7 @@ import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppForecastForecastIdRouteImport } from './routes/_app.forecast.$forecastId'
 import { Route as ApiPublicMapsEuropePressureLatestDotsvgRouteImport } from './routes/api/public/maps/europe-pressure-latest[.]svg'
 import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
+import { Route as ApiPublicDebugR2CacheRouteImport } from './routes/api/public/debug/r2-cache'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -89,6 +90,11 @@ const ApiPublicHooksGeneratePressureMapRoute =
     path: '/api/public/hooks/generate-pressure-map',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicDebugR2CacheRoute = ApiPublicDebugR2CacheRouteImport.update({
+  id: '/api/public/debug/r2-cache',
+  path: '/api/public/debug/r2-cache',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
+  '/api/public/debug/r2-cache': typeof ApiPublicDebugR2CacheRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
@@ -115,6 +122,7 @@ export interface FileRoutesByTo {
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
+  '/api/public/debug/r2-cache': typeof ApiPublicDebugR2CacheRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
@@ -131,6 +139,7 @@ export interface FileRoutesById {
   '/_app/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
   '/_app/forecast/$forecastId': typeof AppForecastForecastIdRoute
+  '/api/public/debug/r2-cache': typeof ApiPublicDebugR2CacheRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
@@ -147,6 +156,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/hooks/daily-forecast'
     | '/forecast/$forecastId'
+    | '/api/public/debug/r2-cache'
     | '/api/public/hooks/generate-pressure-map'
     | '/api/public/maps/europe-pressure-latest.svg'
   fileRoutesByTo: FileRoutesByTo
@@ -161,6 +171,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/hooks/daily-forecast'
     | '/forecast/$forecastId'
+    | '/api/public/debug/r2-cache'
     | '/api/public/hooks/generate-pressure-map'
     | '/api/public/maps/europe-pressure-latest.svg'
   id:
@@ -176,6 +187,7 @@ export interface FileRouteTypes {
     | '/_app/settings'
     | '/hooks/daily-forecast'
     | '/_app/forecast/$forecastId'
+    | '/api/public/debug/r2-cache'
     | '/api/public/hooks/generate-pressure-map'
     | '/api/public/maps/europe-pressure-latest.svg'
   fileRoutesById: FileRoutesById
@@ -188,6 +200,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
   HooksDailyForecastRoute: typeof HooksDailyForecastRoute
+  ApiPublicDebugR2CacheRoute: typeof ApiPublicDebugR2CacheRoute
   ApiPublicHooksGeneratePressureMapRoute: typeof ApiPublicHooksGeneratePressureMapRoute
   ApiPublicMapsEuropePressureLatestDotsvgRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
@@ -285,6 +298,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksGeneratePressureMapRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/debug/r2-cache': {
+      id: '/api/public/debug/r2-cache'
+      path: '/api/public/debug/r2-cache'
+      fullPath: '/api/public/debug/r2-cache'
+      preLoaderRoute: typeof ApiPublicDebugR2CacheRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -312,6 +332,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,
   HooksDailyForecastRoute: HooksDailyForecastRoute,
+  ApiPublicDebugR2CacheRoute: ApiPublicDebugR2CacheRoute,
   ApiPublicHooksGeneratePressureMapRoute:
     ApiPublicHooksGeneratePressureMapRoute,
   ApiPublicMapsEuropePressureLatestDotsvgRoute:

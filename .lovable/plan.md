@@ -1,64 +1,41 @@
-## Ziel
+# Diagnose: R2-Cache läuft nicht
 
-Wenn der Open-Meteo-Endpoint geblockt ist (shared_ip_daily / hourly / minutely / network), sollen Forecast, Nowcast und Bias-Korrektur **aus dem R2-Cache** bedient werden — statt eines synthetischen 429, das die UI in den "letzter gültiger Cache"-Pfad zwingt.
+Auf dem Screenshot fällt auf, dass das Repo **`amriswil-wetter`** leer aussieht (keine Sprache, kein Commit-Graph). Der Workflow `openmeteo-ingest.yml` und das Script liegen aber im **Lovable-Repo `oberthurgauerwetter2026`** — also dort muss er auch laufen. Möglich sind drei Ursachen, die ich der Reihe nach prüfe und löse:
 
-Der Reader `loadOpenMeteoCache()` existiert bereits, R2 ist befüllt, `R2_PUBLIC_URL` ist als Secret gesetzt.
+## Mögliche Ursachen
 
-## Vorgehen
+1. **Workflow wurde noch nie ausgeführt** — Cron `*/5 * * * *` startet bei GitHub erst nach dem ersten manuellen Run zuverlässig. Ergebnis: R2 ist leer, Worker hat nichts zum Lesen.
+2. **R2-Secret-Mismatch** — `R2_BUCKET` zeigt vermutlich auf `amriswil-wetter`, aber der Public-Access-Hostname (`R2_PUBLIC_URL`) gehört zu einem anderen Bucket oder hat noch keinen `pub-…r2.dev`-Domain bekommen.
+3. **Pfad/Key-Mismatch** — Script schreibt `openmeteo/forecast.json`, Worker liest `${R2_PUBLIC_URL}/openmeteo/forecast.json`. Wenn `R2_PUBLIC_URL` mit `/` endet oder den Bucket-Namen schon im Pfad enthält, kommt 404.
 
-### 1. Grid-Picker in `src/server/openmeteo-cache.server.ts`
+## Schritte (in dieser Reihenfolge)
 
-Neue Helfer:
-- `pickNearest(payload, lat, lon)` → liefert `{ index, phaseA, phaseB, phaseC }` für den nächstgelegenen Gridpunkt (einfaches Haversine über `payload.grid.points`).
-- `cacheCoversLatLon(payload, lat, lon)` → true wenn (lat, lon) innerhalb der BBox + Toleranz.
+### 1. R2-Endpoint von Worker-Seite aus prüfen
+Kurzen Server-Endpoint `/api/public/debug/r2-cache` (GET) anlegen, der:
+- `R2_PUBLIC_URL` aus `process.env` liest (Wert maskiert ausgibt: Host + erste 8 Zeichen),
+- `${R2_PUBLIC_URL}/openmeteo/forecast.json` fetched,
+- HTTP-Status, Content-Length, `generatedAt` und Alter (Minuten) zurückgibt.
 
-### 2. Throttle-Fallback in `fetchOpenMeteo` (`openmeteo-quota.server.ts`)
+Dann via `stack_modern--invoke-server-function` aufrufen → wir wissen sofort, ob der Bucket befüllt ist und ob die URL stimmt.
 
-In `syntheticThrottleResponse()` bzw. davor: wenn `source ∈ { "forecast", "nowcast", "historical_bias" }`, vor dem 429-Synth versuchen, aus R2 zu antworten:
-- URL parsen (`latitude`, `longitude`, ggf. `forecast_minutely_15`, `past_days`).
-- Über `pickNearest` den passenden Phase-Block (A / B / C) ziehen.
-- Als `Response(200)` mit Header `x-om-source: r2-cache` und `x-om-cache-age-min: <n>` zurückgeben.
-- Bei Miss → wie bisher 429.
+### 2. Je nach Ergebnis
+- **404 / leerer Bucket** → Workflow wurde nie getriggert. Ich gebe dir den genauen URL-Link „Run workflow" + erkläre kurz, wie du das tust (Actions-Tab → "Open-Meteo Cache Ingest" → "Run workflow"). Dieses Plan-Tool darf ich keine GitHub-Calls auslösen.
+- **403 / CORS / "not authorized"** → Bucket-Public-Access nicht aktiv ODER `R2_PUBLIC_URL` zeigt auf falschen Bucket. Ich beschreibe genau, was in Cloudflare anzupassen ist.
+- **200 + altes `generatedAt`** → Workflow hat einmal geschrieben, läuft aber nicht mehr. Cron-Status in GitHub Actions prüfen.
+- **200 + frisch** → R2 ok, Fallback-Code im Worker hat ein Bug. Dann fixe ich `openmeteo-cache.server.ts` / `openmeteo-quota.server.ts` direkt.
 
-Zusätzlich: **auch bei `fetch()`-Fehler** (Network throw) denselben Fallback-Versuch starten, statt sofort weiterzuwerfen.
-
-### 3. Telemetrie
-
-- Bei R2-Hit: `recordUsage(source, 0, false)` nicht zählen — stattdessen neue Spalte `r2_hits` via vorhandenem `increment_om_usage`-RPC? **Verzicht** für Welle 1 — nur Log: `[openmeteo-cache] served <source> from R2 (age=<n>min)`.
-
-### 4. Forecast-Response markieren
-
-In `forecast.functions.ts` (Hot-Path): wenn die Tagesdaten aus R2 stammen (Header-Check am `Response` durchreichen ist umständlich → einfacher: nach dem Fetch in `fetchOpenMeteo()`-Wrapper das `x-om-source: r2-cache`-Header lesen und ans Tagesobjekt `data_source: "r2_cache"` + `cache_age_min` hängen). Wird im UI als Badge "Cache" angezeigt (kommt später).
-
-### 5. Persistenz bei degradiertem Cache
-
-Bisheriger Bug laut Incident: "wird nicht degradiert gespeichert". Im `getOrSetCacheWithStale`-Pfad (weather-cache.server) prüfen, ob das Resultat ein R2-Fallback war — falls ja, mit kürzerer TTL (5 min statt voll) schreiben, damit nach Throttle-Ende schnell wieder frischer Live-Call kommt.
-
-## Nicht im Scope (Welle 2)
-
-- Worker komplett auf R2-Only (kein Open-Meteo mehr) umstellen.
-- Pressure-Map / Snow-Line / Synoptic-Trend an R2 hängen (zu kleine Region oder andere Variablen).
-- UI-Badge "aus Cache geladen".
+### 3. Aufräumen
+Den Debug-Endpoint entferne ich am Ende wieder (oder lasse ihn als Admin-Hilfe stehen, je nach Wunsch).
 
 ## Technische Details
 
-```text
-fetchOpenMeteo(url, source)
-  ├─ throttle.active? ──► tryR2(url, source) ──hit──► 200 (x-om-source: r2-cache)
-  │                                          └─miss─► synthetic 429
-  ├─ fetch() throw ───── tryR2(url, source) ──hit──► 200
-  │                                          └─miss─► rethrow
-  └─ 200 OK ───────────► passthrough
-```
+- Datei neu: `src/routes/api/public/debug/r2-cache.ts` (TanStack server route, keine Auth, nur GET, gibt JSON zurück).
+- Maskiert ausgegebene Werte: Host bleibt sichtbar, kein Token im Spiel (R2 ist public read).
+- Keine DB-Änderung, kein Secret-Change nötig.
 
-Phasen-Mapping aus URL-Parametern:
-- `minutely_15` enthalten → Phase B (Nowcast)
-- `past_days >= 7` → Phase C (Bias)
-- sonst → Phase A (Forecast)
+## Nicht im Scope
 
-## Dateien
+- Workflow-Run kann ich nicht selbst auslösen (kein GitHub-Tool im Sandbox).
+- Cloudflare-Bucket-Einstellungen kann ich nicht ändern.
 
-- `src/server/openmeteo-cache.server.ts` — Grid-Picker + `tryR2ForUrl()` exportieren.
-- `src/server/openmeteo-quota.server.ts` — Fallback in `fetchOpenMeteo()` einhängen.
-- `src/server/weather-cache.server.ts` — TTL-Reduktion bei R2-Origin.
-- ggf. `src/server/forecast.functions.ts` — `data_source`/`cache_age_min` ans Day-Objekt.
+Sobald du den Plan freigibst, baue ich den Debug-Endpoint, rufe ihn auf und sage dir das Ergebnis im nächsten Schritt.
