@@ -24,6 +24,13 @@ const GLOBAL_THROTTLE_KEY = "om:global-throttle";
 // Unterhalb dieser Eigen-Nutzung gilt ein "daily"-429 als Shared-IP-Throttle, nicht als echtes Limit.
 const SHARED_IP_USAGE_THRESHOLD = 500;
 
+// Quellen, für die der R2-Cache strukturell passt (Ingest Phase A/B/C).
+const R2_FALLBACK_SOURCES: ReadonlySet<OmSource> = new Set<OmSource>([
+  "forecast",
+  "nowcast",
+  "historical_bias",
+]);
+
 export type ThrottleKind =
   | "shared_ip_daily"   // anderes Tenant hat geteilte IP zugespammt → 45 min
   | "real_daily"        // wir haben unser Tageslimit erreicht → bis 00:00 UTC
