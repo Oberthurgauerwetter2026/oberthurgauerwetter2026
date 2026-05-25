@@ -156,9 +156,13 @@ export async function fetchOpenMeteo(
   source: OmSource,
   init?: RequestInit,
 ): Promise<Response> {
-  // Globalen Throttle respektieren — keinen Call absetzen, sondern synthetisches 429.
+  // Globalen Throttle respektieren — vorher R2-Cache als Fallback versuchen.
   const throttle = await getGlobalThrottle();
   if (throttle.active) {
+    if (R2_FALLBACK_SOURCES.has(source)) {
+      const cached = await tryR2ForUrl(url, source).catch(() => null);
+      if (cached) return cached;
+    }
     console.warn(
       `[openmeteo-quota] skip ${source}: global throttle ${throttle.kind} bis ${throttle.until}`,
     );
@@ -171,6 +175,11 @@ export async function fetchOpenMeteo(
     res = await fetch(target, init);
   } catch (e) {
     void recordUsage(source, 1, false);
+    // Network-Fehler → R2 versuchen, bevor wir werfen.
+    if (R2_FALLBACK_SOURCES.has(source)) {
+      const cached = await tryR2ForUrl(url, source).catch(() => null);
+      if (cached) return cached;
+    }
     throw e;
   }
   void recordUsage(source, 1, res.status === 429);
@@ -194,6 +203,11 @@ export async function fetchOpenMeteo(
       await setGlobalThrottle("hourly", source, 30 * 60 * 1000);
     } else {
       await setGlobalThrottle("minutely", source, 2 * 60 * 1000);
+    }
+    // Throttle frisch gesetzt → R2 als Fallback liefern, statt 429 nach oben durchzureichen.
+    if (R2_FALLBACK_SOURCES.has(source)) {
+      const cached = await tryR2ForUrl(url, source).catch(() => null);
+      if (cached) return cached;
     }
   }
   return res;
