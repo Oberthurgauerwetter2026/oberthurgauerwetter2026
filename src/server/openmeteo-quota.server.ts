@@ -5,6 +5,14 @@
 // - Setzt einen GLOBALEN Throttle-Marker (`om:global-throttle`), den alle anderen
 //   Open-Meteo-Aufrufer respektieren — kein Hammering während Sperrfenster.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { tryR2ForUrl } from "./openmeteo-cache.server";
+
+// Quellen, für die der R2-Cache strukturell passt (Phase A/B/C im Ingest).
+const R2_FALLBACK_SOURCES: ReadonlySet<OmSource> = new Set([
+  "forecast",
+  "nowcast",
+  "historical_bias",
+]);
 
 export type OmSource =
   | "forecast"
