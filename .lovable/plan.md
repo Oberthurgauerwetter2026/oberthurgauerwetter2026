@@ -1,64 +1,64 @@
 ## Ziel
 
-Open-Meteo-Calls vom Worker entkoppeln → kein Shared-IP-Throttle mehr. GitHub Action ingestiert alle 5 min in R2, Worker liest nur noch Cache.
+Wenn der Open-Meteo-Endpoint geblockt ist (shared_ip_daily / hourly / minutely / network), sollen Forecast, Nowcast und Bias-Korrektur **aus dem R2-Cache** bedient werden — statt eines synthetischen 429, das die UI in den "letzter gültiger Cache"-Pfad zwingt.
 
-## Bestandsaufnahme
+Der Reader `loadOpenMeteoCache()` existiert bereits, R2 ist befüllt, `R2_PUBLIC_URL` ist als Secret gesetzt.
 
-Open-Meteo wird in 11 Server-Dateien aufgerufen, jede mit anderer Variable/Modell-Kombination:
+## Vorgehen
 
-| Datei | Endpoint | Variablen / Modelle |
-|---|---|---|
-| `forecast.functions.ts` (684, 848) | /forecast | Multi-Modell Tag1-7, Multi-Variable (Temp/Wind/Sky/Niederschlag) |
-| `forecast.auto.ts` (139, 692) | /forecast | wie oben, Auto-Daily-Variante |
-| `ensemble.server.ts` | /ensemble | ICON-EU/IFS Ensemble-Members |
-| `nowcast.server.ts` | /forecast | minutely_15 Niederschlag/Temp |
-| `radar.server.ts` (2×) | /forecast | minutely_15 Niederschlag-Grid |
-| `bias-correction.server.ts` | /forecast | rückblickender Vergleich (past_days) |
-| `pressure-gradient.server.ts` | /forecast | Druck an 4 Eckpunkten |
-| `pressure-map.server.ts` | /forecast | Druckfeld-Grid |
-| `synoptic-trend.server.ts` | /forecast | 500-hPa-Strömung |
-| `snow-line.server.ts` | /forecast | Geopotential / 0°-Grenze |
-| `forecast.functions.ts` (518) / `forecast.auto.ts` (592) | /elevation | einmalig, irrelevant |
+### 1. Grid-Picker in `src/server/openmeteo-cache.server.ts`
 
-Das ist deutlich mehr als der Skill-Template (`phase1` = ICON-CH1-minutely, `phase2` = ICON-CH2-hourly für 1 Grid). Eine einzige `forecast.json` deckt **nicht** alles ab.
+Neue Helfer:
+- `pickNearest(payload, lat, lon)` → liefert `{ index, phaseA, phaseB, phaseC }` für den nächstgelegenen Gridpunkt (einfaches Haversine über `payload.grid.points`).
+- `cacheCoversLatLon(payload, lat, lon)` → true wenn (lat, lon) innerhalb der BBox + Toleranz.
 
-## Vorgeschlagene Migration in 3 Wellen
+### 2. Throttle-Fallback in `fetchOpenMeteo` (`openmeteo-quota.server.ts`)
 
-### Welle 1 (sofort, größter Effekt) — Hot-Path-Forecast cachen
+In `syntheticThrottleResponse()` bzw. davor: wenn `source ∈ { "forecast", "nowcast", "historical_bias" }`, vor dem 429-Synth versuchen, aus R2 zu antworten:
+- URL parsen (`latitude`, `longitude`, ggf. `forecast_minutely_15`, `past_days`).
+- Über `pickNearest` den passenden Phase-Block (A / B / C) ziehen.
+- Als `Response(200)` mit Header `x-om-source: r2-cache` und `x-om-cache-age-min: <n>` zurückgeben.
+- Bei Miss → wie bisher 429.
 
-Ingest 1× `forecast.json` für die Variablen, die `forecast.functions.ts` + `forecast.auto.ts` + `nowcast.server.ts` brauchen. Diese drei machen >80% aller Calls.
+Zusätzlich: **auch bei `fetch()`-Fehler** (Network throw) denselben Fallback-Versuch starten, statt sofort weiterzuwerfen.
 
-- **Workflow**: `.github/workflows/openmeteo-ingest.yml`, alle 5 min, ruft `scripts/ingest_openmeteo.py`.
-- **Ingest-Skript**: angepasst an Amriswil-Region (BBox 47.45–47.65 / 9.20–9.45, Grid 7×7), holt 3 Phasen:
-  - Phase A — Multi-Modell, hourly, Tag 0-7 (Temp, Wind, Sky, Niederschlag, RH)
-  - Phase B — ICON-CH1, minutely_15, ±6h (Nowcast/Radar-Niederschlag)
-  - Phase C — Bias-Lookback, past_days=7, hourly (Temp/Wind)
-- **R2-Key**: `openmeteo/forecast.json` (CacheControl: `s-maxage=120`).
-- **Worker-Reader**: neuer Helper `src/server/openmeteo-cache.server.ts` mit `loadOpenMeteoCache()` → fetcht von `R2_PUBLIC_URL`, parst, memoized per Request.
-- **Umstellung**: `forecast.functions.ts`, `forecast.auto.ts`, `nowcast.server.ts`, `radar.server.ts`, `bias-correction.server.ts` lesen aus dem Cache. Wenn Cache fehlt/stale → `getGlobalThrottle()`-Pfad bleibt als Fallback aktiv (kein Verhalten gebrochen).
+### 3. Telemetrie
 
-### Welle 2 (optional, später) — Druck/Synoptik
+- Bei R2-Hit: `recordUsage(source, 0, false)` nicht zählen — stattdessen neue Spalte `r2_hits` via vorhandenem `increment_om_usage`-RPC? **Verzicht** für Welle 1 — nur Log: `[openmeteo-cache] served <source> from R2 (age=<n>min)`.
 
-Wenn Welle 1 stabil läuft: zweite R2-Datei `openmeteo/pressure.json` für `pressure-gradient`, `pressure-map`, `synoptic-trend`, `snow-line`. Eigener Workflow (z.B. alle 30 min, da langsamere Felder).
+### 4. Forecast-Response markieren
 
-### Welle 3 (nicht jetzt) — Ensemble
+In `forecast.functions.ts` (Hot-Path): wenn die Tagesdaten aus R2 stammen (Header-Check am `Response` durchreichen ist umständlich → einfacher: nach dem Fetch in `fetchOpenMeteo()`-Wrapper das `x-om-source: r2-cache`-Header lesen und ans Tagesobjekt `data_source: "r2_cache"` + `cache_age_min` hängen). Wird im UI als Badge "Cache" angezeigt (kommt später).
 
-`ensemble.server.ts` zieht große Ensemble-Members → eigene Strategie nötig, ggf. weiter via Cyon-Proxy.
+### 5. Persistenz bei degradiertem Cache
 
-## Was bleibt unverändert
+Bisheriger Bug laut Incident: "wird nicht degradiert gespeichert". Im `getOrSetCacheWithStale`-Pfad (weather-cache.server) prüfen, ob das Resultat ein R2-Fallback war — falls ja, mit kürzerer TTL (5 min statt voll) schreiben, damit nach Throttle-Ende schnell wieder frischer Live-Call kommt.
 
-- `pressure-map-generator/` (eigener Use-Case, eigene IP, läuft schon getrennt — Skill sagt explizit "nicht anfassen").
-- `cyon-proxy/om-proxy.php` als Notfall-Fallback (2-4 Wochen behalten, dann Entscheidung).
-- Bestehende `weather_cache`-Tabelle + `openmeteo-quota.server.ts` (Throttle-Logik) bleiben als Sicherheitsnetz für Pfade, die nicht aus R2 lesen.
+## Nicht im Scope (Welle 2)
 
-## Voraussetzungen vom User
+- Worker komplett auf R2-Only (kein Open-Meteo mehr) umstellen.
+- Pressure-Map / Snow-Line / Synoptic-Trend an R2 hängen (zu kleine Region oder andere Variablen).
+- UI-Badge "aus Cache geladen".
 
-- Cloudflare R2 Bucket + Public URL.
-- GitHub-Secrets: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
-- Worker-Env: `R2_PUBLIC_URL` (z.B. `https://pub-xxx.r2.dev`).
+## Technische Details
 
-## Offene Fragen vor Implementierung
+```text
+fetchOpenMeteo(url, source)
+  ├─ throttle.active? ──► tryR2(url, source) ──hit──► 200 (x-om-source: r2-cache)
+  │                                          └─miss─► synthetic 429
+  ├─ fetch() throw ───── tryR2(url, source) ──hit──► 200
+  │                                          └─miss─► rethrow
+  └─ 200 OK ───────────► passthrough
+```
 
-1. **R2-Bucket schon vorhanden?** (Der bestehende `weather-maps`-Supabase-Bucket ist ein anderes System.) Falls nein: Bucket anlegen + Public URL bereitstellen, sonst kann der Worker nichts lesen.
-2. **Scope**: nur Welle 1 jetzt, oder Welle 1+2 zusammen? Empfehlung: **nur Welle 1** — schnell live, geringes Risiko, deckt den Auslöser des heutigen 18:41-Throttles ab.
-3. **Region/Grid bestätigen**: BBox 47.45–47.65 / 9.20–9.45, Grid 7×7 — passt zu Amriswil + 15 km?
+Phasen-Mapping aus URL-Parametern:
+- `minutely_15` enthalten → Phase B (Nowcast)
+- `past_days >= 7` → Phase C (Bias)
+- sonst → Phase A (Forecast)
+
+## Dateien
+
+- `src/server/openmeteo-cache.server.ts` — Grid-Picker + `tryR2ForUrl()` exportieren.
+- `src/server/openmeteo-quota.server.ts` — Fallback in `fetchOpenMeteo()` einhängen.
+- `src/server/weather-cache.server.ts` — TTL-Reduktion bei R2-Origin.
+- ggf. `src/server/forecast.functions.ts` — `data_source`/`cache_age_min` ans Day-Objekt.

@@ -5,6 +5,7 @@
 // - Setzt einen GLOBALEN Throttle-Marker (`om:global-throttle`), den alle anderen
 //   Open-Meteo-Aufrufer respektieren — kein Hammering während Sperrfenster.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { tryR2ForUrl } from "./openmeteo-cache.server";
 
 export type OmSource =
   | "forecast"
@@ -22,6 +23,13 @@ export const OPEN_METEO_DAILY_LIMIT = 10000;
 const GLOBAL_THROTTLE_KEY = "om:global-throttle";
 // Unterhalb dieser Eigen-Nutzung gilt ein "daily"-429 als Shared-IP-Throttle, nicht als echtes Limit.
 const SHARED_IP_USAGE_THRESHOLD = 500;
+
+// Quellen, für die der R2-Cache strukturell passt (Ingest Phase A/B/C).
+const R2_FALLBACK_SOURCES: ReadonlySet<OmSource> = new Set<OmSource>([
+  "forecast",
+  "nowcast",
+  "historical_bias",
+]);
 
 export type ThrottleKind =
   | "shared_ip_daily"   // anderes Tenant hat geteilte IP zugespammt → 45 min
@@ -148,9 +156,13 @@ export async function fetchOpenMeteo(
   source: OmSource,
   init?: RequestInit,
 ): Promise<Response> {
-  // Globalen Throttle respektieren — keinen Call absetzen, sondern synthetisches 429.
+  // Globalen Throttle respektieren — vorher R2-Cache als Fallback versuchen.
   const throttle = await getGlobalThrottle();
   if (throttle.active) {
+    if (R2_FALLBACK_SOURCES.has(source)) {
+      const cached = await tryR2ForUrl(url, source).catch(() => null);
+      if (cached) return cached;
+    }
     console.warn(
       `[openmeteo-quota] skip ${source}: global throttle ${throttle.kind} bis ${throttle.until}`,
     );
@@ -163,6 +175,11 @@ export async function fetchOpenMeteo(
     res = await fetch(target, init);
   } catch (e) {
     void recordUsage(source, 1, false);
+    // Network-Fehler → R2 versuchen, bevor wir werfen.
+    if (R2_FALLBACK_SOURCES.has(source)) {
+      const cached = await tryR2ForUrl(url, source).catch(() => null);
+      if (cached) return cached;
+    }
     throw e;
   }
   void recordUsage(source, 1, res.status === 429);
@@ -186,6 +203,11 @@ export async function fetchOpenMeteo(
       await setGlobalThrottle("hourly", source, 30 * 60 * 1000);
     } else {
       await setGlobalThrottle("minutely", source, 2 * 60 * 1000);
+    }
+    // Throttle frisch gesetzt → R2 als Fallback liefern, statt 429 nach oben durchzureichen.
+    if (R2_FALLBACK_SOURCES.has(source)) {
+      const cached = await tryR2ForUrl(url, source).catch(() => null);
+      if (cached) return cached;
     }
   }
   return res;
