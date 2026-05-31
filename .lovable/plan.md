@@ -1,30 +1,27 @@
 ## Ziel
-Die generierte Bodendruckkarte (SVG) erhält zwei optische Anpassungen:
+Der breite blaue Rand rund um die eigentliche Karte (Bereich mit Titel „Bodendruck Europa", Untertitel, Legenden, Quellenzeile) soll verschwinden. Dieser Rand entsteht durch das blaue Hintergrund-Rect `fill="#2561a1"`, das die gesamte SVG-Fläche füllt.
 
-1. Schriftart auf SF Pro (Apple-System-Font-Stack) geändert
-2. Blaue Umrandung (Rahmen um den Plot-Bereich) entfernt
+## Änderungen (in beiden Generatoren identisch)
 
-## Betroffene Dateien
-Die Änderungen müssen in **beiden** SVG-Generatoren identisch erfolgen, damit sowohl der GitHub-Action-Workflow als auch der Cloudflare-Worker-Fallback das gleiche Ergebnis produzieren:
+**Dateien**
+- `pressure-map-generator/generate.mjs` (Zeile 399)
+- `src/server/pressure-map.server.ts` (Zeile 676)
 
-- `pressure-map-generator/generate.mjs`
-- `src/server/pressure-map.server.ts`
+**1. Hintergrundfarbe auf Weiß**
+```
+<rect width="${IMG_W}" height="${IMG_H}" fill="#ffffff" />
+```
+Damit verschwindet der blaue Außenrand komplett. Der Ozean bleibt blau, weil er innerhalb des Plot-Bereichs separat über `<rect ... fill="#a8c8e0" />` plus `oceanPath fill="#7fb0d4"` gezeichnet wird.
 
-## Durchführung
+**2. Textfarben anpassen** (sonst auf Weiß unsichtbar)
+- Titel (Zeile 400 / 677): `fill="#ffffff"` → `fill="#0f172a"`
+- Untertitel (Zeile 401 / 678): `fill="#cbd5e1"` → `fill="#475569"`
+- Legenden-Labels „Temperatur 850 hPa (°C)" und „Niederschlag 6 h (mm)" (Zeile 418/421 bzw. 711/716): `fill="#ffffff"` → `fill="#0f172a"`
+- Legenden-Swatch-Labels (Zeile 392 in `generate.mjs` und Pendant in `pressure-map.server.ts`): `fill="#ffffff"` → `fill="#334155"`
+- Quellenzeile bleibt `#94a3b8` (auf Weiß noch lesbar) — unverändert.
 
-### 1. Schriftart (SF Pro)
-- Alle Vorkommen von `font-family="Helvetica,Arial,sans-serif"` und `font-family="Georgia,serif"` im `buildSvg`-Output ersetzen durch einen SF Pro System-Font-Stack:
-  ```
-  -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif
-  ```
-- Betroffene Text-Elemente: Titel, Untertitel, Isobaren-Beschriftungen, H/L-Extrema-Werte und -Namen, Legendenbeschriftungen, Quellenzeile.
-
-### 2. Blaue Umrandung entfernen
-- Das Rahmen-`<rect>` um den Plot-Bereich (`stroke="#2561a1"`, `stroke-width="1.5"`) entfernen.
-- In `generate.mjs` Zeile 415 und in `pressure-map.server.ts` Zeile 706.
-- Der blaue Hintergrund (`<rect width="…" height="…" fill="#2561a1"" />`) bleibt unverändert — es geht nur um den sichtbaren Rahmenstroke.
-
-## Erwartetes Ergebnis
-- Beide Generatoren erzeugen SVGs mit durchgängigem SF Pro Font-Stack.
-- Kein blauer 1,5 px Rahmen mehr um die eigentliche Kartenfläche.
-- Keine funktionalen Änderungen an Daten, Farben oder Isobaren.
+## Ergebnis
+- Karte sitzt auf weißem Hintergrund, ohne blauen Rahmenbereich um den Titel/Legenden.
+- Innerhalb der Plot-Fläche bleiben Meer, Land, Isobaren, Niederschlag, Temperatur unverändert.
+- Alle Texte sind auf dem neuen weißen Hintergrund kontraststark lesbar.
+- Beim nächsten GitHub-Action-Lauf (alle 6 h oder via `FORCE_REGENERATE`) wird die neue Karte generiert; der Worker-Fallback liefert dasselbe Bild.
