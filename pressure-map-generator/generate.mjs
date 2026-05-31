@@ -378,7 +378,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   }
   const t850Labels = [-30, -15, 0, 10, 25].map((t) => {
     const x = t850LgX + ((t - -30) / (25 - -30)) * t850LgW;
-    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${t > 0 ? "+" : ""}${t}</text>`;
+    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="9" fill="#334155" text-anchor="middle">${t > 0 ? "+" : ""}${t}</text>`;
   }).join("");
 
   const pLgX = IMG_W - PAD.right - 12 - 280, pLgW = 280;
