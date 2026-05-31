@@ -611,7 +611,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
       const mid = bestRing[Math.floor(bestRing.length / 2)];
       const [lx, ly] = gridToPixel(mid[0], mid[1]);
       const txt = String(Math.round(value));
-      labelSvg.push(`<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="${isThousand ? "700" : "600"}" fill="${stroke}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.85" paint-order="stroke fill">${txt}</text>`);
+      labelSvg.push(`<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="11" font-weight="${isThousand ? "700" : "600"}" fill="${stroke}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.85" paint-order="stroke fill">${txt}</text>`);
     }
   }
 
@@ -625,8 +625,8 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     extremaSvg.push(
       `<g>
         <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="22" fill="white" fill-opacity="0.85" stroke="${color}" stroke-width="1.5" />
-        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="Georgia,serif" font-size="34" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text>
-        <text x="${x.toFixed(1)}" y="${(y + 34).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text>
+        <text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text>
+        <text x="${x.toFixed(1)}" y="${(y + 34).toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text>
       </g>`
     );
   }
@@ -643,7 +643,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   }
   const t850Labels = [-30, -15, 0, 10, 25].map((t) => {
     const x = t850LgX + ((t - -30) / (25 - -30)) * t850LgW;
-    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${t > 0 ? "+" : ""}${t}</text>`;
+    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${t > 0 ? "+" : ""}${t}</text>`;
   }).join("");
 
   // Precipitation bar (discrete swatches)
@@ -663,7 +663,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     const s = precipStyle(pSwatches[i].v + 0.01)!;
     const x = pLgX + i * pStep;
     pItems.push(`<rect x="${x.toFixed(1)}" y="${lgY}" width="${(pStep - 1).toFixed(1)}" height="${lgH}" fill="${s.fill}" fill-opacity="${s.opacity}" />`);
-    pLabels.push(`<text x="${(x + pStep / 2).toFixed(1)}" y="${lgY + lgH + 11}" font-family="Helvetica,Arial,sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${pSwatches[i].label}</text>`);
+    pLabels.push(`<text x="${(x + pStep / 2).toFixed(1)}" y="${lgY + lgH + 11}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="9" fill="#ffffff" text-anchor="middle">${pSwatches[i].label}</text>`);
   }
 
   const [fx1, fy1] = [PAD.left, PAD.top];
@@ -674,8 +674,8 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     <clipPath id="plot"><rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" /></clipPath>
   </defs>
   <rect width="${IMG_W}" height="${IMG_H}" fill="#2561a1" />
-  <text x="${IMG_W / 2}" y="30" font-family="Helvetica,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">${escapeXml(title)}</text>
-  <text x="${IMG_W / 2}" y="50" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#cbd5e1" text-anchor="middle">${escapeXml(subtitle)}</text>
+  <text x="${IMG_W / 2}" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">${escapeXml(title)}</text>
+  <text x="${IMG_W / 2}" y="50" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="12" fill="#cbd5e1" text-anchor="middle">${escapeXml(subtitle)}</text>
 
   <g clip-path="url(#plot)">
     <!-- Ozean -->
@@ -703,19 +703,19 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     ${extremaSvg.join("\n    ")}
   </g>
 
-  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="#2561a1" stroke-width="1.5" />
+  
 
   <!-- Legend: T850 -->
   ${t850Items.join("\n  ")}
   ${t850Labels}
-  <text x="${t850LgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Temperatur 850 hPa (°C)</text>
+  <text x="${t850LgX}" y="${lgY - 4}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#ffffff">Temperatur 850 hPa (°C)</text>
 
   <!-- Legend: Precipitation -->
   ${pItems.join("\n  ")}
   ${pLabels.join("\n  ")}
-  <text x="${pLgX}" y="${lgY - 4}" font-family="Helvetica,Arial,sans-serif" font-size="10" font-weight="600" fill="#ffffff">Niederschlag 6 h (mm)</text>
+  <text x="${pLgX}" y="${lgY - 4}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#ffffff">Niederschlag 6 h (mm)</text>
 
-  <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
+  <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · oberthurgauerwetter.ch</text>
 </svg>`;
 }
 
