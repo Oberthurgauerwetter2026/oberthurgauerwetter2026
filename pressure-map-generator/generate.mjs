@@ -412,7 +412,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     ${labelSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
   </g>
-  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="#2561a1" stroke-width="1.5" />
+  
   ${t850Items.join("\n  ")}
   ${t850Labels}
   <text x="${t850LgX}" y="${lgY - 4}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#ffffff">Temperatur 850 hPa (°C)</text>

@@ -703,7 +703,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     ${extremaSvg.join("\n    ")}
   </g>
 
-  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="#2561a1" stroke-width="1.5" />
+  
 
   <!-- Legend: T850 -->
   ${t850Items.join("\n  ")}
