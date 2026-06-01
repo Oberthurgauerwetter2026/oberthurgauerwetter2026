@@ -116,7 +116,7 @@ def main() -> None:
         ]),
         "forecast_days": 7,
         "timezone": "Europe/Zurich",
-        "models": "meteoswiss_icon_ch2,icon_d2,arpege_europe,ecmwf_ifs025,gfs_global",
+        "models": "meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global",
     }
 
     # Phase B — ICON-CH1 minutely_15, ±6h (Nowcast / Radar)

@@ -116,10 +116,8 @@ const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probabili
 // Region Oberthurgau: hochauflösende MeteoSwiss-/Météo-France-Modelle bilden den
 // Wind hier zuverlässiger ab. Statt eines ungewichteten Mittels gewichten wir.
 const WIND_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 0.40,
-  meteoswiss_icon_ch2: 0.30,
-  meteofrance_arome_france_hd: 0.20,
-  arpege_europe: 0.10,
+  meteoswiss_icon_ch1: 0.55,
+  meteoswiss_icon_ch2: 0.45,
 };
 function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
   const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
@@ -982,9 +980,9 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
 async function fetchWeather(
   lat: number,
   lon: number,
-  shortModels = "meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,icon_d2",
-  midModels = "meteoswiss_icon_ch2,icon_d2,ecmwf_ifs025,arpege_europe,gfs_global",
-  longModels = "ecmwf_ifs025,gfs_global,icon_eu"
+  shortModels = "meteoswiss_icon_ch1,meteoswiss_icon_ch2",
+  midModels = "meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global",
+  longModels = "ecmwf_ifs025,gfs_global"
 ) {
   shortModels = normalizeModels(shortModels);
   midModels = normalizeModels(midModels);
@@ -1227,7 +1225,7 @@ function spread(values: number[]) {
 // =====================================================================
 // Wetterlagen-abhängige Modell-Gewichtung
 // =====================================================================
-type ModelKey = "icon_ch1" | "icon_ch2" | "arome" | "arpege" | "ecmwf" | "gfs" | "other";
+type ModelKey = "icon_ch1" | "icon_ch2" | "ecmwf" | "gfs" | "other";
 type Regime = "convective" | "frontal_west" | "bise_ne" | "stable_high" | "default";
 type VarGroup = "precip" | "temp" | "wind" | "other";
 type Horizon = "h0_12" | "h12_24" | "h24_48" | "h48_plus";
@@ -1236,8 +1234,6 @@ function modelKey(name: string): ModelKey {
   const n = name.toLowerCase();
   if (n.includes("icon_ch1")) return "icon_ch1";
   if (n.includes("icon_ch2")) return "icon_ch2";
-  if (n.includes("arome")) return "arome";
-  if (n.includes("arpege")) return "arpege";
   if (n.includes("ecmwf")) return "ecmwf";
   if (n.includes("gfs")) return "gfs";
   return "other";
@@ -1252,17 +1248,17 @@ function varGroup(varName?: string): VarGroup {
 }
 
 const REGIME_WEIGHTS: Record<Regime, Record<ModelKey, number>> = {
-  convective:   { icon_ch1: 1.6, icon_ch2: 1.1, arome: 1.4, arpege: 0.7, ecmwf: 0.7, gfs: 0.5, other: 1.0 },
-  frontal_west: { icon_ch1: 1.0, icon_ch2: 1.1, arome: 1.5, arpege: 1.3, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
-  bise_ne:      { icon_ch1: 1.3, icon_ch2: 1.4, arome: 0.8, arpege: 1.1, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
-  stable_high:  { icon_ch1: 1.0, icon_ch2: 1.1, arome: 0.9, arpege: 1.2, ecmwf: 1.4, gfs: 0.7, other: 1.0 },
-  default:      { icon_ch1: 1.0, icon_ch2: 1.0, arome: 1.0, arpege: 1.0, ecmwf: 1.0, gfs: 0.5, other: 1.0 },
+  convective:   { icon_ch1: 1.6, icon_ch2: 1.1, ecmwf: 0.7, gfs: 0.5, other: 1.0 },
+  frontal_west: { icon_ch1: 1.0, icon_ch2: 1.1, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
+  bise_ne:      { icon_ch1: 1.3, icon_ch2: 1.4, ecmwf: 0.9, gfs: 0.6, other: 1.0 },
+  stable_high:  { icon_ch1: 1.0, icon_ch2: 1.1, ecmwf: 1.4, gfs: 0.7, other: 1.0 },
+  default:      { icon_ch1: 1.0, icon_ch2: 1.0, ecmwf: 1.0, gfs: 0.5, other: 1.0 },
 };
 
 const VAR_MODIFIERS: Record<VarGroup, Partial<Record<ModelKey, number>>> = {
-  precip: { arome: 1.1, icon_ch1: 1.1 },
+  precip: { icon_ch1: 1.1 },
   temp:   { ecmwf: 1.1 },
-  wind:   { arpege: 1.1, icon_ch2: 1.1 },
+  wind:   { icon_ch2: 1.1 },
   other:  {},
 };
 
@@ -1270,10 +1266,10 @@ const VAR_MODIFIERS: Record<VarGroup, Partial<Record<ModelKey, number>>> = {
 // globale Modelle (ECMWF, GFS) tragen erst ab Tag +1/+2 bei. Gewicht 0 = Modell wird
 // vollständig aus dem Aggregat (inkl. min/max/spread/percentile) ausgeschlossen.
 const HORIZON_WEIGHTS: Record<Horizon, Record<ModelKey, number>> = {
-  h0_12:    { icon_ch1: 1.6, icon_ch2: 1.4, arome: 1.0, arpege: 1.2, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
-  h12_24:   { icon_ch1: 1.5, icon_ch2: 1.3, arome: 0.9, arpege: 1.2, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
-  h24_48:   { icon_ch1: 1.3, icon_ch2: 1.2, arome: 0.8, arpege: 1.2, ecmwf: 0.6, gfs: 0.4, other: 1.0 },
-  h48_plus: { icon_ch1: 1.0, icon_ch2: 1.0, arome: 0.6, arpege: 1.1, ecmwf: 1.0, gfs: 0.7, other: 1.0 },
+  h0_12:    { icon_ch1: 1.6, icon_ch2: 1.4, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
+  h12_24:   { icon_ch1: 1.5, icon_ch2: 1.3, ecmwf: 0.0, gfs: 0.0, other: 1.0 },
+  h24_48:   { icon_ch1: 1.3, icon_ch2: 1.2, ecmwf: 0.6, gfs: 0.4, other: 1.0 },
+  h48_plus: { icon_ch1: 1.0, icon_ch2: 1.0, ecmwf: 1.0, gfs: 0.7, other: 1.0 },
 };
 
 function combinedWeight(name: string, opts?: { variable?: string; regime?: Regime; horizon?: Horizon }): number {
@@ -2182,13 +2178,9 @@ function computeCloudSunDistribution(profile: HourlyProfileRow[] | null | undefi
 // Modell-Gewichte für Bewölkung & Sonne (analog zu Wind, aber andere Mischung).
 // Hochauflösende Modelle (ICON-CH1/2, AROME HD) erhalten höheres Gewicht.
 const CLOUD_SUN_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 0.30,
-  meteoswiss_icon_ch2: 0.25,
-  icon_d2: 0.15,
-  meteofrance_arome_france_hd: 0.15,
-  icon_eu: 0.10,
-  arpege_europe: 0.10,
-  ecmwf_ifs025: 0.05,
+  meteoswiss_icon_ch1: 0.50,
+  meteoswiss_icon_ch2: 0.40,
+  ecmwf_ifs025: 0.10,
 };
 function weightedCloudSunAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
   const entries = Object.entries(perModel).filter(([k, v]) => k in CLOUD_SUN_WEIGHTS && Number.isFinite(v));
@@ -2242,19 +2234,13 @@ function trimmedConsensus(
 // Modell-Gewichte fürs Stundenfenster (Restfenster 12–24 h).
 // Temperatur: hochauflösende CH-Modelle dominieren, ARPEGE als globaler Anker.
 const TEMP_HOURLY_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 0.30,
-  meteoswiss_icon_ch2: 0.25,
-  meteofrance_arome_france_hd: 0.20,
-  icon_d2: 0.15,
-  arpege_europe: 0.10,
+  meteoswiss_icon_ch1: 0.55,
+  meteoswiss_icon_ch2: 0.45,
 };
-// Niederschlag: AROME bekommt mehr Gewicht (konvektionsstark), CH-Modelle danach.
+// Niederschlag: ICON-CH1 (konvektionsstark im Voralpenraum) dominiert leicht.
 const PRECIP_HOURLY_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 0.30,
-  meteofrance_arome_france_hd: 0.25,
-  meteoswiss_icon_ch2: 0.20,
-  icon_d2: 0.15,
-  arpege_europe: 0.10,
+  meteoswiss_icon_ch1: 0.60,
+  meteoswiss_icon_ch2: 0.40,
 };
 
 // Pro-Stunden-Gewichtung. `weights` = Basistabelle; horizon-Modifier (HORIZON_WEIGHTS)
@@ -2545,17 +2531,17 @@ function refineDayFromHour(day: any, weather: any, dayIndex: number, fromHour: n
   const tminPerModelF = fillFromDay(tminPerModel, day?.tmin);
   const tmaxPerModelF = fillFromDay(tmaxPerModel, day?.tmax);
 
-  // Diagnose: Coverage von ICON-Modellen (CH1/CH2/D2) im Restfenster prüfen.
+  // Diagnose: Coverage von ICON-Modellen (CH1/CH2) im Restfenster prüfen.
   // Sichtbar machen, wenn entweder <2 Modelle insgesamt beitragen oder kein
   // ICON-Modell mehr drin ist — verhindert stille Single-Model-Fallbacks.
-  const ICON_KEYS = ["meteoswiss_icon_ch1", "meteoswiss_icon_ch2", "icon_d2"];
+  const ICON_KEYS = ["meteoswiss_icon_ch1", "meteoswiss_icon_ch2"];
   const coverage = (label: string, perModel: Record<string, number>) => {
     const keys = Object.keys(perModel);
     const iconCount = keys.filter((k) => ICON_KEYS.includes(k)).length;
     if (keys.length < 2 || iconCount === 0) {
       console.warn(
         `[forecast] refineDayFromHour day${dayIndex} ${label}: ${keys.length} Modell(e) ` +
-        `(${keys.join(",") || "—"}), ICON-Modelle: ${iconCount}/3`,
+        `(${keys.join(",") || "—"}), ICON-Modelle: ${iconCount}/2`,
       );
     }
   };

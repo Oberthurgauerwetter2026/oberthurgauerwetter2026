@@ -1,27 +1,54 @@
 ## Ziel
-Der breite blaue Rand rund um die eigentliche Karte (Bereich mit Titel „Bodendruck Europa", Untertitel, Legenden, Quellenzeile) soll verschwinden. Dieser Rand entsteht durch das blaue Hintergrund-Rect `fill="#2561a1"`, das die gesamte SVG-Fläche füllt.
 
-## Änderungen (in beiden Generatoren identisch)
+In der Wetterprognose werden nur noch folgende Modelle verwendet:
 
-**Dateien**
-- `pressure-map-generator/generate.mjs` (Zeile 399)
-- `src/server/pressure-map.server.ts` (Zeile 676)
+- **Kurzfrist (Tag 1–2):** MeteoSchweiz ICON-CH1, ICON-CH2
+- **Mittelfrist / Langfrist (Tag 3–10):**  ICON-CH2, ECMWF IFS, GFS Global
+- **Statistische Stützung (Tag 2+):** DWD MOSMIX (bleibt unverändert)
 
-**1. Hintergrundfarbe auf Weiß**
-```
-<rect width="${IMG_W}" height="${IMG_H}" fill="#ffffff" />
-```
-Damit verschwindet der blaue Außenrand komplett. Der Ozean bleibt blau, weil er innerhalb des Plot-Bereichs separat über `<rect ... fill="#a8c8e0" />` plus `oceanPath fill="#7fb0d4"` gezeichnet wird.
+Entfernt werden überall: **AROME (meteofrance_arome_france_hd)**, **ICON-D2**, **ARPEGE Europe**, **ICON-EU**.
 
-**2. Textfarben anpassen** (sonst auf Weiß unsichtbar)
-- Titel (Zeile 400 / 677): `fill="#ffffff"` → `fill="#0f172a"`
-- Untertitel (Zeile 401 / 678): `fill="#cbd5e1"` → `fill="#475569"`
-- Legenden-Labels „Temperatur 850 hPa (°C)" und „Niederschlag 6 h (mm)" (Zeile 418/421 bzw. 711/716): `fill="#ffffff"` → `fill="#0f172a"`
-- Legenden-Swatch-Labels (Zeile 392 in `generate.mjs` und Pendant in `pressure-map.server.ts`): `fill="#ffffff"` → `fill="#334155"`
-- Quellenzeile bleibt `#94a3b8` (auf Weiß noch lesbar) — unverändert.
+## Änderungen
 
-## Ergebnis
-- Karte sitzt auf weißem Hintergrund, ohne blauen Rahmenbereich um den Titel/Legenden.
-- Innerhalb der Plot-Fläche bleiben Meer, Land, Isobaren, Niederschlag, Temperatur unverändert.
-- Alle Texte sind auf dem neuen weißen Hintergrund kontraststark lesbar.
-- Beim nächsten GitHub-Action-Lauf (alle 6 h oder via `FORCE_REGENERATE`) wird die neue Karte generiert; der Worker-Fallback liefert dasselbe Bild.
+### 1. Default-Modelllisten (Code)
+
+- `src/server/forecast.functions.ts` (Zeilen ~985–987): Defaults für `shortModels`, `midModels`, `longModels` anpassen.
+- `src/server/forecast.auto.ts` (Zeilen ~171–173): identisch anpassen.
+- `src/routes/_app.settings.tsx` (Zeilen 41–43, 80–82, 250, 254, 258): Form-Defaults und Input-Placeholder aktualisieren; Beschreibungstext in der Card (Zeile 243–244) auf die neue Auswahl umschreiben.
+
+Neue Werte:
+
+- `models_shortterm = "meteoswiss_icon_ch1,meteoswiss_icon_ch2"`
+- `models_midterm   = "meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global"`
+- `models_longterm  = "ecmwf_ifs025,gfs_global"`
+
+### 2. Default-Werte in DB
+
+Neue Migration, die die Defaults der Spalten `app_settings.models_shortterm/midterm/longterm` setzt **und** bestehende Zeilen aktualisiert, sofern sie noch auf den alten Defaults stehen (so wie die bestehende Migration `20260514155532...sql` es vormacht).
+
+### 3. Gewichtstabellen in `src/server/forecast.functions.ts`
+
+Einträge für entfernte Modelle aus den Tabellen löschen und Restgewichte auf Summe 1.0 umnormieren:
+
+- `WIND_WEIGHTS` (Z. 118): nur `icon_ch1` + `icon_ch2`.
+- `CLOUD_SUN_WEIGHTS` (Z. 2184): `icon_ch1`, `icon_ch2`, `ecmwf_ifs025`.
+- `TEMP_HOURLY_WEIGHTS` (Z. 2244): `icon_ch1`, `icon_ch2`.
+- `PRECIP_HOURLY_WEIGHTS` (Z. 2252): `icon_ch1`, `icon_ch2`.
+- `HORIZON_WEIGHTS` (Z. 1273–1276) und `REGIME_WEIGHTS` / Variable-Modifier (Z. 1255–1265): Spalten `arome`, `arpege`, `icon_d2`/`other` aus den Maps entfernen, ICON-CH1/CH2 und ECMWF/GFS bleiben. `ModelKey`-Typ (Z. 1230) und `classifyModel`-Helper (Z. 1239–1240) entsprechend reduzieren.
+- `forecast.auto.ts` `WIND_WEIGHTS` (Z. 45) analog auf ICH-CH1/CH2 reduzieren.
+
+`ICON_KEYS` (Z. 2551) auf `["meteoswiss_icon_ch1","meteoswiss_icon_ch2"]` kürzen. `HOURLY_LONGRANGE_BLOCKLIST` bleibt (ECMWF/GFS-Stundenwerte sind weiterhin sinnlos in Kurzfrist-Aggregaten).
+
+### 4. R2-Ingest
+
+`scripts/ingest_openmeteo.py` Phase A `models` (Z. 119) auf `"meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global"` reduzieren (ICON-CH1 läuft bereits in Phase B). Phase C `best_match` bleibt — wird nur für Bias-Lookback genutzt, nicht für die Prognose-Mischung.
+
+## Nicht angefasst
+
+- **Radar / Nowcast** (`src/server/radar.server.ts`): nutzt ICON-CH1 primär und ICON-D2 nur als Vergleichswert für die Radar-Assimilation. Der User-Request bezieht sich auf die *Wetterprognose*, daher bleibt Radar unverändert. Falls ICON-D2 auch hier raus soll, bitte kurz Bescheid geben.
+- **Druckkarte / Synoptik** (`pressure-map-generator/generate.mjs`, `synoptic-trend.server.ts`): nutzen schon nur ECMWF + GFS → keine Änderung.
+- **MOSMIX** (`src/server/mosmix.server.ts`): bleibt unverändert.
+
+## Verifikation
+
+Nach den Edits einmal eine Prognose generieren und prüfen, dass die `weights_used`-Felder in `weather_data` nur noch die gewünschten Modelle enthalten und keine Referenzen auf `arome`/`arpege`/`icon_d2` mehr auftauchen.

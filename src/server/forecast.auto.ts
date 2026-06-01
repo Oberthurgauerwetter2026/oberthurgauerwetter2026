@@ -42,10 +42,8 @@ const HOURLY_VARS = ["temperature_2m", "precipitation", "cloudcover", "windspeed
 // Modelle bilden den Wind hier zuverlässiger ab als globale Modelle. Statt eines
 // ungewichteten Mittels über alle verfügbaren Modelle gewichten wir den Wind:
 const WIND_WEIGHTS: Record<string, number> = {
-  meteoswiss_icon_ch1: 0.40,
-  meteoswiss_icon_ch2: 0.30,
-  meteofrance_arome_france_hd: 0.20,
-  arpege_europe: 0.10,
+  meteoswiss_icon_ch1: 0.55,
+  meteoswiss_icon_ch2: 0.45,
 };
 function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
   const entries = Object.entries(perModel).filter(([k]) => k in WIND_WEIGHTS);
@@ -168,8 +166,8 @@ async function fetchOpenMeteoOptional(lat: number, lon: number, models: string, 
 
 async function fetchWeather(
   lat: number, lon: number,
-  shortModels = "meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,icon_d2",
-  midModels = "meteoswiss_icon_ch2,icon_d2,ecmwf_ifs025,arpege_europe,gfs_global",
+  shortModels = "meteoswiss_icon_ch1,meteoswiss_icon_ch2",
+  midModels = "meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global",
   longModels = "ecmwf_ifs025,gfs_global"
 ) {
   shortModels = normalizeModels(shortModels);
