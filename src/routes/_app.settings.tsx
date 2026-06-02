@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { updateSettings, listUsers, inviteUser, setUserRole, deleteUser, getPromptDefaults } from "@/server/forecast.functions";
+import { updateSettings, listUsers, inviteUser, setUserRole, deleteUser, getPromptDefaults } from "@/lib/forecast.functions";
 import { OpenMeteoUsageCard } from "@/components/OpenMeteoUsageCard";
 import { toast } from "sonner";
 import { Loader2, Trash2, UserPlus } from "lucide-react";

@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { generateForecast, deleteForecast } from "@/server/forecast.functions";
+import { generateForecast, deleteForecast } from "@/lib/forecast.functions";
 import { toast } from "sonner";
 import { Loader2, Plus, ExternalLink, FileEdit, Trash2, Map as MapIcon } from "lucide-react";
 import { RegionMap } from "@/components/RegionMap";
