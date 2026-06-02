@@ -78,12 +78,33 @@ def build_grid():
     return [(la, lo) for la in lats for lo in lons]
 
 
+RETRY_BACKOFFS = (2, 5, 10)  # seconds; total 4 attempts
+
+
 def fetch(label: str, params: dict) -> list:
-    r = requests.get(API, params=params, timeout=45)
-    if not r.ok:
-        sys.exit(f"open-meteo HTTP {r.status_code} ({label}): {r.text[:300]}")
-    data = r.json()
-    return data if isinstance(data, list) else [data]
+    last_err = ""
+    for attempt in range(len(RETRY_BACKOFFS) + 1):
+        try:
+            r = requests.get(API, params=params, timeout=45)
+        except requests.RequestException as e:
+            last_err = f"network error: {e}"
+            print(f"  attempt {attempt + 1} failed ({label}): {last_err}")
+        else:
+            if r.ok:
+                data = r.json()
+                return data if isinstance(data, list) else [data]
+            # 4xx: don't retry — client error, won't fix itself
+            if 400 <= r.status_code < 500:
+                sys.exit(f"open-meteo HTTP {r.status_code} ({label}): {r.text[:300]}")
+            last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+            print(f"  attempt {attempt + 1} failed ({label}): {last_err}")
+
+        if attempt < len(RETRY_BACKOFFS):
+            delay = RETRY_BACKOFFS[attempt]
+            print(f"  retrying in {delay}s …")
+            time.sleep(delay)
+
+    sys.exit(f"open-meteo failed after {len(RETRY_BACKOFFS) + 1} attempts ({label}): {last_err}")
 
 
 def main() -> None:
