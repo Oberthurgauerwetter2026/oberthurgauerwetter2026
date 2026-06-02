@@ -1,7 +1,7 @@
 // Server-only auto-forecast logic (re-uses helpers from forecast.functions but
 // avoids the auth middleware so it can be triggered by cron).
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { buildSystemPrompt } from "./forecast.functions";
+import { buildSystemPrompt } from "@/lib/forecast.functions";
 import { getOrSetCache } from "./weather-cache.server";
 import { fetchMosmixShortTerm } from "./mosmix.server";
 import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
@@ -551,7 +551,7 @@ function buildFirstEntryContext(weather: any, withTopo: (i: number) => any, toda
 }
 
 import { generateTextNominal as runNominal } from "./nominal-style.server";
-import { enforceFrostWarning } from "./forecast.functions";
+import { enforceFrostWarning } from "@/lib/forecast.functions";
 import { fetchSynopticTrend, buildTrendUserPrompt } from "./synoptic-trend.server";
 
 async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {

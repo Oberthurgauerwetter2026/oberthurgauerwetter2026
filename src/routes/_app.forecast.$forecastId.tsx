@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { WeatherDataView } from "@/components/WeatherDataView";
-import { regenerateEntry, regenerateForecast, deleteForecast, publishToWordPress } from "@/server/forecast.functions";
+import { regenerateEntry, regenerateForecast, deleteForecast, publishToWordPress } from "@/lib/forecast.functions";
 import { toast } from "sonner";
 import { Loader2, Save, Sparkles, Upload, ArrowLeft, ExternalLink, RefreshCw, Trash2, BarChart3, ChevronDown } from "lucide-react";
 

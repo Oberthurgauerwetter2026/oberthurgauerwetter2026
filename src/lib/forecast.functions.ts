@@ -2,17 +2,17 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { getOrSetCache, getOrSetCacheWithStale } from "./weather-cache.server";
-import { fetchMosmixShortTerm } from "./mosmix.server";
-import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "./radar.server";
-import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "./bias-correction.server";
-import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type NowcastResult } from "./nowcast.server";
-import { fetchPressureGradient, type DayPressure } from "./pressure-gradient.server";
-import { fetchSnowLine, type DaySnowLine } from "./snow-line.server";
-import { fetchEnsembleSummary, applyEnsembleConfidenceToDay, type EnsembleDay } from "./ensemble.server";
-import { fetchOpenMeteo as fetchOMTracked, getGlobalThrottle } from "./openmeteo-quota.server";
-import { generateTextNominal as runNominal } from "./nominal-style.server";
-import { fetchSynopticTrend, buildTrendUserPrompt } from "./synoptic-trend.server";
+import { getOrSetCache, getOrSetCacheWithStale } from "@/server/weather-cache.server";
+import { fetchMosmixShortTerm } from "@/server/mosmix.server";
+import { fetchRadarSnapshot, buildRadarCorrection, type RadarSnapshot } from "@/server/radar.server";
+import { computeBiasCorrection, applyBiasToDay, type BiasResult } from "@/server/bias-correction.server";
+import { fetchNowcastInputs, computeNowcastResult, applyNowcastToDay, type NowcastResult } from "@/server/nowcast.server";
+import { fetchPressureGradient, type DayPressure } from "@/server/pressure-gradient.server";
+import { fetchSnowLine, type DaySnowLine } from "@/server/snow-line.server";
+import { fetchEnsembleSummary, applyEnsembleConfidenceToDay, type EnsembleDay } from "@/server/ensemble.server";
+import { fetchOpenMeteo as fetchOMTracked, getGlobalThrottle } from "@/server/openmeteo-quota.server";
+import { generateTextNominal as runNominal } from "@/server/nominal-style.server";
+import { fetchSynopticTrend, buildTrendUserPrompt } from "@/server/synoptic-trend.server";
 
 // Wendet die Radar-Korrektur an Tag 0 an. Mutiert `out` (precip.avg) und hängt
 // einen `radar_correction`-Block sowie den aktuellen Nowcast an.
