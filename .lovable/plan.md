@@ -1,19 +1,49 @@
-## Problem
+# Wind-Beurteilung: Befund & Plan
 
-Der GitHub-Action-Ingest (`scripts/ingest_openmeteo.py`) bricht mit `sys.exit()` ab, sobald Open-Meteo einmal HTTP 502 liefert. Das passiert sporadisch (Upstream-nginx), führt aber zu einem roten Workflow-Run und keinem aktualisierten R2-Cache.
+## Befund — wo der Wind aktuell „lückenhaft" wird
 
-## Fix
+Keine Datenquelle fehlt komplett, aber durch die letzte Modell-Bereinigung gibt es **Qualitätslücken ab Tag 2**:
 
-`fetch()` in `scripts/ingest_openmeteo.py` um Retry-Logik mit Exponential Backoff erweitern:
+**Aktuelle Modell-Tiers (DB):**
+- Short: `meteoswiss_icon_ch1, meteoswiss_icon_ch2` (1-2 km)
+- Mid:   `meteoswiss_icon_ch2, ecmwf_ifs025, gfs_global` (25 km global)
+- Long:  `ecmwf_ifs025, gfs_global, icon_eu`
 
-- Bis zu **4 Versuche** pro Phase
-- Retry auf **5xx** (502/503/504) und Netzwerk-/Timeout-Fehler
-- Backoff: 2s, 5s, 10s
-- Bei 4xx (Client-Fehler) sofort abbrechen, kein Retry
-- Nach finalem Fehlschlag: weiterhin `sys.exit()`, damit der Workflow rot wird und die nächste Cron-Ausführung (5 min später) es erneut versucht
+**1. Tier-Mixing-Schwelle frisst die ICON-CH-Daten weg**
+`collectModelValuesTiered` (src/lib/forecast.functions.ts:1594) zieht für Tag 2-5 zuerst Mid (3 Modelle) — und bricht ab, weil schon `≥2` Modelle vorhanden sind. ICON-CH1 aus dem Short-Tier wird **nicht** beigemischt. Ab Tag 6 fehlen ICON-CH-Daten komplett.
 
-Keine weiteren Änderungen — `phase B` und `phase C` profitieren automatisch, da alle drei durch dieselbe `fetch()`-Funktion laufen.
+**2. `WIND_WEIGHTS` kennt nur ICON-CH1/CH2**
+(forecast.functions.ts:118-121). Folgen:
+- Tag 2-5: nur ICON-CH2 hat ein Gewicht → "weighted avg" = ICON-CH2 allein, ECMWF/GFS fallen weg.
+- Tag 6+: kein einziges WIND_WEIGHTS-Modell vorhanden → `weightedWindAvg` liefert `null` → Fallback auf rohen Mittelwert globaler Modelle. Richtung/Stärke werden grob, „Bise" wird oft verfehlt.
 
-## Datei
+**3. Bias-Korrektur greift, ist aber gedeckelt**
+SMN-Stationen BIZ/GUT korrigieren Wind multiplikativ (clamped). Hilft bei moderater Über-/Unterschätzung, nicht bei systematisch falscher Richtung.
 
-- `scripts/ingest_openmeteo.py` — `fetch()` ersetzen, Imports um `time` ergänzen
+## Plan — drei chirurgische Fixes in `src/lib/forecast.functions.ts`
+
+### A. ICON-CH-Wind immer beimischen (Tag 2-5)
+In `collectModelValuesTiered` für die Wind-Variablen (`windspeed_10m_max`, `wind_gusts_10m_max`, `winddirection_10m_dominant`) die `≥2`-Abbruchregel überspringen und immer auch den Short-Tier dazumischen, solange dort Werte existieren. Andere Variablen bleiben unverändert.
+
+### B. `WIND_WEIGHTS` um globale Modelle erweitern
+```
+meteoswiss_icon_ch1: 0.55
+meteoswiss_icon_ch2: 0.45
+ecmwf_ifs025:       0.20
+gfs_global:         0.10
+icon_eu:            0.15
+```
+Damit liefert `weightedWindAvg` auch für Tag 6+ einen sinnvoll gewichteten Wert statt eines naiven Mittels. ICON-CH dominiert, wo vorhanden; sonst übernimmt ECMWF die Führung.
+
+### C. Richtung zieht automatisch mit
+`weightedCircularMeanDeg` nutzt dasselbe `WIND_WEIGHTS`-Objekt — Änderung B repariert die Windrichtung mit, ohne zusätzlichen Code.
+
+## Bewusst NICHT im Plan
+
+- ICON-D2 / AROME wieder einführen — wurde von dir explizit entfernt.
+- R2-Ingest-Skript anpassen — Forecasts laufen direkt über `fetchOpenMeteo`, nicht über den R2-Cache.
+- MOSMIX-Gewichte ändern — Ensemble-Blending ist orthogonal und funktioniert.
+
+## Verifikation nach dem Fix
+
+Eine Prognose komplett neu generieren und `weather_data` eines Tag-3-Eintrags prüfen: `wind_max.weights_used` sollte mehrere Modelle zeigen, `wind_dir_compass` plausibler zur Wetterlage passen.

@@ -118,6 +118,9 @@ const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probabili
 const WIND_WEIGHTS: Record<string, number> = {
   meteoswiss_icon_ch1: 0.55,
   meteoswiss_icon_ch2: 0.45,
+  ecmwf_ifs025: 0.20,
+  icon_eu: 0.15,
+  gfs_global: 0.10,
 };
 function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
   const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
