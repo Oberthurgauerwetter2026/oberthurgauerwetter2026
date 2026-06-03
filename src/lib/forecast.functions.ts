@@ -118,6 +118,9 @@ const HOURLY_VARS = ["temperature_2m", "precipitation", "precipitation_probabili
 const WIND_WEIGHTS: Record<string, number> = {
   meteoswiss_icon_ch1: 0.55,
   meteoswiss_icon_ch2: 0.45,
+  ecmwf_ifs025: 0.20,
+  icon_eu: 0.15,
+  gfs_global: 0.10,
 };
 function weightedWindAvg(perModel: Record<string, number>): { avg: number; weights_used: Record<string, number> } | null {
   const entries = Object.entries(perModel).filter(([k, v]) => k in WIND_WEIGHTS && Number.isFinite(v));
@@ -1608,9 +1611,12 @@ function collectModelValuesTiered(weather: any, varName: string, dayIndex: numbe
   const merged: Record<string, number> = {};
   // Always pull primary tier
   Object.assign(merged, collectModelValues(tiersByPriority[0].res, varName, tiersByPriority[0].models, dayIndex));
-  // Mix in additional tiers if we have <2 contributing models so far
+  // For wind variables: always mix in additional tiers (hochauflösende ICON-CH-Daten
+  // sollen auch dann beigemischt werden, wenn der Mid-Tier bereits 2+ Modelle hat).
+  const isWindVar = varName === "windspeed_10m_max" || varName === "wind_gusts_10m_max" || varName === "winddirection_10m_dominant";
+  // Mix in additional tiers if we have <2 contributing models so far (oder immer bei Wind)
   for (let i = 1; i < tiersByPriority.length; i++) {
-    if (Object.keys(merged).length >= 2) break;
+    if (!isWindVar && Object.keys(merged).length >= 2) break;
     const extra = collectModelValues(tiersByPriority[i].res, varName, tiersByPriority[i].models, dayIndex);
     for (const [k, v] of Object.entries(extra)) {
       if (!(k in merged) && k !== "default") merged[k] = v;
