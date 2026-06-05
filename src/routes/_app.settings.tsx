@@ -248,15 +248,15 @@ function SettingsPage() {
         <CardContent className="grid gap-4">
           <div className="space-y-2">
             <Label>Kurzfrist-Modelle (Tag 1-2)</Label>
-            <Input value={form.models_shortterm} onChange={(e) => setForm({ ...form, models_shortterm: e.target.value })} placeholder="meteoswiss_icon_ch1,meteoswiss_icon_ch2" />
+            <Input value={form.models_shortterm} onChange={(e) => setForm({ ...form, models_shortterm: e.target.value })} placeholder="meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,meteofrance_arome_france" />
           </div>
           <div className="space-y-2">
             <Label>Mittelfrist-Modelle (Tag 3-5)</Label>
-            <Input value={form.models_midterm} onChange={(e) => setForm({ ...form, models_midterm: e.target.value })} placeholder="meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global" />
+            <Input value={form.models_midterm} onChange={(e) => setForm({ ...form, models_midterm: e.target.value })} placeholder="meteoswiss_icon_ch2,meteofrance_arome_france,ecmwf_ifs025,gfs_global" />
           </div>
           <div className="space-y-2">
             <Label>Langfrist-Modelle (Tag 6-10)</Label>
-            <Input value={form.models_longterm} onChange={(e) => setForm({ ...form, models_longterm: e.target.value })} placeholder="ecmwf_ifs025,gfs_global" />
+            <Input value={form.models_longterm} onChange={(e) => setForm({ ...form, models_longterm: e.target.value })} placeholder="ecmwf_ifs025,gfs_global,icon_eu" />
           </div>
         </CardContent>
       </Card>
