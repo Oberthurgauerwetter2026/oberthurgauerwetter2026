@@ -38,9 +38,9 @@ function SettingsPage() {
     wp_target_slug: "wetterbericht",
     wp_target_page_id: null as number | null,
     ai_prompt_template: "",
-    models_shortterm: "meteoswiss_icon_ch1,meteoswiss_icon_ch2",
-    models_midterm: "meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global",
-    models_longterm: "ecmwf_ifs025,gfs_global",
+    models_shortterm: "meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,meteofrance_arome_france",
+    models_midterm: "meteoswiss_icon_ch2,meteofrance_arome_france,ecmwf_ifs025,gfs_global",
+    models_longterm: "ecmwf_ifs025,gfs_global,icon_eu",
     prompt_sky: "",
     prompt_temp: "",
     prompt_wind: "",
@@ -77,9 +77,9 @@ function SettingsPage() {
         wp_target_slug: settings.wp_target_slug ?? "wetterbericht",
         wp_target_page_id: settings.wp_target_page_id,
         ai_prompt_template: settings.ai_prompt_template ?? "",
-        models_shortterm: (settings as any).models_shortterm ?? "meteoswiss_icon_ch1,meteoswiss_icon_ch2",
-        models_midterm: (settings as any).models_midterm ?? "meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global",
-        models_longterm: (settings as any).models_longterm ?? "ecmwf_ifs025,gfs_global",
+        models_shortterm: (settings as any).models_shortterm ?? "meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,meteofrance_arome_france",
+        models_midterm: (settings as any).models_midterm ?? "meteoswiss_icon_ch2,meteofrance_arome_france,ecmwf_ifs025,gfs_global",
+        models_longterm: (settings as any).models_longterm ?? "ecmwf_ifs025,gfs_global,icon_eu",
         prompt_sky: (settings as any).prompt_sky ?? "",
         prompt_temp: (settings as any).prompt_temp ?? "",
         prompt_wind: (settings as any).prompt_wind ?? "",
@@ -248,15 +248,15 @@ function SettingsPage() {
         <CardContent className="grid gap-4">
           <div className="space-y-2">
             <Label>Kurzfrist-Modelle (Tag 1-2)</Label>
-            <Input value={form.models_shortterm} onChange={(e) => setForm({ ...form, models_shortterm: e.target.value })} placeholder="meteoswiss_icon_ch1,meteoswiss_icon_ch2" />
+            <Input value={form.models_shortterm} onChange={(e) => setForm({ ...form, models_shortterm: e.target.value })} placeholder="meteoswiss_icon_ch1,meteoswiss_icon_ch2,meteofrance_arome_france_hd,meteofrance_arome_france" />
           </div>
           <div className="space-y-2">
             <Label>Mittelfrist-Modelle (Tag 3-5)</Label>
-            <Input value={form.models_midterm} onChange={(e) => setForm({ ...form, models_midterm: e.target.value })} placeholder="meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global" />
+            <Input value={form.models_midterm} onChange={(e) => setForm({ ...form, models_midterm: e.target.value })} placeholder="meteoswiss_icon_ch2,meteofrance_arome_france,ecmwf_ifs025,gfs_global" />
           </div>
           <div className="space-y-2">
             <Label>Langfrist-Modelle (Tag 6-10)</Label>
-            <Input value={form.models_longterm} onChange={(e) => setForm({ ...form, models_longterm: e.target.value })} placeholder="ecmwf_ifs025,gfs_global" />
+            <Input value={form.models_longterm} onChange={(e) => setForm({ ...form, models_longterm: e.target.value })} placeholder="ecmwf_ifs025,gfs_global,icon_eu" />
           </div>
         </CardContent>
       </Card>

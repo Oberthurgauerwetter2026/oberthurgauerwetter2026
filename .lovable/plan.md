@@ -1,49 +1,48 @@
-# Wind-Beurteilung: Befund & Plan
+# AROME zurück + Wind-Feintuning
 
-## Befund — wo der Wind aktuell „lückenhaft" wird
+## 1. AROME wieder in die Modell-Tiers aufnehmen
 
-Keine Datenquelle fehlt komplett, aber durch die letzte Modell-Bereinigung gibt es **Qualitätslücken ab Tag 2**:
+Open-Meteo-IDs:
+- `meteofrance_arome_france_hd` — 1.3 km, ~36 h Reichweite (sehr gut für T)
+- `meteofrance_arome_france` — 2.5 km, ~48 h
 
-**Aktuelle Modell-Tiers (DB):**
-- Short: `meteoswiss_icon_ch1, meteoswiss_icon_ch2` (1-2 km)
-- Mid:   `meteoswiss_icon_ch2, ecmwf_ifs025, gfs_global` (25 km global)
-- Long:  `ecmwf_ifs025, gfs_global, icon_eu`
+**`app_settings`-Defaults aktualisieren** (DB-Migration, einmalig) und parallel die Hardcoded-Defaults in `src/routes/_app.settings.tsx` (Zeilen 41–43, 80–82, Placeholder 251/255) anpassen:
 
-**1. Tier-Mixing-Schwelle frisst die ICON-CH-Daten weg**
-`collectModelValuesTiered` (src/lib/forecast.functions.ts:1594) zieht für Tag 2-5 zuerst Mid (3 Modelle) — und bricht ab, weil schon `≥2` Modelle vorhanden sind. ICON-CH1 aus dem Short-Tier wird **nicht** beigemischt. Ab Tag 6 fehlen ICON-CH-Daten komplett.
-
-**2. `WIND_WEIGHTS` kennt nur ICON-CH1/CH2**
-(forecast.functions.ts:118-121). Folgen:
-- Tag 2-5: nur ICON-CH2 hat ein Gewicht → "weighted avg" = ICON-CH2 allein, ECMWF/GFS fallen weg.
-- Tag 6+: kein einziges WIND_WEIGHTS-Modell vorhanden → `weightedWindAvg` liefert `null` → Fallback auf rohen Mittelwert globaler Modelle. Richtung/Stärke werden grob, „Bise" wird oft verfehlt.
-
-**3. Bias-Korrektur greift, ist aber gedeckelt**
-SMN-Stationen BIZ/GUT korrigieren Wind multiplikativ (clamped). Hilft bei moderater Über-/Unterschätzung, nicht bei systematisch falscher Richtung.
-
-## Plan — drei chirurgische Fixes in `src/lib/forecast.functions.ts`
-
-### A. ICON-CH-Wind immer beimischen (Tag 2-5)
-In `collectModelValuesTiered` für die Wind-Variablen (`windspeed_10m_max`, `wind_gusts_10m_max`, `winddirection_10m_dominant`) die `≥2`-Abbruchregel überspringen und immer auch den Short-Tier dazumischen, solange dort Werte existieren. Andere Variablen bleiben unverändert.
-
-### B. `WIND_WEIGHTS` um globale Modelle erweitern
 ```
-meteoswiss_icon_ch1: 0.55
-meteoswiss_icon_ch2: 0.45
-ecmwf_ifs025:       0.20
-gfs_global:         0.10
-icon_eu:            0.15
+models_shortterm: meteoswiss_icon_ch1, meteoswiss_icon_ch2, meteofrance_arome_france_hd, meteofrance_arome_france
+models_midterm:   meteoswiss_icon_ch2, meteofrance_arome_france, ecmwf_ifs025, gfs_global
+models_longterm:  ecmwf_ifs025, gfs_global, icon_eu     (unverändert — AROME reicht nicht so weit)
 ```
-Damit liefert `weightedWindAvg` auch für Tag 6+ einen sinnvoll gewichteten Wert statt eines naiven Mittels. ICON-CH dominiert, wo vorhanden; sonst übernimmt ECMWF die Führung.
 
-### C. Richtung zieht automatisch mit
-`weightedCircularMeanDeg` nutzt dasselbe `WIND_WEIGHTS`-Objekt — Änderung B repariert die Windrichtung mit, ohne zusätzlichen Code.
+Damit fliesst AROME automatisch in Temperaturmittel (Tag 0–2) ein. Code-seitig sind keine weiteren Änderungen nötig — `collectModelValuesTiered` zieht die Modelle aus den Settings.
+
+## 2. Wind-Nachbesserung in `src/lib/forecast.functions.ts`
+
+**A. `WIND_WEIGHTS` neu balancieren** (Zeilen 118–124):
+```
+meteoswiss_icon_ch1:          0.40   (war 0.55 — zu dominant solo)
+meteoswiss_icon_ch2:          0.30   (war 0.45)
+meteofrance_arome_france_hd:  0.25   (NEU — sehr gut bei Bise/Föhn am Bodensee)
+meteofrance_arome_france:     0.15   (NEU)
+ecmwf_ifs025:                 0.20
+icon_eu:                      0.10   (war 0.15)
+gfs_global:                   0.05   (war 0.10)
+```
+Wirkung: bei Verfügbarkeit dominiert weiterhin ICON-CH, AROME bringt frühen Tagen eine zweite hochauflösende Stimme; globale Modelle wirken nur noch dann stark, wenn die HD-Modelle weg sind (Tag 6+).
+
+**B. Windrichtung folgt automatisch** — `weightedCircularMeanDeg` nutzt dasselbe `WIND_WEIGHTS`-Objekt.
+
+**C. Wind-Bias-Korrektur belassen** — `bias-correction.server.ts` (factor_wind, clamped 0.5–1.8) bleibt unverändert; sie korrigiert systematische Über-/Unterschätzung gegenüber SMN BIZ/GUT auf Basis der neuen Mischung weiter.
 
 ## Bewusst NICHT im Plan
+- ICON-D2 reaktivieren — wurde früher entfernt; AROME deckt die HD-Lücke besser ab.
+- R2-Ingest-Skript (`scripts/ingest_openmeteo.py`) anpassen — Forecasts laufen über Direkt-Fetch, nicht über den R2-Cache.
+- MOSMIX-Gewichte ändern.
 
-- ICON-D2 / AROME wieder einführen — wurde von dir explizit entfernt.
-- R2-Ingest-Skript anpassen — Forecasts laufen direkt über `fetchOpenMeteo`, nicht über den R2-Cache.
-- MOSMIX-Gewichte ändern — Ensemble-Blending ist orthogonal und funktioniert.
+## Verifikation
+Nach Implementation eine neue Prognose generieren und `weather_data` eines Tag-1- und Tag-3-Eintrags prüfen:
+- `tmax.values_by_model` enthält `meteofrance_arome_france_hd` (Tag 0/1) bzw. `meteofrance_arome_france` (Tag 2).
+- `wind_max.weights_used` zeigt 3–4 Modelle mit AROME-Anteil; Bisen-/Föhnlagen sollten realistischer wirken.
 
-## Verifikation nach dem Fix
-
-Eine Prognose komplett neu generieren und `weather_data` eines Tag-3-Eintrags prüfen: `wind_max.weights_used` sollte mehrere Modelle zeigen, `wind_dir_compass` plausibler zur Wetterlage passen.
+## Offene Frage (optional, vor Umsetzung)
+Falls du beim Wind ein konkretes Symptom hast (z. B. „systematisch zu schwach" oder „Richtung dreht zu südlich"), sag's kurz — dann kann ich die Bias-Klammer oder die Gewichte gezielter setzen statt nur über die Tier-Mischung.
