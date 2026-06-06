@@ -1,27 +1,22 @@
-## Problem
+## Ziel
+Im Settings-Block „Einbettungs-HTML" wird beim Nutzer noch alter Code mit blauem Rand angezeigt. Es soll dort der aktuelle, schlanke `<img>`-Tag (ohne Rahmen) erscheinen, der zur neuen Proxy-URL `/api/public/maps/europe-pressure-latest.svg` zeigt.
 
-Der Bucket `weather-maps` wurde im letzten Schritt privat gestellt. Die Settings-Seite (`PressureMapCard`) lädt die Karte aber immer noch direkt über die alte public-Storage-URL:
-
-```
-https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg
-```
-
-Diese URL liefert jetzt 400/403 → die Karte erscheint nicht. Die Proxy-Route `/api/public/maps/europe-pressure-latest.svg` (mit Service-Role-Download) ist bereits vorhanden und funktioniert.
-
-## Fix
-
-In `src/routes/_app.settings.tsx`:
-
-1. Konstante `SUPABASE_MAP_URL` ersetzen durch die Proxy-Route:
-   ```ts
-   const PRESSURE_MAP_URL = "/api/public/maps/europe-pressure-latest.svg";
+## Vorgehen
+1. **Quellcode prüfen** (`src/routes/_app.settings.tsx`, Zeilen 688–691): Im aktuellen Source steht bereits:
+   ```html
+   <img src="…" alt="…" style="max-width:100%;height:auto" />
    ```
-2. `<img src>` im Card auf `${PRESSURE_MAP_URL}?v=${bust}` umstellen.
-3. WordPress-Einbettung (`embedUrlForWordpress`) als Default ebenfalls auf die Proxy-URL umstellen — aber als **absolute** URL über `window.location.origin` (bzw. die Published-Domain), damit das HTML auch ausserhalb der App funktioniert. Cyon-URL-Override bleibt unverändert.
+   Kein blauer Rand. Wenn du den alten Code trotzdem siehst, hängt das an einem veralteten Build im Preview/Live.
 
-Keine Änderungen an der Route, am Bucket, an Generator/GitHub Action oder am Backend.
+2. **Hard-Reload erzwingen**: Cache-Buster im generierten String ergänzen oder einen Kommentar einfügen, damit Vite/HMR die Datei garantiert neu auswertet. Falls nötig, Dev-Server neu starten.
 
-## Verifikation
+3. **Falls gewünscht**: Den Embed-Code zusätzlich um `loading="lazy"` und `decoding="async"` ergänzen (klein, optional).
 
-- Vorschau auf `/settings` öffnen → Bodendruckkarte muss wieder sichtbar sein.
-- Im generierten Einbettungs-HTML steht eine absolute URL auf `…/api/public/maps/europe-pressure-latest.svg`.
+4. **Publish**: Nach Verifikation im Preview erneut publishen, damit `oberthurgauerwetter2026.lovable.app/settings` den neuen Code zeigt.
+
+## Bitte vorab kurz bestätigen
+Schick mir bitte den **exakten Text**, der bei dir aktuell im Textfeld „Einbettungs-HTML" steht (Copy-Paste). Damit kann ich sicher unterscheiden zwischen:
+- veraltetem Build (Code im Repo ist schon korrekt → nur Republish nötig), oder
+- tatsächlich noch vorhandenem alten Markup an einer anderen Stelle, die ich übersehe.
+
+Sobald ich den Text habe, setze ich die Änderung in einem Schritt um.
