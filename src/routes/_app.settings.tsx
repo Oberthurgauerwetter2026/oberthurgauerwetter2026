@@ -686,7 +686,8 @@ function PressureMapCard({ session }: { session: any }) {
   }, [cyonUrl]);
 
   const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
-  const embedUrlForWordpress = cyonUrl.trim() || SUPABASE_MAP_URL;
+  const absoluteMapUrl = typeof window !== "undefined" ? `${window.location.origin}${PRESSURE_MAP_PATH}` : PRESSURE_MAP_PATH;
+  const embedUrlForWordpress = cyonUrl.trim() || absoluteMapUrl;
   const html = `<img src="${embedUrlForWordpress}" alt="${altText}" style="max-width:100%;height:auto" />`;
 
   return (
