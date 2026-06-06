@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 const DWD_URL =
-  "https://www.dwd.de/DWD/wetter/wv_allg/europa/bilder/bwk_bodendruck_na_ana.png";
+  "https://www.dwd.de/DWD/wetter/wv_spez/hobbymet/wetterkarten/bwk_bodendruck_na_ana.png";
 
 export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
   server: {
