@@ -740,6 +740,50 @@ function PressureMapCard({ session }: { session: any }) {
             Diese URL liefert die jeweils aktuelle SVG-Karte. Direkt verlinken oder als <code className="font-mono">&lt;img src="…"&gt;</code> einbinden.
           </p>
         </div>
+
+        <div className="space-y-2 pt-4 border-t">
+          <Label className="text-sm font-medium">Offizielle DWD-Bodenanalyse (mit Fronten)</Label>
+          <div className="rounded border bg-muted/30 p-2">
+            <img
+              src={`/api/public/maps/dwd-bodenanalyse.png?v=${bust}`}
+              alt="DWD Bodenanalyse Europa/Nordatlantik mit Fronten und H/T-Symbolen"
+              className="w-full h-auto"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Quelle:{" "}
+            <a
+              href="https://www.dwd.de/DE/leistungen/bodenanalyse/bodenanalyse.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              Deutscher Wetterdienst
+            </a>{" "}
+            (Nutzung gemäß{" "}
+            <a
+              href="https://www.dwd.de/DE/service/copyright/copyright_node.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              GeoNutzV
+            </a>
+            ). Offizielle Analyse mit Fronten – ergänzt unsere modellbasierte Isobarenkarte oben (ICON/ECMWF/GFS).
+          </p>
+          <Label className="text-xs">Öffentliche Bild-URL DWD-Analyse</Label>
+          <div className="flex gap-2">
+            <Input
+              readOnly
+              value={dwdMapUrl}
+              className="font-mono text-xs"
+              onFocus={(e) => e.currentTarget.select()}
+            />
+            <Button type="button" variant="outline" onClick={copyDwdUrl}>
+              Kopieren
+            </Button>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
