@@ -659,8 +659,7 @@ function SettingsPage() {
   );
 }
 
-const SUPABASE_MAP_URL =
-  "https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg";
+const PRESSURE_MAP_PATH = "/api/public/maps/europe-pressure-latest.svg";
 
 function PressureMapCard({ session }: { session: any }) {
   const [status, setStatus] = useState<{ enabled: boolean; lastRun: string | null; lastStatus: string | null; embedUrl: string } | null>(null);
