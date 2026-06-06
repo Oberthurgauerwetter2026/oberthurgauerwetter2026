@@ -725,7 +725,7 @@ function PressureMapCard({ session }: { session: any }) {
 
         <div className="rounded border bg-muted/30 p-2">
           <img
-            src={`${SUPABASE_MAP_URL}?v=${bust}`}
+            src={`${PRESSURE_MAP_PATH}?v=${bust}`}
             alt={altText}
             className="w-full h-auto"
           />
