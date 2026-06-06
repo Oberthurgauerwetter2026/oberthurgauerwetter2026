@@ -751,7 +751,7 @@ function PressureMapCard({ session }: { session: any }) {
               className="font-mono text-xs"
             />
             <p className="text-xs text-muted-foreground">
-              Leer lassen, um direkt von Lovable Cloud zu laden (funktioniert auch, ist aber von Lovable abhängig).
+              Leer lassen, um direkt über die öffentliche App-URL auszuliefern (Proxy auf den privaten Storage).
             </p>
           </div>
         </div>
