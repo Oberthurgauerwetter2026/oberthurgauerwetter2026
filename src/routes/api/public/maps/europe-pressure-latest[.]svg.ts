@@ -1,21 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-const STORAGE_URL =
-  "https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg";
-
 export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.svg")({
   server: {
     handlers: {
       GET: async () => {
         try {
-          const upstream = await fetch(STORAGE_URL);
-          if (!upstream.ok) {
-            return new Response(`Upstream ${upstream.status}`, {
+          const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+          const { data, error } = await supabaseAdmin.storage
+            .from("weather-maps")
+            .download("europe-pressure-latest.svg");
+          if (error || !data) {
+            return new Response(`Upstream error: ${error?.message ?? "no data"}`, {
               status: 502,
               headers: { "Access-Control-Allow-Origin": "*" },
             });
           }
-          const body = await upstream.arrayBuffer();
+          const body = await data.arrayBuffer();
           return new Response(body, {
             status: 200,
             headers: {
