@@ -777,8 +777,7 @@ export async function generatePressureMap(): Promise<{ url: string; targetUtc: s
     const lastStatus = settings?.pressure_map_last_status ?? "";
     if (/^OK\b/i.test(lastStatus) && lastStatus.includes(targetDay)) {
       console.log(`[pressure-map] Skip — already up-to-date for ${targetDay}`);
-      const supabaseUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
-      const url = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/weather-maps/europe-pressure-latest.svg`;
+      const url = `/api/public/maps/europe-pressure-latest.svg`;
       return { url, targetUtc: targetUtcIso, bytes: 0, skipped: true };
     }
   } catch (e) {
@@ -850,7 +849,6 @@ export async function generatePressureMap(): Promise<{ url: string; targetUtc: s
     if (error) throw new Error(`Upload ${path} fehlgeschlagen: ${error.message}`);
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
-  const url = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/weather-maps/${latestPath}`;
+  const url = `/api/public/maps/europe-pressure-latest.svg`;
   return { url, targetUtc: usedTarget, bytes: bytes.length, source: usedLabel };
 }
