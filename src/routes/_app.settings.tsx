@@ -659,8 +659,7 @@ function SettingsPage() {
   );
 }
 
-const SUPABASE_MAP_URL =
-  "https://kdolnotjbhgjieznmpgf.supabase.co/storage/v1/object/public/weather-maps/europe-pressure-latest.svg";
+const PRESSURE_MAP_PATH = "/api/public/maps/europe-pressure-latest.svg";
 
 function PressureMapCard({ session }: { session: any }) {
   const [status, setStatus] = useState<{ enabled: boolean; lastRun: string | null; lastStatus: string | null; embedUrl: string } | null>(null);
@@ -687,7 +686,8 @@ function PressureMapCard({ session }: { session: any }) {
   }, [cyonUrl]);
 
   const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
-  const embedUrlForWordpress = cyonUrl.trim() || SUPABASE_MAP_URL;
+  const absoluteMapUrl = typeof window !== "undefined" ? `${window.location.origin}${PRESSURE_MAP_PATH}` : PRESSURE_MAP_PATH;
+  const embedUrlForWordpress = cyonUrl.trim() || absoluteMapUrl;
   const html = `<img src="${embedUrlForWordpress}" alt="${altText}" style="max-width:100%;height:auto" />`;
 
   return (
@@ -725,7 +725,7 @@ function PressureMapCard({ session }: { session: any }) {
 
         <div className="rounded border bg-muted/30 p-2">
           <img
-            src={`${SUPABASE_MAP_URL}?v=${bust}`}
+            src={`${PRESSURE_MAP_PATH}?v=${bust}`}
             alt={altText}
             className="w-full h-auto"
           />
