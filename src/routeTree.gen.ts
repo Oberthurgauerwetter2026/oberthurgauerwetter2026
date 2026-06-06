@@ -21,6 +21,7 @@ import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppForecastForecastIdRouteImport } from './routes/_app.forecast.$forecastId'
 import { Route as ApiPublicMapsEuropePressureLatestDotsvgRouteImport } from './routes/api/public/maps/europe-pressure-latest[.]svg'
+import { Route as ApiPublicMapsDwdBodenanalyseDotpngRouteImport } from './routes/api/public/maps/dwd-bodenanalyse[.]png'
 import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
 import { Route as ApiPublicDebugR2CacheRouteImport } from './routes/api/public/debug/r2-cache'
 
@@ -84,6 +85,12 @@ const ApiPublicMapsEuropePressureLatestDotsvgRoute =
     path: '/api/public/maps/europe-pressure-latest.svg',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicMapsDwdBodenanalyseDotpngRoute =
+  ApiPublicMapsDwdBodenanalyseDotpngRouteImport.update({
+    id: '/api/public/maps/dwd-bodenanalyse.png',
+    path: '/api/public/maps/dwd-bodenanalyse.png',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksGeneratePressureMapRoute =
   ApiPublicHooksGeneratePressureMapRouteImport.update({
     id: '/api/public/hooks/generate-pressure-map',
@@ -109,6 +116,7 @@ export interface FileRoutesByFullPath {
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/debug/r2-cache': typeof ApiPublicDebugR2CacheRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
+  '/api/public/maps/dwd-bodenanalyse.png': typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 export interface FileRoutesByTo {
@@ -124,6 +132,7 @@ export interface FileRoutesByTo {
   '/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/debug/r2-cache': typeof ApiPublicDebugR2CacheRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
+  '/api/public/maps/dwd-bodenanalyse.png': typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 export interface FileRoutesById {
@@ -141,6 +150,7 @@ export interface FileRoutesById {
   '/_app/forecast/$forecastId': typeof AppForecastForecastIdRoute
   '/api/public/debug/r2-cache': typeof ApiPublicDebugR2CacheRoute
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
+  '/api/public/maps/dwd-bodenanalyse.png': typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 export interface FileRouteTypes {
@@ -158,6 +168,7 @@ export interface FileRouteTypes {
     | '/forecast/$forecastId'
     | '/api/public/debug/r2-cache'
     | '/api/public/hooks/generate-pressure-map'
+    | '/api/public/maps/dwd-bodenanalyse.png'
     | '/api/public/maps/europe-pressure-latest.svg'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -173,6 +184,7 @@ export interface FileRouteTypes {
     | '/forecast/$forecastId'
     | '/api/public/debug/r2-cache'
     | '/api/public/hooks/generate-pressure-map'
+    | '/api/public/maps/dwd-bodenanalyse.png'
     | '/api/public/maps/europe-pressure-latest.svg'
   id:
     | '__root__'
@@ -189,6 +201,7 @@ export interface FileRouteTypes {
     | '/_app/forecast/$forecastId'
     | '/api/public/debug/r2-cache'
     | '/api/public/hooks/generate-pressure-map'
+    | '/api/public/maps/dwd-bodenanalyse.png'
     | '/api/public/maps/europe-pressure-latest.svg'
   fileRoutesById: FileRoutesById
 }
@@ -202,6 +215,7 @@ export interface RootRouteChildren {
   HooksDailyForecastRoute: typeof HooksDailyForecastRoute
   ApiPublicDebugR2CacheRoute: typeof ApiPublicDebugR2CacheRoute
   ApiPublicHooksGeneratePressureMapRoute: typeof ApiPublicHooksGeneratePressureMapRoute
+  ApiPublicMapsDwdBodenanalyseDotpngRoute: typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   ApiPublicMapsEuropePressureLatestDotsvgRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
 }
 
@@ -291,6 +305,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/maps/dwd-bodenanalyse.png': {
+      id: '/api/public/maps/dwd-bodenanalyse.png'
+      path: '/api/public/maps/dwd-bodenanalyse.png'
+      fullPath: '/api/public/maps/dwd-bodenanalyse.png'
+      preLoaderRoute: typeof ApiPublicMapsDwdBodenanalyseDotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/generate-pressure-map': {
       id: '/api/public/hooks/generate-pressure-map'
       path: '/api/public/hooks/generate-pressure-map'
@@ -335,6 +356,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicDebugR2CacheRoute: ApiPublicDebugR2CacheRoute,
   ApiPublicHooksGeneratePressureMapRoute:
     ApiPublicHooksGeneratePressureMapRoute,
+  ApiPublicMapsDwdBodenanalyseDotpngRoute:
+    ApiPublicMapsDwdBodenanalyseDotpngRoute,
   ApiPublicMapsEuropePressureLatestDotsvgRoute:
     ApiPublicMapsEuropePressureLatestDotsvgRoute,
 }
