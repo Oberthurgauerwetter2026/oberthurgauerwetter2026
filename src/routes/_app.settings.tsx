@@ -679,11 +679,23 @@ function PressureMapCard({ session }: { session: any }) {
   const publicMapUrl = typeof window !== "undefined"
     ? `${window.location.origin}${PRESSURE_MAP_PATH}`
     : `https://oberthurgauerwetter2026.lovable.app${PRESSURE_MAP_PATH}`;
+  const dwdMapUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/api/public/maps/dwd-bodenanalyse.png`
+    : `https://oberthurgauerwetter2026.lovable.app/api/public/maps/dwd-bodenanalyse.png`;
 
   async function copyUrl() {
     try {
       await navigator.clipboard.writeText(publicMapUrl);
       toast.success("URL kopiert");
+    } catch {
+      toast.error("Kopieren fehlgeschlagen");
+    }
+  }
+
+  async function copyDwdUrl() {
+    try {
+      await navigator.clipboard.writeText(dwdMapUrl);
+      toast.success("DWD-URL kopiert");
     } catch {
       toast.error("Kopieren fehlgeschlagen");
     }
