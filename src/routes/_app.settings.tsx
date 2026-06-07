@@ -732,7 +732,7 @@ function PressureMapCard({ session }: { session: any }) {
 
         <div className="rounded border bg-muted/30 p-2">
           <img
-            src={`${PRESSURE_MAP_PATH}?v=${bust}`}
+            src={`${publicMapUrl}?v=${bust}`}
             alt={altText}
             className="w-full h-auto"
           />
@@ -758,7 +758,7 @@ function PressureMapCard({ session }: { session: any }) {
           <Label className="text-sm font-medium">Offizielle DWD-Bodenanalyse (mit Fronten)</Label>
           <div className="rounded border bg-muted/30 p-2">
             <img
-              src={`/api/public/maps/dwd-bodenanalyse.png?v=${bust}`}
+              src={`${dwdMapUrl}?v=${bust}`}
               alt="DWD Bodenanalyse Europa/Nordatlantik mit Fronten und H/T-Symbolen"
               className="w-full h-auto"
             />
