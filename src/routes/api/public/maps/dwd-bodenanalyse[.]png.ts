@@ -16,15 +16,31 @@ export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
           const { supabaseAdmin } = await import(
             "@/integrations/supabase/client.server"
           );
-          const { DWD_STORAGE_BUCKET, DWD_STORAGE_PATH } = await import(
+          const { DWD_STORAGE_BUCKET, DWD_STORAGE_PATH, refreshDwdBodenanalyse } = await import(
             "@/server/dwd-bodenanalyse.server"
           );
-          const { data, error } = await supabaseAdmin.storage
+          let { data, error } = await supabaseAdmin.storage
             .from(DWD_STORAGE_BUCKET)
             .download(DWD_STORAGE_PATH);
           if (error || !data) {
+            // Lazy-Refresh, falls noch nie gespeichert (z. B. direkt nach Deploy).
+            try {
+              await refreshDwdBodenanalyse();
+              const retry = await supabaseAdmin.storage
+                .from(DWD_STORAGE_BUCKET)
+                .download(DWD_STORAGE_PATH);
+              data = retry.data;
+              error = retry.error;
+            } catch (e: any) {
+              return new Response(
+                `DWD-Karte nicht verfügbar: ${e?.message ?? String(e)}`,
+                { status: 502, headers: { ...CORS } },
+              );
+            }
+          }
+          if (error || !data) {
             return new Response(
-              `DWD-Karte noch nicht verfügbar: ${error?.message ?? "no data"}`,
+              `DWD-Karte nicht verfügbar: ${error?.message ?? "no data"}`,
               { status: 502, headers: { ...CORS } },
             );
           }
