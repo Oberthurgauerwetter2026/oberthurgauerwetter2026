@@ -744,8 +744,13 @@ function PressureMapCard({ session }: { session: any }) {
             <Input readOnly value={publicMapUrl} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
             <Button type="button" variant="outline" onClick={copyUrl}>Kopieren</Button>
           </div>
+          <Label className="text-xs pt-2 block">HTML-Einbindecode</Label>
+          <div className="flex gap-2">
+            <Textarea readOnly value={pressureEmbed} rows={2} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            <Button type="button" variant="outline" onClick={copyPressureEmbed}>Kopieren</Button>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Dauerhaft gültige URL – aktualisiert sich automatisch beim nächsten Karten-Lauf. Direkt verlinken oder als <code className="font-mono">&lt;img src="…"&gt;</code> einbinden.
+            Dauerhaft gültige URL – aktualisiert sich automatisch beim nächsten Karten-Lauf.
           </p>
         </div>
 
