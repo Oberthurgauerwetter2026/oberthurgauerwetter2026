@@ -11,37 +11,33 @@ export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
   server: {
     handlers: {
       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
+      HEAD: async () =>
+        new Response(null, {
+          status: 200,
+          headers: {
+            "Content-Type": "image/png",
+            "Cache-Control": "public, max-age=900, s-maxage=900",
+            ...CORS,
+          },
+        }),
       GET: async () => {
         try {
           const { supabaseAdmin } = await import(
             "@/integrations/supabase/client.server"
           );
-          const { DWD_STORAGE_BUCKET, DWD_STORAGE_PATH, refreshDwdBodenanalyse } = await import(
+          const { DWD_STORAGE_BUCKET, DWD_STORAGE_PATH } = await import(
             "@/server/dwd-bodenanalyse.server"
           );
-          let { data, error } = await supabaseAdmin.storage
+          const { data, error } = await supabaseAdmin.storage
             .from(DWD_STORAGE_BUCKET)
             .download(DWD_STORAGE_PATH);
           if (error || !data) {
-            // Lazy-Refresh, falls noch nie gespeichert (z. B. direkt nach Deploy).
-            try {
-              await refreshDwdBodenanalyse();
-              const retry = await supabaseAdmin.storage
-                .from(DWD_STORAGE_BUCKET)
-                .download(DWD_STORAGE_PATH);
-              data = retry.data;
-              error = retry.error;
-            } catch (e: any) {
-              return new Response(
-                `DWD-Karte nicht verfügbar: ${e?.message ?? String(e)}`,
-                { status: 502, headers: { ...CORS } },
-              );
-            }
-          }
-          if (error || !data) {
             return new Response(
               `DWD-Karte nicht verfügbar: ${error?.message ?? "no data"}`,
-              { status: 502, headers: { ...CORS } },
+              {
+                status: 404,
+                headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS },
+              },
             );
           }
           const body = await data.arrayBuffer();
