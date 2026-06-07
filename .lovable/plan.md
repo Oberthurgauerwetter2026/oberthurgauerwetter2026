@@ -1,35 +1,22 @@
-## Ziel
-Auf der Bodendruckkarten-Ansicht zusätzlich die offizielle DWD-Bodenanalyse (inkl. Fronten, H/T-Symbole) anzeigen. Rechtlich sauber über die DWD-GeoNutzV mit sichtbarer Quellenangabe „Quelle: Deutscher Wetterdienst".
+## Problem
+In `src/routes/_app.settings.tsx` (PressureMapCard) werden die Embed-URLs für die Bodendruckkarte und die DWD-Analyse aus `window.location.origin` gebaut. Auf der Preview ergibt das `https://id-preview--…lovable.app/…` — eine Preview-URL, die nicht zum dauerhaften Einbetten taugt (kann sich ändern, ist nicht öffentlich gemeint).
 
-## Hintergrund
-Der DWD stellt die Europa-Bodenanalyse als PNG bereit:
-`https://www.dwd.de/DWD/wetter/wv_allg/europa/bilder/bwk_bodendruck_na_ana.png`
-Nutzung ist gemäß **GeoNutzV** frei, sofern Quelle genannt wird. Wir generieren weiterhin unsere eigene SVG (Isobaren/Modelldaten); die DWD-Karte kommt als **eigenständige zweite Ansicht** dazu – kein Overlay, da Projektion/Ausschnitt nicht exakt passen.
+## Lösung
+Die zum Kopieren angezeigten URLs hart auf die stabile, veröffentlichte Domain setzen — unabhängig davon, ob die Settings-Seite gerade auf Preview oder Live geöffnet ist.
 
-## Änderungen
+Verwendete Basis-Domain (stabil, ändert sich nicht bei Umbenennung):
+`https://oberthurgauerwetter2026.lovable.app`
 
-1. **Neuer Proxy-Endpoint `src/routes/api/public/maps/dwd-bodenanalyse[.]png.ts`**
-   - Fetcht die DWD-PNG serverseitig (vermeidet CORS / Hotlink-Probleme).
-   - Cached die Antwort kurz im Memory/Cache-Header (z. B. 15 min `s-maxage`).
-   - Setzt `Content-Type: image/png` und `Cache-Control: public, max-age=900`.
-   - Bei Fehler des Upstreams: 502 mit kurzer Meldung.
+(Alternativ wäre `https://project--e38eb7cd-9a65-493a-b3eb-f8b0eb5a851d.lovable.app` ebenfalls stabil; die published Domain ist aber kürzer und für Nutzer/WordPress klarer.)
 
-2. **Anzeige in der App** (dort wo aktuell die Modell-SVG gezeigt wird, z. B. Dashboard-/Forecast-Karte)
-   - Unter/neben der bestehenden Modellkarte ein zweites Bild:
-     `<img src="/api/public/maps/dwd-bodenanalyse.png" alt="DWD Bodenanalyse Europa mit Fronten" />`
-   - Darunter Pflicht-Quellenangabe als sichtbarer Text + Link:
-     „Quelle: [Deutscher Wetterdienst](https://www.dwd.de) (GeoNutzV)".
-   - Kurzer Hinweis: „Offizielle DWD-Analyse mit Fronten. Unsere Isobarenkarte oben basiert auf Modelldaten (ICON/ECMWF/GFS)."
+## Änderungen in `src/routes/_app.settings.tsx`
+1. Konstante `PUBLIC_BASE = "https://oberthurgauerwetter2026.lovable.app"` einführen.
+2. `publicMapUrl` = `${PUBLIC_BASE}/api/public/maps/europe-pressure-latest.svg` (kein `window.location.origin` mehr).
+3. `dwdMapUrl` = `${PUBLIC_BASE}/api/public/maps/dwd-bodenanalyse.png`.
+4. Die `<img>`-Previews in der Card weiterhin mit relativem Pfad + `?v=${bust}` laden (damit die Vorschau in der aktuellen Umgebung — Preview oder Live — funktioniert). Nur die in den Input-Feldern angezeigten / kopierten URLs sind hartcodiert stabil.
+5. Kurzer Hinweis-Text unter beiden URLs: „Dauerhaft gültige URL — aktualisiert sich automatisch beim nächsten Karten-Lauf."
 
-3. **Einstellungs-Seite**
-   - In der Druckkarten-Card zusätzlich die neue DWD-URL anzeigen + Copy-Button:
-     `https://oberthurgauerwetter2026.lovable.app/api/public/maps/dwd-bodenanalyse.png`
-   - Keine Änderungen am bestehenden eigenen Generator.
-
-## Bewusst NICHT enthalten
-- Kein Overlay über unsere SVG (Projektion passt nicht).
-- Keine Fronten-Extraktion aus dem DWD-Bild (zu fehleranfällig).
-- Kein Hotlink direkt aus dem Browser auf dwd.de (Proxy ist sauberer und cachebar).
-
-## Ergebnis
-Nutzer sehen weiterhin die eigene Modell-Druckkarte und darunter die offizielle DWD-Bodenanalyse mit Fronten, korrekt als DWD-Quelle ausgewiesen.
+## Bewusst nicht enthalten
+- Keine Änderung an den Proxy-/SVG-Endpunkten selbst.
+- Keine Änderung der Vorschau-Bilder in der Card (die sollen die jeweilige Umgebung zeigen).
+- Keine zusätzliche Settings-Option für die Basis-URL (Single-Tenant-App, Domain ist fix).
