@@ -659,7 +659,9 @@ function SettingsPage() {
   );
 }
 
+const PUBLIC_BASE = "https://oberthurgauerwetter2026.lovable.app";
 const PRESSURE_MAP_PATH = "/api/public/maps/europe-pressure-latest.svg";
+const DWD_MAP_PATH = "/api/public/maps/dwd-bodenanalyse.png";
 
 function PressureMapCard({ session }: { session: any }) {
   const [status, setStatus] = useState<{ enabled: boolean; lastRun: string | null; lastStatus: string | null; embedUrl: string } | null>(null);
@@ -676,12 +678,8 @@ function PressureMapCard({ session }: { session: any }) {
   useEffect(() => { load(); }, [session]);
 
   const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
-  const publicMapUrl = typeof window !== "undefined"
-    ? `${window.location.origin}${PRESSURE_MAP_PATH}`
-    : `https://oberthurgauerwetter2026.lovable.app${PRESSURE_MAP_PATH}`;
-  const dwdMapUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api/public/maps/dwd-bodenanalyse.png`
-    : `https://oberthurgauerwetter2026.lovable.app/api/public/maps/dwd-bodenanalyse.png`;
+  const publicMapUrl = `${PUBLIC_BASE}${PRESSURE_MAP_PATH}`;
+  const dwdMapUrl = `${PUBLIC_BASE}${DWD_MAP_PATH}`;
 
   async function copyUrl() {
     try {
@@ -749,7 +747,7 @@ function PressureMapCard({ session }: { session: any }) {
             <Button type="button" variant="outline" onClick={copyUrl}>Kopieren</Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Diese URL liefert die jeweils aktuelle SVG-Karte. Direkt verlinken oder als <code className="font-mono">&lt;img src="…"&gt;</code> einbinden.
+            Dauerhaft gültige URL – aktualisiert sich automatisch beim nächsten Karten-Lauf. Direkt verlinken oder als <code className="font-mono">&lt;img src="…"&gt;</code> einbinden.
           </p>
         </div>
 
@@ -795,6 +793,9 @@ function PressureMapCard({ session }: { session: any }) {
               Kopieren
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Dauerhaft gültige URL – liefert immer die aktuellste DWD-Bodenanalyse (Cache 15 min).
+          </p>
         </div>
       </CardContent>
     </Card>
