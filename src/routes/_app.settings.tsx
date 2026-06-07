@@ -796,6 +796,11 @@ function PressureMapCard({ session }: { session: any }) {
               Kopieren
             </Button>
           </div>
+          <Label className="text-xs pt-2 block">HTML-Einbindecode DWD</Label>
+          <div className="flex gap-2">
+            <Textarea readOnly value={dwdEmbed} rows={2} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            <Button type="button" variant="outline" onClick={copyDwdEmbed}>Kopieren</Button>
+          </div>
           <p className="text-xs text-muted-foreground">
             Dauerhaft gültige URL – liefert immer die aktuellste DWD-Bodenanalyse (Cache 15 min).
           </p>
