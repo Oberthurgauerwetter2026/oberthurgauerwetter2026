@@ -681,23 +681,21 @@ function PressureMapCard({ session }: { session: any }) {
   const publicMapUrl = `${PUBLIC_BASE}${PRESSURE_MAP_PATH}`;
   const dwdMapUrl = `${PUBLIC_BASE}${DWD_MAP_PATH}`;
 
-  async function copyUrl() {
-    try {
-      await navigator.clipboard.writeText(publicMapUrl);
-      toast.success("URL kopiert");
-    } catch {
-      toast.error("Kopieren fehlgeschlagen");
-    }
-  }
+  const pressureEmbed = `<img src="${publicMapUrl}" alt="${altText}" loading="lazy" style="width:100%;height:auto" />`;
+  const dwdEmbed = `<img src="${dwdMapUrl}" alt="DWD Bodenanalyse Europa/Nordatlantik mit Fronten (Quelle: Deutscher Wetterdienst, GeoNutzV)" loading="lazy" style="width:100%;height:auto" />`;
 
-  async function copyDwdUrl() {
+  async function copyText(text: string, label: string) {
     try {
-      await navigator.clipboard.writeText(dwdMapUrl);
-      toast.success("DWD-URL kopiert");
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} kopiert`);
     } catch {
       toast.error("Kopieren fehlgeschlagen");
     }
   }
+  const copyUrl = () => copyText(publicMapUrl, "URL");
+  const copyDwdUrl = () => copyText(dwdMapUrl, "DWD-URL");
+  const copyPressureEmbed = () => copyText(pressureEmbed, "Einbindecode");
+  const copyDwdEmbed = () => copyText(dwdEmbed, "DWD-Einbindecode");
 
   return (
     <Card>
