@@ -747,7 +747,7 @@ function PressureMapCard({ session }: { session: any }) {
             <Button type="button" variant="outline" onClick={copyUrl}>Kopieren</Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Diese URL liefert die jeweils aktuelle SVG-Karte. Direkt verlinken oder als <code className="font-mono">&lt;img src="…"&gt;</code> einbinden.
+            Dauerhaft gültige URL – aktualisiert sich automatisch beim nächsten Karten-Lauf. Direkt verlinken oder als <code className="font-mono">&lt;img src="…"&gt;</code> einbinden.
           </p>
         </div>
 
