@@ -1,22 +1,26 @@
-## Problem
-In `src/routes/_app.settings.tsx` (PressureMapCard) werden die Embed-URLs für die Bodendruckkarte und die DWD-Analyse aus `window.location.origin` gebaut. Auf der Preview ergibt das `https://id-preview--…lovable.app/…` — eine Preview-URL, die nicht zum dauerhaften Einbetten taugt (kann sich ändern, ist nicht öffentlich gemeint).
+## Ziel
+Die Einbindecodes sollen außerhalb der Preview zuverlässig funktionieren und dauerhaft auf die veröffentlichte App zeigen.
 
-## Lösung
-Die zum Kopieren angezeigten URLs hart auf die stabile, veröffentlichte Domain setzen — unabhängig davon, ob die Settings-Seite gerade auf Preview oder Live geöffnet ist.
+## Plan
+1. **URLs korrigieren**
+   - Die angezeigten Bild-URLs bleiben dauerhaft auf `https://oberthurgauerwetter2026.lovable.app`.
+   - Zusätzlich werden echte HTML-Einbindecodes angezeigt, nicht nur reine Bild-URLs.
 
-Verwendete Basis-Domain (stabil, ändert sich nicht bei Umbenennung):
-`https://oberthurgauerwetter2026.lovable.app`
+2. **CORS/Preflight absichern**
+   - Für beide öffentlichen Karten-Endpunkte wird ein `OPTIONS`-Handler ergänzt.
+   - Alle Antworten bekommen vollständige CORS-Header, damit WordPress/externe Seiten die Bilder laden können.
 
-(Alternativ wäre `https://project--e38eb7cd-9a65-493a-b3eb-f8b0eb5a851d.lovable.app` ebenfalls stabil; die published Domain ist aber kürzer und für Nutzer/WordPress klarer.)
+3. **DWD-Code robuster machen**
+   - Der DWD-Endpunkt bleibt ein öffentlicher Proxy auf die aktuelle DWD-Bodenanalyse.
+   - Fehlerantworten enthalten weiterhin keine sensiblen Details, aber genug Hinweis für Diagnose.
 
-## Änderungen in `src/routes/_app.settings.tsx`
-1. Konstante `PUBLIC_BASE = "https://oberthurgauerwetter2026.lovable.app"` einführen.
-2. `publicMapUrl` = `${PUBLIC_BASE}/api/public/maps/europe-pressure-latest.svg` (kein `window.location.origin` mehr).
-3. `dwdMapUrl` = `${PUBLIC_BASE}/api/public/maps/dwd-bodenanalyse.png`.
-4. Die `<img>`-Previews in der Card weiterhin mit relativem Pfad + `?v=${bust}` laden (damit die Vorschau in der aktuellen Umgebung — Preview oder Live — funktioniert). Nur die in den Input-Feldern angezeigten / kopierten URLs sind hartcodiert stabil.
-5. Kurzer Hinweis-Text unter beiden URLs: „Dauerhaft gültige URL — aktualisiert sich automatisch beim nächsten Karten-Lauf."
+4. **Einstellungsseite verbessern**
+   - Pro Karte gibt es dann:
+     - dauerhafte Bild-URL
+     - kopierbaren `<img ...>` Einbindecode
+     - kurze Quellenangabe/Alt-Text im Code
 
-## Bewusst nicht enthalten
-- Keine Änderung an den Proxy-/SVG-Endpunkten selbst.
-- Keine Änderung der Vorschau-Bilder in der Card (die sollen die jeweilige Umgebung zeigen).
-- Keine zusätzliche Settings-Option für die Basis-URL (Single-Tenant-App, Domain ist fix).
+## Nicht enthalten
+- Keine Änderung am Karten-Generator selbst.
+- Keine Datenbankänderung.
+- Keine Änderung an der Preview-Darstellung der Bilder in den Einstellungen.

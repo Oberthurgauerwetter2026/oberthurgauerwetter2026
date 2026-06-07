@@ -681,23 +681,21 @@ function PressureMapCard({ session }: { session: any }) {
   const publicMapUrl = `${PUBLIC_BASE}${PRESSURE_MAP_PATH}`;
   const dwdMapUrl = `${PUBLIC_BASE}${DWD_MAP_PATH}`;
 
-  async function copyUrl() {
-    try {
-      await navigator.clipboard.writeText(publicMapUrl);
-      toast.success("URL kopiert");
-    } catch {
-      toast.error("Kopieren fehlgeschlagen");
-    }
-  }
+  const pressureEmbed = `<img src="${publicMapUrl}" alt="${altText}" loading="lazy" style="width:100%;height:auto" />`;
+  const dwdEmbed = `<img src="${dwdMapUrl}" alt="DWD Bodenanalyse Europa/Nordatlantik mit Fronten (Quelle: Deutscher Wetterdienst, GeoNutzV)" loading="lazy" style="width:100%;height:auto" />`;
 
-  async function copyDwdUrl() {
+  async function copyText(text: string, label: string) {
     try {
-      await navigator.clipboard.writeText(dwdMapUrl);
-      toast.success("DWD-URL kopiert");
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} kopiert`);
     } catch {
       toast.error("Kopieren fehlgeschlagen");
     }
   }
+  const copyUrl = () => copyText(publicMapUrl, "URL");
+  const copyDwdUrl = () => copyText(dwdMapUrl, "DWD-URL");
+  const copyPressureEmbed = () => copyText(pressureEmbed, "Einbindecode");
+  const copyDwdEmbed = () => copyText(dwdEmbed, "DWD-Einbindecode");
 
   return (
     <Card>
@@ -746,8 +744,13 @@ function PressureMapCard({ session }: { session: any }) {
             <Input readOnly value={publicMapUrl} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
             <Button type="button" variant="outline" onClick={copyUrl}>Kopieren</Button>
           </div>
+          <Label className="text-xs pt-2 block">HTML-Einbindecode</Label>
+          <div className="flex gap-2">
+            <Textarea readOnly value={pressureEmbed} rows={2} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            <Button type="button" variant="outline" onClick={copyPressureEmbed}>Kopieren</Button>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Dauerhaft gültige URL – aktualisiert sich automatisch beim nächsten Karten-Lauf. Direkt verlinken oder als <code className="font-mono">&lt;img src="…"&gt;</code> einbinden.
+            Dauerhaft gültige URL – aktualisiert sich automatisch beim nächsten Karten-Lauf.
           </p>
         </div>
 
@@ -792,6 +795,11 @@ function PressureMapCard({ session }: { session: any }) {
             <Button type="button" variant="outline" onClick={copyDwdUrl}>
               Kopieren
             </Button>
+          </div>
+          <Label className="text-xs pt-2 block">HTML-Einbindecode DWD</Label>
+          <div className="flex gap-2">
+            <Textarea readOnly value={dwdEmbed} rows={2} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            <Button type="button" variant="outline" onClick={copyDwdEmbed}>Kopieren</Button>
           </div>
           <p className="text-xs text-muted-foreground">
             Dauerhaft gültige URL – liefert immer die aktuellste DWD-Bodenanalyse (Cache 15 min).

@@ -1,8 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Max-Age": "86400",
+} as const;
+
 export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.svg")({
   server: {
     handlers: {
+      OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
       GET: async () => {
         try {
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -12,7 +20,7 @@ export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.sv
           if (error || !data) {
             return new Response(`Upstream error: ${error?.message ?? "no data"}`, {
               status: 502,
-              headers: { "Access-Control-Allow-Origin": "*" },
+              headers: { ...CORS },
             });
           }
           const body = await data.arrayBuffer();
@@ -22,13 +30,13 @@ export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.sv
               "Content-Type": "image/svg+xml; charset=utf-8",
               "Content-Disposition": "inline",
               "Cache-Control": "public, max-age=300",
-              "Access-Control-Allow-Origin": "*",
+              ...CORS,
             },
           });
         } catch (e: any) {
           return new Response(`Proxy error: ${e?.message ?? String(e)}`, {
             status: 502,
-            headers: { "Access-Control-Allow-Origin": "*" },
+            headers: { ...CORS },
           });
         }
       },
