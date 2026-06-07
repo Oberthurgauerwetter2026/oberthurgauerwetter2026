@@ -29,9 +29,20 @@ export const Route = createFileRoute("/api/public/hooks/generate-pressure-map")(
         try {
           const result = await generatePressureMap();
           const usage = await omUsageToday();
+
+          // DWD-Bodenanalyse zusätzlich aktualisieren (best-effort, schlägt nicht den ganzen Run fehl)
+          let dwdNote = "";
+          try {
+            const { refreshDwdBodenanalyse } = await import("@/server/dwd-bodenanalyse.server");
+            const dwd = await refreshDwdBodenanalyse();
+            dwdNote = ` · DWD ${(dwd.bytes / 1024).toFixed(0)} KB`;
+          } catch (e: any) {
+            dwdNote = ` · DWD-Fehler: ${e?.message ?? String(e)}`;
+          }
+
           const status = result.skipped
-            ? `Skip (cron) · bereits aktuell für ${result.targetUtc} · OM heute: ${usage}`
-            : `OK (cron) · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB${result.source ? ` · ${result.source}` : ""} · OM heute: ${usage}`;
+            ? `Skip (cron) · bereits aktuell für ${result.targetUtc} · OM heute: ${usage}${dwdNote}`
+            : `OK (cron) · gültig ${result.targetUtc} UTC · ${(result.bytes / 1024).toFixed(1)} KB${result.source ? ` · ${result.source}` : ""} · OM heute: ${usage}${dwdNote}`;
           await supabaseAdmin
             .from("app_settings")
             .update({
