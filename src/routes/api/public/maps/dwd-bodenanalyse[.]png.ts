@@ -1,8 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-const DWD_URL =
-  "https://www.dwd.de/DWD/wetter/wv_spez/hobbymet/wetterkarten/bwk_bodendruck_na_ana.png";
-
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
@@ -16,21 +13,38 @@ export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
       GET: async () => {
         try {
-          const upstream = await fetch(DWD_URL, {
-            headers: {
-              "User-Agent":
-                "Mozilla/5.0 (compatible; oberthurgauerwetter2026/1.0; +https://oberthurgauerwetter2026.lovable.app)",
-              Accept: "image/png,image/*;q=0.8,*/*;q=0.5",
-              Referer: "https://www.dwd.de/",
-            },
-          });
-          if (!upstream.ok) {
-            return new Response(`Upstream DWD ${upstream.status}`, {
-              status: 502,
-              headers: { ...CORS },
-            });
+          const { supabaseAdmin } = await import(
+            "@/integrations/supabase/client.server"
+          );
+          const { DWD_STORAGE_BUCKET, DWD_STORAGE_PATH, refreshDwdBodenanalyse } = await import(
+            "@/server/dwd-bodenanalyse.server"
+          );
+          let { data, error } = await supabaseAdmin.storage
+            .from(DWD_STORAGE_BUCKET)
+            .download(DWD_STORAGE_PATH);
+          if (error || !data) {
+            // Lazy-Refresh, falls noch nie gespeichert (z. B. direkt nach Deploy).
+            try {
+              await refreshDwdBodenanalyse();
+              const retry = await supabaseAdmin.storage
+                .from(DWD_STORAGE_BUCKET)
+                .download(DWD_STORAGE_PATH);
+              data = retry.data;
+              error = retry.error;
+            } catch (e: any) {
+              return new Response(
+                `DWD-Karte nicht verfügbar: ${e?.message ?? String(e)}`,
+                { status: 502, headers: { ...CORS } },
+              );
+            }
           }
-          const body = await upstream.arrayBuffer();
+          if (error || !data) {
+            return new Response(
+              `DWD-Karte nicht verfügbar: ${error?.message ?? "no data"}`,
+              { status: 502, headers: { ...CORS } },
+            );
+          }
+          const body = await data.arrayBuffer();
           return new Response(body, {
             status: 200,
             headers: {
