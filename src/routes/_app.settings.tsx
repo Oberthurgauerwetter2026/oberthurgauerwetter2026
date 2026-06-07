@@ -793,6 +793,9 @@ function PressureMapCard({ session }: { session: any }) {
               Kopieren
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Dauerhaft gültige URL – liefert immer die aktuellste DWD-Bodenanalyse (Cache 15 min).
+          </p>
         </div>
       </CardContent>
     </Card>
