@@ -19,8 +19,9 @@ export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
           const upstream = await fetch(DWD_URL, {
             headers: {
               "User-Agent":
-                "oberthurgauerwetter2026/1.0 (+https://oberthurgauerwetter2026.lovable.app)",
+                "Mozilla/5.0 (compatible; oberthurgauerwetter2026/1.0; +https://oberthurgauerwetter2026.lovable.app)",
               Accept: "image/png,image/*;q=0.8,*/*;q=0.5",
+              Referer: "https://www.dwd.de/",
             },
           });
           if (!upstream.ok) {
