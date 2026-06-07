@@ -659,7 +659,9 @@ function SettingsPage() {
   );
 }
 
+const PUBLIC_BASE = "https://oberthurgauerwetter2026.lovable.app";
 const PRESSURE_MAP_PATH = "/api/public/maps/europe-pressure-latest.svg";
+const DWD_MAP_PATH = "/api/public/maps/dwd-bodenanalyse.png";
 
 function PressureMapCard({ session }: { session: any }) {
   const [status, setStatus] = useState<{ enabled: boolean; lastRun: string | null; lastStatus: string | null; embedUrl: string } | null>(null);
@@ -676,12 +678,8 @@ function PressureMapCard({ session }: { session: any }) {
   useEffect(() => { load(); }, [session]);
 
   const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
-  const publicMapUrl = typeof window !== "undefined"
-    ? `${window.location.origin}${PRESSURE_MAP_PATH}`
-    : `https://oberthurgauerwetter2026.lovable.app${PRESSURE_MAP_PATH}`;
-  const dwdMapUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api/public/maps/dwd-bodenanalyse.png`
-    : `https://oberthurgauerwetter2026.lovable.app/api/public/maps/dwd-bodenanalyse.png`;
+  const publicMapUrl = `${PUBLIC_BASE}${PRESSURE_MAP_PATH}`;
+  const dwdMapUrl = `${PUBLIC_BASE}${DWD_MAP_PATH}`;
 
   async function copyUrl() {
     try {
