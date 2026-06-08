@@ -7,28 +7,40 @@ const CORS = {
   "Access-Control-Max-Age": "86400",
 } as const;
 
+const BUCKET = "weather-maps";
+const PATH = "europe-pressure-latest.svg";
+// 1h signed URL — cache friendly, refreshed on each request.
+const SIGNED_TTL_SECONDS = 60 * 60;
+
 export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.svg")({
   server: {
     handlers: {
       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
+      HEAD: async () =>
+        new Response(null, {
+          status: 200,
+          headers: {
+            "Content-Type": "image/svg+xml; charset=utf-8",
+            "Cache-Control": "public, max-age=300",
+            ...CORS,
+          },
+        }),
       GET: async () => {
         try {
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
           const { data, error } = await supabaseAdmin.storage
-            .from("weather-maps")
-            .download("europe-pressure-latest.svg");
-          if (error || !data) {
-            return new Response(`Upstream error: ${error?.message ?? "no data"}`, {
-              status: 502,
-              headers: { ...CORS },
-            });
+            .from(BUCKET)
+            .createSignedUrl(PATH, SIGNED_TTL_SECONDS);
+          if (error || !data?.signedUrl) {
+            return new Response(
+              `Druckkarte nicht verfügbar: ${error?.message ?? "no signed url"}`,
+              { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS } },
+            );
           }
-          const body = await data.arrayBuffer();
-          return new Response(body, {
-            status: 200,
+          return new Response(null, {
+            status: 302,
             headers: {
-              "Content-Type": "image/svg+xml; charset=utf-8",
-              "Content-Disposition": "inline",
+              Location: data.signedUrl,
               "Cache-Control": "public, max-age=300",
               ...CORS,
             },
@@ -36,7 +48,7 @@ export const Route = createFileRoute("/api/public/maps/europe-pressure-latest.sv
         } catch (e: any) {
           return new Response(`Proxy error: ${e?.message ?? String(e)}`, {
             status: 502,
-            headers: { ...CORS },
+            headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS },
           });
         }
       },
