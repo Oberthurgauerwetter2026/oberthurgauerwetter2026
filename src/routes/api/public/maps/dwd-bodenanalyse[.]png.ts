@@ -7,6 +7,10 @@ const CORS = {
   "Access-Control-Max-Age": "86400",
 } as const;
 
+const BUCKET = "weather-maps";
+const PATH = "dwd-bodenanalyse-latest.png";
+const SIGNED_TTL_SECONDS = 60 * 60;
+
 export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
   server: {
     handlers: {
@@ -22,30 +26,20 @@ export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
         }),
       GET: async () => {
         try {
-          const { supabaseAdmin } = await import(
-            "@/integrations/supabase/client.server"
-          );
-          const { DWD_STORAGE_BUCKET, DWD_STORAGE_PATH } = await import(
-            "@/server/dwd-bodenanalyse.server"
-          );
+          const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
           const { data, error } = await supabaseAdmin.storage
-            .from(DWD_STORAGE_BUCKET)
-            .download(DWD_STORAGE_PATH);
-          if (error || !data) {
+            .from(BUCKET)
+            .createSignedUrl(PATH, SIGNED_TTL_SECONDS);
+          if (error || !data?.signedUrl) {
             return new Response(
-              `DWD-Karte nicht verfügbar: ${error?.message ?? "no data"}`,
-              {
-                status: 404,
-                headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS },
-              },
+              `DWD-Karte nicht verfügbar: ${error?.message ?? "no signed url"}`,
+              { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS } },
             );
           }
-          const body = await data.arrayBuffer();
-          return new Response(body, {
-            status: 200,
+          return new Response(null, {
+            status: 302,
             headers: {
-              "Content-Type": "image/png",
-              "Content-Disposition": "inline",
+              Location: data.signedUrl,
               "Cache-Control": "public, max-age=900, s-maxage=900",
               "X-Source": "Deutscher Wetterdienst (GeoNutzV)",
               ...CORS,
@@ -54,7 +48,7 @@ export const Route = createFileRoute("/api/public/maps/dwd-bodenanalyse.png")({
         } catch (e: any) {
           return new Response(`Proxy error: ${e?.message ?? String(e)}`, {
             status: 502,
-            headers: { ...CORS },
+            headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS },
           });
         }
       },
