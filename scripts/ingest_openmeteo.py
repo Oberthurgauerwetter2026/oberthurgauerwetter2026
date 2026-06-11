@@ -78,7 +78,7 @@ def build_grid():
     return [(la, lo) for la in lats for lo in lons]
 
 
-RETRY_BACKOFFS = (2, 5, 10)  # seconds; total 4 attempts
+RETRY_BACKOFFS = (3, 8, 20, 45, 90)  # seconds; total 6 attempts (~3 min total)
 
 
 def fetch(label: str, params: dict) -> list:
