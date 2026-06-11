@@ -3329,7 +3329,16 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       return normalizeSkyDiagnostics(out);
     };
-    const today = weather.daily.time[0];
+    const todayZurich = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date());
+    const todayIdx = (weather.daily.time as string[]).indexOf(todayZurich);
+    if (todayIdx < 0) {
+      throw new Error(`Wetterdaten veraltet — kein Eintrag für ${todayZurich} im Open-Meteo-Cache (verfügbar ab ${(weather.daily.time as string[])[0]}). Bitte R2-Cache aktualisieren (GitHub-Action „Open-Meteo Cache Ingest").`);
+    }
+    const today = weather.daily.time[todayIdx];
+    const withTopoBase = withTopo;
+    const withTopoShifted = (i: number) => withTopoBase(todayIdx + i);
     const { data: forecast, error: fErr } = await supabase
       .from("forecasts")
       .insert({ forecast_date: today, status: "draft", created_by: userId })
