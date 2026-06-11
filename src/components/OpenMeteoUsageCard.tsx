@@ -38,6 +38,16 @@ export function OpenMeteoUsageCard() {
     refetchInterval: 30_000,
     enabled: !!session,
   });
+  const { data: r2 } = useQuery({
+    queryKey: ["r2-cache-freshness"],
+    queryFn: async () => {
+      const r = await fetch("/api/public/debug/r2-cache");
+      if (!r.ok) throw new Error("r2 debug failed");
+      return r.json() as Promise<{ generatedAt?: string; age_minutes?: number; status?: number }>;
+    },
+    refetchInterval: 60_000,
+    enabled: !!session,
+  });
 
   async function handleClearRateLimit() {
     if (!session) return;
