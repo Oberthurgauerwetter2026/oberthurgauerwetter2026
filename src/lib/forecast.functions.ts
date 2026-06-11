@@ -3329,7 +3329,16 @@ export const generateForecast = createServerFn({ method: "POST" })
       }
       return normalizeSkyDiagnostics(out);
     };
-    const today = weather.daily.time[0];
+    const todayZurich = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date());
+    const todayIdx = (weather.daily.time as string[]).indexOf(todayZurich);
+    if (todayIdx < 0) {
+      throw new Error(`Wetterdaten veraltet — kein Eintrag für ${todayZurich} im Open-Meteo-Cache (verfügbar ab ${(weather.daily.time as string[])[0]}). Bitte R2-Cache aktualisieren (GitHub-Action „Open-Meteo Cache Ingest").`);
+    }
+    const today = weather.daily.time[todayIdx];
+    const withTopoBase = withTopo;
+    const withTopoShifted = (i: number) => withTopoBase(todayIdx + i);
     const { data: forecast, error: fErr } = await supabase
       .from("forecasts")
       .insert({ forecast_date: today, status: "draft", created_by: userId })
@@ -3344,7 +3353,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       : "";
     const maxDayLoop = degraded ? 1 : 5;
 
-    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopoShifted, today, radarSnapshot);
     {
       const tempHint = firstTitle === "Heute Nachmittag & Abend"
         ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
@@ -3358,7 +3367,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= maxDayLoop; i++) {
-      const day = withTopo(i);
+      const day = withTopoShifted(i);
       if (!day) continue;
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
@@ -3375,7 +3384,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     if (!degraded) {
-      const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
+      const trendDays = [6, 7, 8, 9, 10].map((i) => withTopoShifted(i)).filter(Boolean);
       if (trendDays.length) {
         const synoptic = await fetchSynopticTrend(trendDays as any).catch((e: unknown) => {
           console.warn("[trend] synoptic fetch failed", e);
@@ -3498,7 +3507,16 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       }
       return normalizeSkyDiagnostics(out);
     };
-    const today = weather.daily.time[0];
+    const todayZurich = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date());
+    const todayIdx = (weather.daily.time as string[]).indexOf(todayZurich);
+    if (todayIdx < 0) {
+      throw new Error(`Wetterdaten veraltet — kein Eintrag für ${todayZurich} im Open-Meteo-Cache (verfügbar ab ${(weather.daily.time as string[])[0]}). Bitte R2-Cache aktualisieren (GitHub-Action „Open-Meteo Cache Ingest").`);
+    }
+    const today = weather.daily.time[todayIdx];
+    const withTopoBase = withTopo;
+    const withTopoShifted = (i: number) => withTopoBase(todayIdx + i);
 
     // Replace existing entries
     const { error: delErr } = await supabase
@@ -3514,7 +3532,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
       : "";
     const maxDayLoop = degraded ? 1 : 5;
 
-    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopoShifted, today, radarSnapshot);
     {
       const tempHint = firstTitle === "Heute Nachmittag & Abend"
         ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
@@ -3528,7 +3546,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= maxDayLoop; i++) {
-      const day = withTopo(i);
+      const day = withTopoShifted(i);
       if (!day) continue;
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
@@ -3545,7 +3563,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     if (!degraded) {
-      const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
+      const trendDays = [6, 7, 8, 9, 10].map((i) => withTopoShifted(i)).filter(Boolean);
       if (trendDays.length) {
         const synoptic = await fetchSynopticTrend(trendDays as any).catch((e: unknown) => {
           console.warn("[trend] synoptic fetch failed", e);

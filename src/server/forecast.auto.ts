@@ -841,7 +841,16 @@ export async function runAutoForecast(creatorId: string | null) {
     applyRadarToDay(out, dayIndex, radarSnapshot, settings);
     return out;
   };
-  const today = weather.daily.time[0];
+  const todayZurich = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+  const todayIdx = (weather.daily.time as string[]).indexOf(todayZurich);
+  if (todayIdx < 0) {
+    throw new Error(`Wetterdaten veraltet — kein Eintrag für ${todayZurich} im Open-Meteo-Cache (verfügbar ab ${(weather.daily.time as string[])[0]}). R2-Cache aktualisieren.`);
+  }
+  const today = weather.daily.time[todayIdx];
+  const withTopoBase = withTopo;
+  const withTopoShifted = (i: number) => withTopoBase(todayIdx + i);
 
   const autoHour = currentZurichHour();
   const autoNote = autoHour < 12 ? "Auto-generiert (Morgen)" : autoHour < 17 ? "Auto-generiert (Nachmittag)" : "Auto-generiert (Abend)";
@@ -853,7 +862,7 @@ export async function runAutoForecast(creatorId: string | null) {
   const entries: Array<{ position: number; entry_date: string | null; title: string; body: string; weather_data: any; forecast_id: string }> = [];
 
   {
-    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today);
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopoShifted, today);
     const body = enforceFrostWarning(
       enforceSkyConsistency(
         await generateTextNominal(promptTemplate, `Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:\n${JSON.stringify(firstData, null, 2)}${windowHint}`),
@@ -864,7 +873,7 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: 1, entry_date: today, title: firstTitle, body, weather_data: firstData, forecast_id: forecast.id });
   }
   for (let i = 1; i <= 5; i++) {
-    const day = withTopo(i);
+    const day = withTopoShifted(i);
     if (!day) continue;
     const date = new Date(day.date);
     const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
@@ -874,7 +883,7 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: i + 1, entry_date: day.date, title, body, weather_data: day, forecast_id: forecast.id });
   }
   {
-    const trendDays = [5, 6, 7, 8, 9].map((i) => withTopo(i)).filter(Boolean) as any[];
+    const trendDays = [5, 6, 7, 8, 9].map((i) => withTopoShifted(i)).filter(Boolean) as any[];
     if (trendDays.length) {
       const synoptic = await fetchSynopticTrend(trendDays).catch((e: unknown) => {
         console.warn("[trend-auto] synoptic fetch failed", e);

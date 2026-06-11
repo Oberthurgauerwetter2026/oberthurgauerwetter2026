@@ -38,6 +38,16 @@ export function OpenMeteoUsageCard() {
     refetchInterval: 30_000,
     enabled: !!session,
   });
+  const { data: r2 } = useQuery({
+    queryKey: ["r2-cache-freshness"],
+    queryFn: async () => {
+      const r = await fetch("/api/public/debug/r2-cache");
+      if (!r.ok) throw new Error("r2 debug failed");
+      return r.json() as Promise<{ generatedAt?: string; age_minutes?: number; status?: number }>;
+    },
+    refetchInterval: 60_000,
+    enabled: !!session,
+  });
 
   async function handleClearRateLimit() {
     if (!session) return;
@@ -139,6 +149,26 @@ export function OpenMeteoUsageCard() {
                 )
               </>
             )}
+          </div>
+        )}
+
+        {r2 && typeof r2.age_minutes === "number" && (
+          <div className="flex items-center justify-between gap-2 rounded-md border border-dashed p-2 text-xs">
+            <div>
+              <div className="font-medium text-foreground">R2-Cache (openmeteo/forecast.json)</div>
+              <div className="text-muted-foreground">
+                Generiert: {r2.generatedAt ? new Date(r2.generatedAt).toLocaleString("de-CH", { timeZone: "Europe/Zurich" }) : "—"}
+              </div>
+            </div>
+            <Badge
+              variant={r2.age_minutes > 30 ? "destructive" : r2.age_minutes > 10 ? "secondary" : "default"}
+              className="gap-1 whitespace-nowrap"
+            >
+              <Clock className="h-3 w-3" />
+              {r2.age_minutes < 60
+                ? `${r2.age_minutes} min alt`
+                : `${Math.round(r2.age_minutes / 60)} h alt`}
+            </Badge>
           </div>
         )}
 
