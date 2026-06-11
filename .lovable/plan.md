@@ -1,41 +1,50 @@
+# Falscher Starttag der Prognose beheben
+
 ## Befund
 
-Die App selbst stürzt im Preview nicht sichtbar ab: `/dashboard` zeigt kurz `Lädt…` und leitet ohne gültige Sitzung auf `/login` weiter.
+Die Prognose `9774…2839` wurde heute (11.06.2026, 19:16 Uhr CH-Zeit) erstellt, ist aber auf `forecast_date = 2026-06-10` gespeichert. Eintrag 1 ist deshalb "Heute Abend & Nacht" (= Mittwoch), Eintrag 2 "Morgen, Donnerstag 11. Juni" — aus deiner Sicht müsste der Donnerstag bereits Tag 1 sein.
 
-Das eigentliche Problem bei den Karten ist der öffentliche Karten-Endpunkt:
+**Ursache:** Der R2-Cache `openmeteo/forecast.json` ist **rund 20 Stunden alt** (`generatedAt: 2026-06-10T21:22:35Z`, `age_minutes: 1196`). Die Prognose-Generierung übernimmt blind `weather.daily.time[0]` aus dem Cache — und das ist eben noch der 10.06.
 
-- `https://oberthurgauerwetter2026.lovable.app/api/public/maps/europe-pressure-latest.svg` läuft aktuell in ein Timeout bzw. `500 Internal Server Error`.
-- `/api/public/maps/dwd-bodenanalyse.png` liefert ebenfalls `500`.
-- Ursache: Die Routen laden die grossen Dateien serverseitig aus dem Kartenspeicher und streamen sie durch die App-Route. Das ist für die 1.3 MB SVG und besonders die 4.6 MB DWD-PNG im Live-Server zu langsam/instabil. Dadurch sieht man nur eine weisse Seite bzw. die Bilder bleiben leer.
+Der GitHub-Action-Workflow `Open-Meteo Cache Ingest` (alle 5 min) hat den Cache also seit gestern Abend nicht mehr aktualisiert. Vermutlich Workflow-Fehler oder GitHub-Actions-Schedule pausiert (Schedules werden bei Inaktivität im Repo automatisch deaktiviert).
 
 ## Plan
 
-1. **Karten-Endpunkte stabil machen**
-   - `src/routes/api/public/maps/europe-pressure-latest[.]svg.ts`
-   - `src/routes/api/public/maps/dwd-bodenanalyse[.]png.ts`
-   - Statt die Bilddatei komplett über die App-Route zu downloaden und zurückzustreamen, erzeugt die Route eine kurzlebige, sichere Speicher-URL und leitet per `302` dorthin weiter.
-   - Die öffentliche URL bleibt gleich und dauerhaft verwendbar:
-     - `/api/public/maps/europe-pressure-latest.svg`
-     - `/api/public/maps/dwd-bodenanalyse.png`
+### 1. Tagesfilter beim Prognose-Generieren (Code-Fix)
+In `src/lib/forecast.functions.ts` (zwei Stellen: `generateForecast` und `regenerateForecast`) und in `src/server/forecast.auto.ts` (Auto-Job):
+- Statt `weather.daily.time[0]` blind zu nehmen, den heutigen Tag in `Europe/Zurich` bestimmen und im `daily.time`-Array suchen.
+- Falls Cache veraltet ist (heutiger Tag fehlt), klare Fehlermeldung statt falsches Datum.
+- Damit kann auch ein leicht veralteter Cache (z. B. 2 h alt nach Mitternacht) nie mehr mit Vortagsdaten starten.
 
-2. **Fehlerantworten klarer machen**
-   - Wenn die gespeicherte Karte fehlt oder keine Speicher-URL erzeugt werden kann, antwortet die Route schnell mit einer verständlichen Textmeldung statt mit Timeout/500.
-   - CORS- und Cache-Header bleiben erhalten.
+### 2. R2-Cache-Frische in der UI sichtbar machen
+In `src/components/OpenMeteoUsageCard.tsx` (oder neuer Karte) das `age_minutes` aus `/api/public/debug/r2-cache` anzeigen, mit Warn-Badge ab > 30 min. So fällt ein hängender Ingest sofort auf.
 
-3. **Vorschau/Einbettung unverändert lassen**
-   - Die Settings-Seite und WordPress-Einbettungscodes können weiterhin dieselben stabilen URLs verwenden.
-   - Nach dem Fix müssen die Karten nicht neu generiert werden; die bereits gespeicherten Dateien werden verwendet.
+### 3. GitHub-Action wieder anstossen (manuelle Aktion ausserhalb des Codes)
+- Im Repo unter Actions → "Open-Meteo Cache Ingest" → Run workflow.
+- Letzte fehlgeschlagenen Runs prüfen (Schedule-Deaktivierung passiert nach 60 Tagen Repo-Inaktivität; oder Secrets `R2_*` fehlen/abgelaufen).
+- Optional: zweiten Trigger einbauen (Cron-Hit auf `/api/public/hooks/...`) als Fallback, falls GitHub Actions ausfällt.
 
-4. **Prüfen nach Umsetzung**
-   - Beide öffentlichen Karten-URLs direkt aufrufen.
-   - Erwartung: kein weisser Screen/kein 500, sondern Weiterleitung auf das Bild und sichtbare Karte.
+### 4. Bestehende Falsch-Prognose
+Die aktuelle Prognose vom 10.06. löschen und nach Cache-Refresh neu generieren — oder einfach "Komplett neu generieren" drücken, sobald Cache wieder frisch ist.
 
-Nach Umsetzung muss die App erneut veröffentlicht werden, damit die Live-URLs den Fix verwenden.
+## Technische Details
 
-<presentation-actions>
-  <presentation-open-history>View History</presentation-open-history>
-</presentation-actions>
+Betroffene Stellen:
+```text
+src/lib/forecast.functions.ts:3332   const today = weather.daily.time[0];   // generateForecast
+src/lib/forecast.functions.ts:3501   const today = weather.daily.time[0];   // regenerateForecast
+src/server/forecast.auto.ts:844      const today = weather.daily.time[0];   // auto-job
+```
 
-<presentation-actions>
-<presentation-link url="https://docs.lovable.dev/tips-tricks/troubleshooting">Troubleshooting docs</presentation-link>
-</presentation-actions>
+Neue Helper-Logik (Skizze):
+```ts
+const todayZurich = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
+}).format(new Date()); // "YYYY-MM-DD"
+const todayIdx = weather.daily.time.indexOf(todayZurich);
+if (todayIdx < 0) throw new Error(`Wetterdaten veraltet — kein Eintrag für ${todayZurich}. R2-Cache prüfen.`);
+const today = weather.daily.time[todayIdx];
+// alle nachfolgenden withTopo(i)-Aufrufe ab `todayIdx + i` statt `i`.
+```
+
+Bestätige den Plan, dann setze ich Schritt 1 + 2 im Code um. Schritt 3 musst du im GitHub-Repo selbst auslösen (Actions-UI), das geht nicht von hier aus.
