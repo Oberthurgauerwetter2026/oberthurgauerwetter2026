@@ -3353,7 +3353,7 @@ export const generateForecast = createServerFn({ method: "POST" })
       : "";
     const maxDayLoop = degraded ? 1 : 5;
 
-    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopo, today, radarSnapshot);
+    const { firstData, firstTitle, windowHint } = buildFirstEntryContext(weather, withTopoShifted, today, radarSnapshot);
     {
       const tempHint = firstTitle === "Heute Nachmittag & Abend"
         ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
@@ -3367,7 +3367,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     for (let i = 1; i <= maxDayLoop; i++) {
-      const day = withTopo(i);
+      const day = withTopoShifted(i);
       if (!day) continue;
       const date = new Date(day.date);
       const weekday = date.toLocaleDateString("de-CH", { weekday: "long" });
@@ -3384,7 +3384,7 @@ export const generateForecast = createServerFn({ method: "POST" })
     }
 
     if (!degraded) {
-      const trendDays = [6, 7, 8, 9, 10].map((i) => withTopo(i)).filter(Boolean);
+      const trendDays = [6, 7, 8, 9, 10].map((i) => withTopoShifted(i)).filter(Boolean);
       if (trendDays.length) {
         const synoptic = await fetchSynopticTrend(trendDays as any).catch((e: unknown) => {
           console.warn("[trend] synoptic fetch failed", e);
