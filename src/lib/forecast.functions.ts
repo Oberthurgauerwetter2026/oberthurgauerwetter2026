@@ -3570,8 +3570,13 @@ export const regenerateForecast = createServerFn({ method: "POST" })
     }
 
     if (!degraded) {
-      const trendDays = [6, 7, 8, 9, 10].map((i) => withTopoShifted(i)).filter(Boolean);
-      if (trendDays.length) {
+      const trendIndices = [6, 7, 8, 9, 10];
+      const trendDays = trendIndices.map((i) => withTopoShifted(i)).filter(Boolean);
+      const dailyLen = (weather.daily.time as string[]).length;
+      if (trendDays.length < trendIndices.length) {
+        console.warn(`[trend] unvollständig: ${trendDays.length}/${trendIndices.length} Tage verfügbar — todayIdx=${todayIdx}, daily.time.length=${dailyLen}, bereich=${(weather.daily.time as string[])[0]}…${(weather.daily.time as string[])[dailyLen - 1]}. R2-Cache enthält zu wenige Tage; GitHub-Action „Open-Meteo Cache Ingest" erneut laufen lassen.`);
+      }
+      if (trendDays.length >= 3) {
         const synoptic = await fetchSynopticTrend(trendDays as any).catch((e: unknown) => {
           console.warn("[trend] synoptic fetch failed", e);
           return null;
@@ -3580,6 +3585,8 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
+      } else {
+        console.warn(`[trend] Eintrag „Trend Tag 6 – 10" übersprungen — nur ${trendDays.length} Tage vorhanden.`);
       }
     }
 
