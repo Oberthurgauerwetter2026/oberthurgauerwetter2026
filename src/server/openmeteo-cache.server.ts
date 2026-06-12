@@ -15,7 +15,7 @@ export type OpenMeteoCachePayload = {
   version: string;
   generatedAt: string; // ISO UTC
   grid: { points: OpenMeteoGridPoint[] };
-  phaseA: any[]; // Multi-Modell hourly+daily, Tag 0-7
+  phaseA: any[]; // Multi-Modell hourly+daily, Tag 0-11 (forecast_days=12)
   phaseB: any[]; // ICON-CH1 minutely_15, ±6h
   phaseC: any[]; // Bias-Lookback, past 7d
 };
