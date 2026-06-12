@@ -883,8 +883,13 @@ export async function runAutoForecast(creatorId: string | null) {
     entries.push({ position: i + 1, entry_date: day.date, title, body, weather_data: day, forecast_id: forecast.id });
   }
   {
-    const trendDays = [5, 6, 7, 8, 9].map((i) => withTopoShifted(i)).filter(Boolean) as any[];
-    if (trendDays.length) {
+    const trendIndices = [5, 6, 7, 8, 9];
+    const trendDays = trendIndices.map((i) => withTopoShifted(i)).filter(Boolean) as any[];
+    const dailyLen = (weather.daily.time as string[]).length;
+    if (trendDays.length < trendIndices.length) {
+      console.warn(`[trend-auto] unvollständig: ${trendDays.length}/${trendIndices.length} Tage verfügbar — todayIdx=${todayIdx}, daily.time.length=${dailyLen}. R2-Cache zu kurz.`);
+    }
+    if (trendDays.length >= 3) {
       const synoptic = await fetchSynopticTrend(trendDays).catch((e: unknown) => {
         console.warn("[trend-auto] synoptic fetch failed", e);
         return null;
@@ -892,6 +897,8 @@ export async function runAutoForecast(creatorId: string | null) {
       const userPrompt = buildTrendUserPrompt(locationName, trendDays, synoptic);
       const body = await generateTextNominal(promptTemplate, userPrompt);
       entries.push({ position: 7, entry_date: trendDays[0].date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: forecast.id });
+    } else {
+      console.warn(`[trend-auto] Eintrag „Trend Tag 6 – 10" übersprungen — nur ${trendDays.length} Tage vorhanden.`);
     }
   }
 

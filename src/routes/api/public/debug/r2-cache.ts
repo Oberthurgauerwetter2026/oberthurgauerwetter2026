@@ -47,6 +47,16 @@ export const Route = createFileRoute("/api/public/debug/r2-cache")({
             ? Math.round((Date.now() - new Date(generatedAt).getTime()) / 60000)
             : null;
 
+          // Tagesabdeckung aus erster Location in Phase A bestimmen — relevant für
+          // die Frage, ob „Trend Tag 6 – 10" (braucht ~11 Tage) gebaut werden kann.
+          const phaseA0 = Array.isArray(json.phaseA) ? (json.phaseA as any[])[0] : null;
+          const dailyTimes: string[] = phaseA0?.daily?.time ?? [];
+          const todayZurich = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
+          }).format(new Date());
+          const todayIdx = dailyTimes.indexOf(todayZurich);
+          const trendCapable = todayIdx >= 0 && dailyTimes.length - todayIdx >= 11;
+
           return Response.json({
             ok: true,
             ...out,
@@ -56,6 +66,12 @@ export const Route = createFileRoute("/api/public/debug/r2-cache")({
             phaseA_locations: Array.isArray(json.phaseA) ? (json.phaseA as unknown[]).length : null,
             phaseB_locations: Array.isArray(json.phaseB) ? (json.phaseB as unknown[]).length : null,
             phaseC_locations: Array.isArray(json.phaseC) ? (json.phaseC as unknown[]).length : null,
+            phaseA_daily_days: dailyTimes.length,
+            phaseA_daily_first: dailyTimes[0] ?? null,
+            phaseA_daily_last: dailyTimes[dailyTimes.length - 1] ?? null,
+            today_zurich: todayZurich,
+            today_index: todayIdx,
+            trend_6_10_capable: trendCapable,
           });
         } catch (e) {
           out.fetch_ms = Date.now() - started;
