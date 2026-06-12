@@ -136,7 +136,7 @@ def main() -> None:
             "weathercode",
             "wind_speed_10m_max",
         ]),
-        "forecast_days": 7,
+        "forecast_days": 12,
         "timezone": "Europe/Zurich",
         "models": "meteoswiss_icon_ch2,ecmwf_ifs025,gfs_global",
     }
