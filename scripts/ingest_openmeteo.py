@@ -12,6 +12,11 @@ ENV (required):
   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
 ENV (optional):
   OPENMETEO_OUT_KEY        default "openmeteo/forecast.json"
+  OPENMETEO_PROXY_URL      z.B. https://wetter.example.ch/om-proxy.php — wird
+                           als Fallback verwendet, wenn der Direkt-Call an
+                           api.open-meteo.com vom Runner aus nicht klappt
+                           (DNS-Glitches, IP-Throttle).
+  OPENMETEO_PROXY_KEY      optional, wird als Header X-Proxy-Key gesendet
   BBOX_MIN_LAT / MAX_LAT   default Amriswil + 15km
   BBOX_MIN_LON / MAX_LON
   GRID_LAT (default 7), GRID_LON (default 7)
@@ -20,15 +25,20 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import time
 from datetime import datetime, timezone
 
 import boto3
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 VERSION = "amriswil-openmeteo-cache-v1"
-API = "https://api.open-meteo.com/v1/forecast"
+DIRECT_HOST = "api.open-meteo.com"
+DIRECT_PATH = "/v1/forecast"
+DIRECT_URL = f"https://{DIRECT_HOST}{DIRECT_PATH}"
 
 # Amriswil center: 47.5469, 9.2986
 DEFAULTS = {
@@ -81,40 +91,126 @@ def build_grid():
 RETRY_BACKOFFS = (3, 8, 20, 45, 90)  # seconds; total 6 attempts (~3 min total)
 
 
+def make_session() -> requests.Session:
+    """requests-Session mit Connect-Retries für transient DNS/SSL Fehler."""
+    s = requests.Session()
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=0,
+        status=0,
+        backoff_factor=1.5,
+        allowed_methods=frozenset(["GET"]),
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=4)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+
+def dns_ok(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, 443)
+        return True
+    except socket.gaierror as e:
+        print(f"  [dns] getaddrinfo({host}) failed: {e}")
+        return False
+
+
+def build_endpoints(params: dict):
+    """Liefert eine Liste von (label, url, params, headers)-Tupeln in Probe-Reihenfolge."""
+    eps = []
+
+    # 1) Direkt — nur, wenn DNS überhaupt funktioniert.
+    if dns_ok(DIRECT_HOST):
+        eps.append(("direct", DIRECT_URL, dict(params), {}))
+    else:
+        print(f"  [dns] skip direct call — switching to proxy immediately")
+
+    # 2) Proxy-Fallback (Cyon o.ä.) — nur, wenn konfiguriert.
+    proxy_url = os.environ.get("OPENMETEO_PROXY_URL", "").strip()
+    if proxy_url:
+        proxy_params = dict(params)
+        proxy_params["__host"] = DIRECT_HOST
+        proxy_params["__path"] = DIRECT_PATH
+        headers = {}
+        proxy_key = os.environ.get("OPENMETEO_PROXY_KEY", "").strip()
+        if proxy_key:
+            headers["X-Proxy-Key"] = proxy_key
+        eps.append(("proxy", proxy_url, proxy_params, headers))
+
+    if not eps:
+        sys.exit(
+            "No usable endpoints: direct DNS failed and OPENMETEO_PROXY_URL not set"
+        )
+    return eps
+
+
 def fetch(label: str, params: dict) -> list:
+    """Probiert alle verfügbaren Endpunkte (direct, dann proxy) je mit Backoff."""
+    endpoints = build_endpoints(params)
     last_err = ""
-    for attempt in range(len(RETRY_BACKOFFS) + 1):
-        try:
-            r = requests.get(API, params=params, timeout=45)
-        except requests.RequestException as e:
-            last_err = f"network error: {e}"
-            print(f"  attempt {attempt + 1} failed ({label}): {last_err}")
-        else:
-            if r.ok:
-                data = r.json()
-                return data if isinstance(data, list) else [data]
-            # 4xx: don't retry — client error, won't fix itself
-            if 400 <= r.status_code < 500:
-                sys.exit(f"open-meteo HTTP {r.status_code} ({label}): {r.text[:300]}")
-            last_err = f"HTTP {r.status_code}: {r.text[:200]}"
-            print(f"  attempt {attempt + 1} failed ({label}): {last_err}")
 
-        if attempt < len(RETRY_BACKOFFS):
-            delay = RETRY_BACKOFFS[attempt]
-            print(f"  retrying in {delay}s …")
-            time.sleep(delay)
+    for ep_label, url, ep_params, headers in endpoints:
+        print(f"  [{label}] trying endpoint: {ep_label} ({url})")
+        session = make_session()
+        for attempt in range(len(RETRY_BACKOFFS) + 1):
+            try:
+                r = session.get(url, params=ep_params, headers=headers, timeout=45)
+            except requests.RequestException as e:
+                last_err = f"network error: {e}"
+                print(
+                    f"  [{label}/{ep_label}] attempt {attempt + 1} failed: {last_err}"
+                )
+            else:
+                if r.ok:
+                    try:
+                        data = r.json()
+                    except ValueError as e:
+                        last_err = f"invalid JSON ({len(r.content)} bytes): {e}"
+                        print(
+                            f"  [{label}/{ep_label}] attempt {attempt + 1} bad body: {last_err}"
+                        )
+                    else:
+                        print(f"  [{label}/{ep_label}] ok via {ep_label}")
+                        return data if isinstance(data, list) else [data]
+                # 4xx vom Direct-Call: hartes Client-Fehler — kein Retry, aber
+                # Proxy-Pfad noch probieren (er könnte Header anders setzen).
+                elif 400 <= r.status_code < 500 and ep_label == "direct":
+                    last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+                    print(
+                        f"  [{label}/{ep_label}] HTTP {r.status_code} — skip retries on this endpoint"
+                    )
+                    break
+                else:
+                    last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+                    print(
+                        f"  [{label}/{ep_label}] attempt {attempt + 1} failed: {last_err}"
+                    )
 
-    sys.exit(f"open-meteo failed after {len(RETRY_BACKOFFS) + 1} attempts ({label}): {last_err}")
+            if attempt < len(RETRY_BACKOFFS):
+                delay = RETRY_BACKOFFS[attempt]
+                print(f"    retrying in {delay}s …")
+                time.sleep(delay)
+
+        print(f"  [{label}/{ep_label}] exhausted — moving to next endpoint")
+
+    sys.exit(
+        f"open-meteo failed on all endpoints ({label}): last error: {last_err}"
+    )
 
 
 def main() -> None:
     print(f"OPENMETEO INGEST START version={VERSION}")
+    proxy_set = bool(os.environ.get("OPENMETEO_PROXY_URL", "").strip())
+    print(f"proxy fallback configured: {proxy_set}")
+
     pts = build_grid()
     lat_str = ",".join(f"{p[0]:.4f}" for p in pts)
     lon_str = ",".join(f"{p[1]:.4f}" for p in pts)
     print(f"grid points: {len(pts)}")
 
-    # Phase A — Multi-Modell hourly, Tag 0-7 (Hot-Path-Forecast)
+    # Phase A — Multi-Modell hourly, Tag 0-11 (Hot-Path-Forecast, forecast_days=12)
     phase_a = {
         "latitude": lat_str,
         "longitude": lon_str,
@@ -163,7 +259,7 @@ def main() -> None:
         "models": "best_match",
     }
 
-    print("fetch phase A (multi-model hourly+daily) …")
+    print("fetch phase A (multi-model hourly+daily, 12 days) …")
     a = fetch("A", phase_a)
     print(f"  -> {len(a)} locations")
     print("fetch phase B (ICON-CH1 minutely_15) …")
@@ -172,6 +268,15 @@ def main() -> None:
     print("fetch phase C (bias lookback) …")
     c = fetch("C", phase_c)
     print(f"  -> {len(c)} locations")
+
+    # Sanity-Check: Phase A muss wirklich 12 Tage daily-Daten enthalten,
+    # sonst hat ein Endpunkt einen alten/abgeschnittenen Datensatz geliefert.
+    daily_times = (a[0].get("daily") or {}).get("time") if a else None
+    if not daily_times or len(daily_times) < 12:
+        sys.exit(
+            f"phase A returned only {len(daily_times) if daily_times else 0} daily entries — refusing to overwrite cache"
+        )
+    print(f"  phase A daily coverage: {len(daily_times)} days ({daily_times[0]} … {daily_times[-1]})")
 
     payload = {
         "version": VERSION,
