@@ -59,7 +59,9 @@ export async function generateTextNominal(
   const first = await generateFn(systemPrompt, userPrompt);
   const nominal = enforceNominalStyle(first);
   const nightSun = enforceNightSunConsistency(first);
-  if (nominal.violations.length < 1 && nightSun.violations.length < 1) return first;
+  // Retry erst ab >=2 Verstößen — einzelne Bagatellen lösen keinen zweiten (Credit-)Call mehr aus.
+  if (nominal.violations.length < 2 && nightSun.violations.length < 1) return first;
+
 
   const hints: string[] = [];
   if (nominal.violations.length > 0) {

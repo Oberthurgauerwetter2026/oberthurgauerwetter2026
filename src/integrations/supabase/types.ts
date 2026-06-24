@@ -14,6 +14,27 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_text_cache: {
+        Row: {
+          cache_key: string
+          content: string
+          created_at: string
+          expires_at: string
+        }
+        Insert: {
+          cache_key: string
+          content: string
+          created_at?: string
+          expires_at: string
+        }
+        Update: {
+          cache_key?: string
+          content?: string
+          created_at?: string
+          expires_at?: string
+        }
+        Relationships: []
+      }
       app_settings: {
         Row: {
           ai_prompt_template: string | null

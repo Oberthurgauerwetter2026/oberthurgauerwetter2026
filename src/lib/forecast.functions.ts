@@ -2941,9 +2941,38 @@ function buildFirstEntryContext(
 }
 
 // ===== AI text generation =====
+const AI_MODEL = "google/gemini-3.1-flash-lite";
+const AI_CACHE_TTL_HOURS = 24;
+
+async function sha256Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("LOVABLE_API_KEY fehlt");
+
+  const cacheKey = await sha256Hex(`${AI_MODEL}\n${systemPrompt}\n${userPrompt}`);
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  // Cache-Lookup
+  try {
+    const { data: hit } = await supabaseAdmin
+      .from("ai_text_cache")
+      .select("content, expires_at")
+      .eq("cache_key", cacheKey)
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+    if (hit?.content) {
+      console.log(`[ai-cache] hit ${cacheKey.slice(0, 8)}`);
+      return hit.content;
+    }
+  } catch (e) {
+    console.warn("[ai-cache] lookup failed", e);
+  }
+  console.log(`[ai-cache] miss ${cacheKey.slice(0, 8)}`);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   let res: Response;
@@ -2956,9 +2985,7 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        // gemini-2.5-flash: schneller als pro und kein Free-Tier-Bottleneck
-        // (vermeidet ~3-5s pro Call durch Gemini-Free 429 + Gateway-Fallback)
-        model: "google/gemini-2.5-flash",
+        model: AI_MODEL,
         temperature: 0.2,
         top_p: 0.9,
         messages: [
@@ -2974,8 +3001,21 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
   if (res.status === 402) throw new Error("KI-Guthaben aufgebraucht. Bitte Workspace aufladen.");
   if (!res.ok) throw new Error(`KI-Fehler ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  return data.choices?.[0]?.message?.content?.trim() ?? "";
+  const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+
+  // Write-through + opportunistisches Cleanup
+  if (content) {
+    try {
+      const expiresAt = new Date(Date.now() + AI_CACHE_TTL_HOURS * 3600 * 1000).toISOString();
+      await supabaseAdmin.from("ai_text_cache").delete().lt("expires_at", new Date().toISOString());
+      await supabaseAdmin.from("ai_text_cache").upsert({ cache_key: cacheKey, content, expires_at: expiresAt });
+    } catch (e) {
+      console.warn("[ai-cache] write failed", e);
+    }
+  }
+  return content;
 }
+
 
 // ===== Prompt-Bausteine =====
 // Der heutige System-Prompt ist in vier Bausteine aufgeteilt. Jeder Baustein

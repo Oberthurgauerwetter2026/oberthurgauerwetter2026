@@ -1,57 +1,72 @@
-## Befund
+## Was aktuell pro Prognose passiert
 
-- R2-`forecast.json` ist seit ~2 h alt (`generatedAt 2026-06-12T06:08:06Z`) und enthält weiterhin nur **7 Tagesdatensätze** (12.06.–18.06.).
-- Der letzte als „grün" gemeldete Action-Run hat den 12-Tage-Stand also **nicht** in den Bucket geschrieben — entweder ist der Ingest-Step durchgelaufen, aber mit altem Skriptstand, oder spätere Cron-Läufe scheitern weiter an DNS-Fehlern Richtung `api.open-meteo.com`.
-- Solange der Cache 7 Tage hat, fehlt strukturell der Trend Tag 6–10.
+Pro „Prognose generieren" laufen bis zu **7 parallele KI-Calls** über Lovable AI Gateway (`google/gemini-2.5-flash`):
+
+- 1× „Heute" / „Heute Abend & Nacht"
+- 5× Tag 1 – 5
+- 1× Trend Tag 6 – 10
+
+Jeder Call kann zusätzlich **1× Retry** auslösen, wenn `enforceNominalStyle` / `enforceNightSunConsistency` Verstöße findet. Worst-Case: **14 Calls pro Prognose**. Jeder Call zieht Credits aus deinem Workspace — deshalb war das Guthaben aufgebraucht.
 
 ## Ziel
 
-Ingest robust genug machen, dass auch bei DNS-/Rate-Glitches auf den Runnern zuverlässig die 12-Tage-Version in R2 landet — mit dem bereits existierenden Cyon-Proxy (`cyon-proxy/om-proxy.php`) als zweiter Datenpfad.
+Kosten pro Prognose senken durch (1) Prompt-Cache, damit identische Eingaben keine neuen Calls auslösen, und (2) ein günstigeres, gleich schnelles Modell.
 
-## Plan
+## Änderungen
 
-1. **Cyon-Proxy als Fallback-URL in den Ingest einbauen**
-   - In `scripts/ingest_openmeteo.py` zusätzlich zwei optionale ENV-Vars lesen:
-     - `OPENMETEO_PROXY_URL` (z. B. `https://wetter.cyon.example/om-proxy.php`)
-     - `OPENMETEO_PROXY_KEY` (optional, wird als `X-Proxy-Key` Header gesendet)
-   - `fetch(label, params)` so umbauen, dass es eine Liste von Endpunkten der Reihe nach probiert:
-     1. Direkt: `https://api.open-meteo.com/v1/forecast` mit den bestehenden Params.
-     2. Wenn `OPENMETEO_PROXY_URL` gesetzt: Proxy-Aufruf mit zusätzlich `__host=api.open-meteo.com&__path=/v1/forecast` und allen Original-Params.
-   - Pro Endpunkt der bisherige Backoff (`3,8,20,45,90 s`). Erst wenn **alle** Endpunkte alle Versuche verbraucht haben, abbrechen.
+### 1. KI-Antwort-Cache (`ai_text_cache`-Tabelle)
 
-2. **DNS-Resilienz beim Direktcall verbessern**
-   - Vor dem ersten Direkt-Versuch einmal `socket.getaddrinfo("api.open-meteo.com", 443)` ausführen; bei `gaierror` direkt zum Proxy-Endpunkt wechseln statt erst 3 min lang in Retries zu hängen.
-   - Pro Endpunkt ein `requests.Session` mit eigenem `urllib3` Retry-Adapter (Connect-Retries) verwenden, damit transient DNS/SSL Fehler nicht den ganzen Lauf killen.
-   - Klarere Logzeilen: `[A] direct attempt 1/6 …` / `[A] switching to proxy after direct exhausted` — damit man im Action-Log eindeutig sieht, welcher Pfad lief.
+Neue Tabelle `public.ai_text_cache` mit Migration:
+- `cache_key text primary key` — SHA-256 über `model + systemPrompt + userPrompt`
+- `content text not null`
+- `created_at timestamptz default now()`
+- `expires_at timestamptz not null`
+- RLS + Grants nach Standard (nur `service_role`, kein `anon`/`authenticated` — Cache ist server-intern).
 
-3. **Workflow-Inputs erweitern**
-   - `.github/workflows/openmeteo-ingest.yml`: in `env:` zusätzlich `OPENMETEO_PROXY_URL` und `OPENMETEO_PROXY_KEY` aus `secrets.*` durchreichen.
-   - Concurrency-/Schedule-Block bleibt unverändert.
+Wrapper in `forecast.functions.ts` um `generateText(...)`:
+- Key = `sha256(model || '\n' || systemPrompt || '\n' || userPrompt)`
+- Lookup über `supabaseAdmin` (dynamisch im Handler importiert).
+- Treffer → Antwort sofort zurück, **0 Credits**.
+- Miss → bestehender Gateway-Call, Ergebnis mit TTL **24 h** speichern.
 
-4. **Cyon-Proxy minimal absichern (optional, nur wenn Schlüssel gesetzt)**
-   - `cyon-proxy/om-proxy.php`: `PROXY_SECRET` weiterhin per Konstante; im README einen Hinweis ergänzen, wie der Schlüssel synchron in den GitHub-Secrets (`OPENMETEO_PROXY_KEY`) hinterlegt wird. Keine Code-Änderung am PHP nötig, solange der User selber den Secret-String einträgt.
+Warum 24 h: Prompts enthalten konkrete Open-Meteo-Zahlen pro Tag. Solange der R2-Ingest-Cache dieselben Werte liefert (er läuft alle paar Stunden via GitHub Action), liefert das Modell deterministisch denselben Text → identischer Hash → Cache-Treffer. Sobald sich die Wetterdaten ändern, ändert sich der Hash automatisch.
 
-5. **Diagnose-Endpunkt belassen**
-   - Die in der letzten Runde ergänzten Felder (`phaseA_daily_days`, `today_index`, `trend_6_10_capable`) bleiben. Nach dem nächsten erfolgreichen Ingest sollte `phaseA_daily_days = 12` und `trend_6_10_capable = true` erscheinen.
+Effekt:
+- **Zweite Prognose mit denselben Daten = 0 Credits.**
+- Nur die Einträge, deren Wetterdaten sich seit letztem Ingest geändert haben, kosten neu.
+- „Regenerieren" direkt nach „Generieren" (häufiger Fall beim Korrekturlesen) ist kostenlos.
 
-## Was der User selbst tun muss
+### 2. Günstigeres Modell
 
-- In den GitHub-Repo-Secrets zwei Einträge anlegen:
-  - `OPENMETEO_PROXY_URL` → die Cyon-URL der `om-proxy.php`
-  - `OPENMETEO_PROXY_KEY` → optional, gleicher String wie `PROXY_SECRET` im PHP
-- Action „Open-Meteo Cache Ingest" einmal manuell triggern.
+Wechsel `google/gemini-2.5-flash` → `google/gemini-3.1-flash-lite` in `generateText()` (Zeile 2961).
 
-## Validierung
+`flash-lite` ist auf Klassifikation / Extraktion / strukturierte Textgenerierung mit klaren Vorgaben ausgelegt — passt zum streng formatierten Nominal-Stil-Prompt. Deutlich günstiger pro Call, vergleichbare Latenz.
 
-- Action-Log zeigt entweder „direct ok" oder eindeutig „switched to proxy" — und am Ende `uploaded openmeteo/forecast.json (~X bytes)`.
-- `/api/public/debug/r2-cache` liefert danach:
-  - `age_minutes < 10`
-  - `phaseA_daily_days: 12`
-  - `phaseA_daily_last` mindestens 10 Tage nach heute
-  - `trend_6_10_capable: true`
-- Eine frisch erzeugte Prognose enthält wieder den Eintrag „Trend Tag 6 – 10" in `forecast_entries`.
+Falls die Qualität spürbar abfällt (mehr Nominal-Style-Retries), Fallback auf `google/gemini-3-flash-preview` (Lovable-Default) — als einzeilige Konstante oben in der Datei, damit Wechsel trivial bleibt.
+
+### 3. Retry-Logik leicht entschärfen
+
+In `nominal-style.server.ts` ist der Retry-Trigger aktuell `violations.length < 1` (also: bei jeder einzelnen Verletzung Retry). Schwelle auf `>= 2` Verletzungen anheben — einzelne Bagatellen kosten dann keinen zweiten Call. Spart bei ~30 % der Calls den Retry.
 
 ## Was bewusst NICHT geändert wird
 
-- Kein UI-/Trend-Fallback bei zu wenigen Tagen — du hast diese Option nicht gewählt. Wenn der Cache nochmal alt wird, fehlt der Trend weiterhin sichtbar, statt mit interpolierten Werten getarnt zu werden.
-- Keine Änderungen an `forecast.functions.ts` / `forecast.auto.ts` über die bereits aus der letzten Runde hinaus.
+- Anzahl Einträge (7) bleibt — Konsolidierung würde die UX verändern und ist explizit nicht gewünscht.
+- Promptstruktur bleibt unverändert.
+- Bestehende `weather_cache`-Mechanik bleibt unangetastet.
+
+## Technische Details
+
+- Tabelle via `supabase--migration` anlegen (inkl. GRANT + RLS-Block).
+- `ai_text_cache`-Lookups: Read & Write über `supabaseAdmin` aus `client.server`, **dynamisch importiert** im `generateText`-Handler (Server-only Boundary, kein Leak in Client-Bundle).
+- Cleanup: kleine `delete from ai_text_cache where expires_at < now()` direkt vor Insert — kein Cron nötig.
+- Logging: ein `console.log("[ai-cache] hit/miss", key.slice(0,8))` zur Beobachtbarkeit.
+
+## Erwarteter Effekt
+
+| Szenario | Vorher | Nachher |
+|---|---|---|
+| Erste Prognose des Tages | 7 – 14 Calls (flash) | 7 – 10 Calls (flash-lite, ~1/3 Preis) |
+| Regenerieren ohne neue Wetterdaten | 7 – 14 Calls | **0 Calls** |
+| Regenerieren nach neuem Ingest (~1 Tag/Strecke) | 7 – 14 Calls | nur geänderte Einträge |
+
+Grobe Schätzung: **60 – 90 % weniger Credit-Verbrauch** im typischen Tagesablauf (mehrfaches Prüfen / Regenerieren).
