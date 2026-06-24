@@ -457,9 +457,110 @@ export function stripTiefstwerteForAfternoon(text: string, title: string): strin
   return paragraphs.join("\n\n");
 }
 
+class RecoverableAiTextError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "RecoverableAiTextError";
+  }
+}
+
+function isRecoverableAiTextError(e: unknown): boolean {
+  if (e instanceof RecoverableAiTextError) return true;
+  const message = e instanceof Error ? e.message : String(e ?? "");
+  return /KI-Guthaben aufgebraucht|KI-Limit erreicht/i.test(message);
+}
+
 // Nominalstil-Enforcement: Helper aus shared module (siehe nominal-style.server.ts).
-async function generateTextNominal(systemPrompt: string, userPrompt: string): Promise<string> {
-  return runNominal(systemPrompt, userPrompt, generateText);
+async function generateTextNominal(systemPrompt: string, userPrompt: string, fallback?: () => string): Promise<string> {
+  try {
+    return await runNominal(systemPrompt, userPrompt, generateText);
+  } catch (e) {
+    if (fallback && isRecoverableAiTextError(e)) {
+      console.warn("[ai] Textgenerierung nicht verfügbar — regelbasierter Fallback aktiv", e);
+      return fallback();
+    }
+    throw e;
+  }
+}
+
+function metricValue(value: any): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value?.avg === "number" && Number.isFinite(value.avg)) return value.avg;
+  return null;
+}
+
+function formatDegrees(value: number): string {
+  return `${Math.round(value)} Grad`;
+}
+
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function fallbackSkyLabel(day: any): string {
+  if (typeof day?.sky_label === "string" && day.sky_label.trim()) return day.sky_label.trim();
+  const precip = metricValue(day?.precip) ?? metricValue(day?.precip_total) ?? 0;
+  const prob = metricValue(day?.precip_prob);
+  const cloud = metricValue(day?.cloudcover) ?? metricValue(day?.cloudcover_avg);
+  const sun = metricValue(day?.sunshine_h);
+  if (precip >= 3 || (prob != null && prob >= 70)) return "Stark bewölkt mit zeitweisem Regen";
+  if (precip >= 1 || (prob != null && prob >= 50)) return "Wechselnd bewölkt mit lokalen Schauern";
+  if (cloud != null && cloud >= 80 && (sun == null || sun <= 4)) return "Stark bewölkt bis bedeckt";
+  if (sun != null && sun >= 8 && (cloud == null || cloud <= 35)) return "Ziemlich sonnig";
+  if (cloud != null && cloud >= 60) return "Wechselnd bewölkt";
+  return "Heiter bis wolkig";
+}
+
+function fallbackPrecipPhrase(day: any): string {
+  const precip = metricValue(day?.precip) ?? metricValue(day?.precip_total) ?? 0;
+  const prob = metricValue(day?.precip_prob);
+  if (precip >= 5) return `Wiederholt Niederschlag, Summe um ${Math.round(precip)} mm.`;
+  if (precip >= 1) return `Zeitweise Niederschlag, Summe um ${Math.round(precip)} mm.`;
+  if (prob != null && prob >= 50) return "Lokal etwas Niederschlag möglich.";
+  return "Meist trocken.";
+}
+
+function fallbackWindPhrase(day: any): string | null {
+  if (typeof day?.wind_label === "string" && day.wind_label.trim()) return sentence(day.wind_label);
+  const windMax = metricValue(day?.wind_max);
+  const windDir = metricValue(day?.wind_dir_avg);
+  const label = buildWindLabel(windDir, windMax);
+  return label ? sentence(label) : null;
+}
+
+function buildRuleBasedForecastText(title: string, day: any): string {
+  const sky = sentence(fallbackSkyLabel(day));
+  const tmin = metricValue(day?.topography?.tmin_cold) ?? metricValue(day?.tmin);
+  const tmax = metricValue(day?.topography?.tmax_warm) ?? metricValue(day?.tmax);
+  const tempParts: string[] = [];
+  const afternoonOnly = title === "Heute Nachmittag & Abend";
+  if (!afternoonOnly && tmin != null) tempParts.push(`Tiefstwerte um ${formatDegrees(tmin)}`);
+  if (tmax != null) tempParts.push(`Höchstwerte um ${formatDegrees(tmax)}`);
+  const temp = tempParts.length ? sentence(tempParts.join(", ")) : "Temperaturen ohne markante Ausschläge.";
+  const wind = fallbackWindPhrase(day);
+  return [sky, temp, [fallbackPrecipPhrase(day), wind].filter(Boolean).join(" ")]
+    .map(sentence)
+    .join("\n\n");
+}
+
+function buildRuleBasedTrendText(days: any[]): string {
+  const valid = days.filter(Boolean);
+  if (!valid.length) return "Trend derzeit nur eingeschränkt beurteilbar.";
+  const labels = valid.map(fallbackSkyLabel);
+  const dominant = labels.sort((a, b) => labels.filter((x) => x === b).length - labels.filter((x) => x === a).length)[0] ?? "wechselhaft";
+  const tmins = valid.map((d) => metricValue(d?.tmin)).filter((v): v is number => v != null);
+  const tmaxs = valid.map((d) => metricValue(d?.tmax)).filter((v): v is number => v != null);
+  const precipDays = valid.filter((d) => (metricValue(d?.precip) ?? 0) >= 1).length;
+  const temp = tmaxs.length
+    ? `Höchstwerte meist ${formatDegrees(Math.min(...tmaxs))} bis ${formatDegrees(Math.max(...tmaxs))}`
+    : "Temperaturen ohne klare Tendenz";
+  const nights = tmins.length ? `, Tiefstwerte ${formatDegrees(Math.min(...tmins))} bis ${formatDegrees(Math.max(...tmins))}` : "";
+  const precip = precipDays >= Math.ceil(valid.length / 2)
+    ? "Mehrere Niederschlagssignale, zeitweise wechselhafter Charakter."
+    : "Niederschlagssignale eher vereinzelt, längere trockene Abschnitte.";
+  return [sentence(`Trend mit ${dominant.toLowerCase()}`), sentence(`${temp}${nights}`), precip].join("\n\n");
 }
 
 // Frostwarnung deterministisch erzwingen.
@@ -2997,8 +3098,8 @@ async function generateText(systemPrompt: string, userPrompt: string): Promise<s
   } finally {
     clearTimeout(timeout);
   }
-  if (res.status === 429) throw new Error("KI-Limit erreicht. Bitte später erneut versuchen.");
-  if (res.status === 402) throw new Error("KI-Guthaben aufgebraucht. Bitte Workspace aufladen.");
+  if (res.status === 429) throw new RecoverableAiTextError("KI-Limit erreicht. Bitte später erneut versuchen.", res.status);
+  if (res.status === 402) throw new RecoverableAiTextError("KI-Guthaben aufgebraucht. Bitte Workspace aufladen.", res.status);
   if (!res.ok) throw new Error(`KI-Fehler ${res.status}: ${await res.text()}`);
   const data = await res.json();
   const content = data.choices?.[0]?.message?.content?.trim() ?? "";
@@ -3399,7 +3500,7 @@ export const generateForecast = createServerFn({ method: "POST" })
         ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
         : "";
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
-      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt, () => buildRuleBasedForecastText(firstTitle, firstData)).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceFrostWarning(stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle), firstData),
         weather_data: firstData,
@@ -3418,7 +3519,7 @@ export const generateForecast = createServerFn({ method: "POST" })
         : "";
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
-      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt, () => buildRuleBasedForecastText(title, day)).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceFrostWarning(enforceSkyConsistency(body, day), day), weather_data: day,
       })));
     }
@@ -3436,7 +3537,7 @@ export const generateForecast = createServerFn({ method: "POST" })
           return null;
         });
         const userPrompt = buildTrendUserPrompt(locationName, trendDays, synoptic);
-        tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
+        tasks.push(generateTextNominal(promptTemplate, userPrompt, () => buildRuleBasedTrendText(trendDays as any[])).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays,
         })));
       } else {
@@ -3585,7 +3686,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         ? `\n\nTEMPERATUR-AUSNAHME (Tag 0, Nachmittag/Abend): Dieser Eintrag darf KEINEN Tiefstwerte-Satz enthalten — kein "Tiefstwerte ...", keine Nacht-Temperaturen, keine Bodenfrost-/Senken-Notiz. Tiefstwerte werden ausschliesslich in den späteren Abend-/Nachtprognosen genannt. Absatz 2 enthält nur "Höchstwerte um Z Grad." (sofern noch nicht erreicht) oder entfällt. Diese Ausnahme überschreibt die Standard-Temperatur-Regeln.`
         : "";
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName} (Radius 15 km). Schreibe einen Fliesstext für "${firstTitle}" auf Basis dieser Daten:`, firstData, windowHint + tempHint);
-      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt, () => buildRuleBasedForecastText(firstTitle, firstData)).then((body) => ({
         position: 1, entry_date: today, title: firstTitle,
         body: degradedNote + enforceFrostWarning(stripTiefstwerteForAfternoon(enforceSkyConsistency(body, firstData), firstTitle), firstData),
         weather_data: firstData, forecast_id: data.forecastId,
@@ -3604,7 +3705,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
         : "";
       const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für ${weekday}, ${formatted} auf Basis dieser Daten:`, day, tag1Hint);
       const pos = i + 1;
-      tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
+      tasks.push(generateTextNominal(promptTemplate, userPrompt, () => buildRuleBasedForecastText(title, day)).then((body) => ({
         position: pos, entry_date: day.date, title, body: enforceFrostWarning(enforceSkyConsistency(body, day), day), weather_data: day, forecast_id: data.forecastId,
       })));
     }
@@ -3622,7 +3723,7 @@ export const regenerateForecast = createServerFn({ method: "POST" })
           return null;
         });
         const userPrompt = buildTrendUserPrompt(locationName, trendDays, synoptic);
-        tasks.push(generateTextNominal(promptTemplate, userPrompt).then((body) => ({
+        tasks.push(generateTextNominal(promptTemplate, userPrompt, () => buildRuleBasedTrendText(trendDays as any[])).then((body) => ({
           position: 7, entry_date: trendDays[0]!.date, title: "Trend Tag 6 – 10", body, weather_data: trendDays, forecast_id: data.forecastId,
         })));
       } else {
@@ -3681,7 +3782,7 @@ export const regenerateEntry = createServerFn({ method: "POST" })
     const userPrompt = buildDayUserPrompt(`Standort: ${locationName}. Schreibe einen Fliesstext für "${entry.title}" auf Basis dieser Daten:`, entry.weather_data, tempHint);
     const body = enforceFrostWarning(
       stripTiefstwerteForAfternoon(
-        enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt), entry.weather_data),
+        enforceSkyConsistency(await generateTextNominal(promptTemplate, userPrompt, () => buildRuleBasedForecastText(entry.title, entry.weather_data)), entry.weather_data),
         entry.title,
       ),
       entry.weather_data,
