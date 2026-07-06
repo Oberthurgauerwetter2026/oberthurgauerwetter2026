@@ -2,8 +2,13 @@ name: Generate pressure map
 
 on:
   schedule:
-    # Nur 1× pro Tag am Abend — Folgetag-Karte aus 12Z-Modelllauf.
-    - cron: "15 17 * * *"  # 17:15 UTC (18:15/19:15 CH) — Abend-Slot, 12Z-Modelllauf
+    # Folgetag-Karte aus 12Z-Modelllauf (verfügbar ~16 UTC).
+    # Mehrere Slots als Sicherheitsnetz — generate.mjs überspringt automatisch,
+    # sobald die Karte für den Zieltag bereits erfolgreich erzeugt wurde.
+    - cron: "15 16 * * *"   # erster Versuch nach 12Z-ICON
+    - cron: "15 18 * * *"   # Nachfassen (skip, wenn 16:15 OK war)
+    - cron: "15 20 * * *"   # später Abend
+    - cron: "15 5  * * *"   # Morgen-Sicherheitsnetz für den laufenden Tag
   workflow_dispatch:
 
 concurrency:
@@ -31,11 +36,15 @@ jobs:
         working-directory: pressure-map-generator
         run: npm ci --no-audit --no-fund --registry=https://registry.npmjs.org/
 
-      - name: Generate and upload map
-        working-directory: pressure-map-generator
+      - name: Generate and upload map (with retries)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 8
+          max_attempts: 2
+          retry_wait_seconds: 60
+          command: cd pressure-map-generator && node generate.mjs
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           LOVABLE_API_KEY: ${{ secrets.LOVABLE_API_KEY }}
           FORCE_REGENERATE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
-        run: node generate.mjs
