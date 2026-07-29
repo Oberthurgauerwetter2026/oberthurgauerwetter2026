@@ -425,7 +425,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40 });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
