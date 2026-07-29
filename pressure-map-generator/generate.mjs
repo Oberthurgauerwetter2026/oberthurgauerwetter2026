@@ -48,8 +48,8 @@ function project(lon, lat) {
   const y = PAD.top + ((N - lat) / (N - S)) * PLOT_H;
   return [x, y];
 }
-function gridToPixel(gx, gy) {
-  return project(W + gx * STEP, N - gy * STEP);
+function gridToPixel(gx, gy, step = STEP) {
+  return project(W + gx * step, N - gy * step);
 }
 
 // ── Open-Meteo fetch ───────────────────────────────────────────────────────
@@ -171,6 +171,47 @@ function fillAndSmooth(g, fallback, smoothPasses = 3) {
   for (let i = 0; i < smoothPasses; i++) cur = smooth(cur);
   return cur;
 }
+// Bikubisches (Catmull-Rom) Upsampling: löst die Kästchenstruktur des groben
+// 2°-Gitters auf, damit d3-contour organische Formen statt Treppenkanten liefert.
+function cubic(p0, p1, p2, p3, t) {
+  const a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+  const b = p0 - 2.5 * p1 + 2 * p2 - 0.5 * p3;
+  const c = -0.5 * p0 + 0.5 * p2;
+  return ((a * t + b) * t + c) * t + p1;
+}
+function resample(g, factor) {
+  if (factor <= 1) return { ...g, step: g.step ?? STEP };
+  const srcStep = g.step ?? STEP;
+  const cols = (g.cols - 1) * factor + 1;
+  const rows = (g.rows - 1) * factor + 1;
+  const at = (r, c) => {
+    const rr = Math.max(0, Math.min(g.rows - 1, r));
+    const cc = Math.max(0, Math.min(g.cols - 1, c));
+    const v = g.values[rr * g.cols + cc];
+    return Number.isFinite(v) ? v : 0;
+  };
+  const out = new Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    const sy = r / factor, r1 = Math.floor(sy), ty = sy - r1;
+    for (let c = 0; c < cols; c++) {
+      const sx = c / factor, c1 = Math.floor(sx), tx = sx - c1;
+      const col = [];
+      for (let k = -1; k <= 2; k++) {
+        col.push(cubic(at(r1 + k, c1 - 1), at(r1 + k, c1), at(r1 + k, c1 + 1), at(r1 + k, c1 + 2), tx));
+      }
+      out[r * cols + c] = cubic(col[0], col[1], col[2], col[3], ty);
+    }
+  }
+  return { values: out, cols, rows, step: srcStep / factor };
+}
+function ringArea(pts) {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(a) / 2;
+}
 function findExtrema(g) {
   const all = [];
   for (let r = 1; r < g.rows - 1; r++) for (let c = 1; c < g.cols - 1; c++) {
@@ -234,19 +275,40 @@ function chaikin(pts, iterations = 2, closed = true) {
   }
   return cur;
 }
-function contourToPath(coords, doSmooth = true) {
+// Punktausdünnung: das feine Gitter liefert sehr viele, dicht liegende Stützpunkte.
+// Ohne Ausdünnung wird das SVG unnötig gross – die Form bleibt identisch.
+function decimate(pts, tol, closed) {
+  if (pts.length < 8) return pts;
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i], q = out[out.length - 1];
+    if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= tol) out.push(p);
+  }
+  if (!closed && out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+  return out.length >= 4 ? out : pts;
+}
+function contourToPath(coords, doSmooth = true, opts = {}) {
+  const { step = STEP, iterations = 2, minArea = 0, tol = 7, curve = true } = opts;
   let d = "";
   for (const poly of coords) for (const ring of poly) {
-    let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy));
+    let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy, step));
     if (pts.length < 2) continue;
+    if (minArea > 0 && ringArea(pts) < minArea) continue;
     if (!doSmooth || pts.length < 4) {
       for (let i = 0; i < pts.length; i++) d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
       continue;
     }
     const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
-    const ringPts = closed ? pts.slice(0, -1) : pts;
-    const smoothed = chaikin(ringPts, 2, closed);
+    let ringPts = closed ? pts.slice(0, -1) : pts;
+    ringPts = decimate(ringPts, tol, closed);
+    const smoothed = chaikin(ringPts, iterations, closed);
     pts = closed ? [...smoothed, smoothed[0]] : smoothed;
+    if (!curve) {
+      // Flächen: Chaikin liefert bereits weiche Ränder – Polylinie spart Dateigrösse.
+      for (let i = 0; i < pts.length; i++) d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
+      if (closed) d += "Z";
+      continue;
+    }
     const n = closed ? pts.length - 1 : pts.length;
     const get = (i) => closed ? pts[((i % n) + n) % n] : pts[Math.max(0, Math.min(pts.length - 1, i))];
     d += "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
@@ -323,7 +385,16 @@ const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 function pad2(n) { return String(n).padStart(2, "0"); }
 
 function buildSvg(grids, targetUtcIso, extremaOverride) {
-  const { pressure: grid, t850, precip } = grids;
+  const { pressure: coarseGrid, t850: coarseT850, precip: coarsePrecip } = grids;
+
+  // Feines Gitter: bikubisch verfeinert + leicht nachgeglättet → organische
+  // Konturen ohne rechteckige Zellstrukturen.
+  const UPSCALE = 4;
+  const grid = smooth(resample(coarseGrid, UPSCALE));
+  const t850 = smooth(resample(coarseT850, UPSCALE));
+  let precip = smooth(resample(smooth(coarsePrecip), UPSCALE));
+  precip = { ...precip, values: precip.values.map((v) => (v > 0 ? v : 0)) };
+  const fineStep = grid.step ?? STEP;
 
   const t850Thresholds = [];
   for (let t = -32; t <= 28; t += 2.5) t850Thresholds.push(t);
@@ -365,7 +436,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
 
   const t850Svg = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25, curve: false });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -373,7 +444,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40, curve: false });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -386,7 +457,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of linePolys) {
     const value = poly.value;
     const isBold = value % 20 === 0;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30 });
     if (!d) continue;
     contourSvg.push(`<path d="${d}" fill="none" stroke="#1b1b1b" stroke-opacity="${isBold ? 0.95 : 0.7}" stroke-width="${isBold ? 1.5 : 0.75}" stroke-linejoin="round" stroke-linecap="round" />`);
 
@@ -397,7 +468,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     const candidates = [0.5, 0.25, 0.75, 0.1, 0.9];
     for (const frac of candidates) {
       const pt = bestRing[Math.floor(bestRing.length * frac) % bestRing.length];
-      const [lx, ly] = gridToPixel(pt[0], pt[1]);
+      const [lx, ly] = gridToPixel(pt[0], pt[1], fineStep);
       if (lx < fx1 + LABEL_MARGIN || lx > fx2 - LABEL_MARGIN) continue;
       if (ly < fy1 + LABEL_MARGIN || ly > fy2 - LABEL_MARGIN) continue;
       if (placedLabels.some((p) => Math.hypot(p[0] - lx, p[1] - ly) < MIN_LABEL_DIST)) continue;
@@ -636,7 +707,7 @@ async function main() {
     const grids = {
       pressure: fillAndSmooth(raw.pressure, 1013, 3),
       t850: fillAndSmooth(raw.t850, 0, 2),
-      precip: fillAndSmooth(raw.precip, 0, 1),
+      precip: fillAndSmooth(raw.precip, 0, 2),
     };
     const baseExtrema = findExtrema(grids.pressure);
     const namedExtrema = await attachFuBerlinNames(baseExtrema);

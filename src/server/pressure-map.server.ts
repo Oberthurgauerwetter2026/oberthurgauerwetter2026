@@ -33,13 +33,13 @@ function project(lon: number, lat: number): [number, number] {
 }
 
 // Inverse for grid-to-pixel rendering of contour shapes (which are in grid units 0..COLS,0..ROWS)
-function gridToPixel(gx: number, gy: number): [number, number] {
-  const lon = W + gx * STEP;
-  const lat = N - gy * STEP; // contour rows: 0 at top => N
+function gridToPixel(gx: number, gy: number, step: number = STEP): [number, number] {
+  const lon = W + gx * step;
+  const lat = N - gy * step; // contour rows: 0 at top => N
   return project(lon, lat);
 }
 
-export type Grid = { values: number[]; cols: number; rows: number };
+export type Grid = { values: number[]; cols: number; rows: number; step?: number };
 export type Grids = { pressure: Grid; t850: Grid; precip: Grid };
 
 // Custom error to signal Open-Meteo daily limit exhaustion (HTTP 429).
@@ -347,7 +347,59 @@ function smooth(g: Grid): Grid {
       out[r * g.cols + c] = n ? s / n : NaN;
     }
   }
-  return { values: out, cols: g.cols, rows: g.rows };
+  return { values: out, cols: g.cols, rows: g.rows, step: g.step ?? STEP };
+}
+
+// Bikubisches (Catmull-Rom) Upsampling: löst die Kästchenstruktur des groben
+// 2°-Gitters auf, damit die Konturen organisch wirken.
+function cubic(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+  const b = p0 - 2.5 * p1 + 2 * p2 - 0.5 * p3;
+  const c = -0.5 * p0 + 0.5 * p2;
+  return ((a * t + b) * t + c) * t + p1;
+}
+function resample(g: Grid, factor: number): Grid {
+  if (factor <= 1) return { ...g, step: g.step ?? STEP };
+  const srcStep = g.step ?? STEP;
+  const cols = (g.cols - 1) * factor + 1;
+  const rows = (g.rows - 1) * factor + 1;
+  const at = (r: number, c: number) => {
+    const rr = Math.max(0, Math.min(g.rows - 1, r));
+    const cc = Math.max(0, Math.min(g.cols - 1, c));
+    const v = g.values[rr * g.cols + cc];
+    return Number.isFinite(v) ? v : 0;
+  };
+  const out = new Array<number>(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    const sy = r / factor, r1 = Math.floor(sy), ty = sy - r1;
+    for (let c = 0; c < cols; c++) {
+      const sx = c / factor, c1 = Math.floor(sx), tx = sx - c1;
+      const col: number[] = [];
+      for (let k = -1; k <= 2; k++) {
+        col.push(cubic(at(r1 + k, c1 - 1), at(r1 + k, c1), at(r1 + k, c1 + 1), at(r1 + k, c1 + 2), tx));
+      }
+      out[r * cols + c] = cubic(col[0], col[1], col[2], col[3], ty);
+    }
+  }
+  return { values: out, cols, rows, step: srcStep / factor };
+}
+function ringArea(pts: [number, number][]): number {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(a) / 2;
+}
+function decimate(pts: [number, number][], tol: number, closed: boolean): [number, number][] {
+  if (pts.length < 8) return pts;
+  const out: [number, number][] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i], q = out[out.length - 1];
+    if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= tol) out.push(p);
+  }
+  if (!closed && out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+  return out.length >= 4 ? out : pts;
 }
 
 // Detect local highs/lows on the grid (3x3 strict extremum + minimum spacing)
@@ -438,12 +490,18 @@ function chaikin(pts: [number, number][], iterations = 2, closed = true): [numbe
   return cur;
 }
 
-function contourToPath(coords: number[][][][], smooth = true): string {
+function contourToPath(
+  coords: number[][][][],
+  smooth = true,
+  opts: { step?: number; iterations?: number; minArea?: number; tol?: number; curve?: boolean } = {},
+): string {
+  const { step = STEP, iterations = 2, minArea = 0, tol = 7, curve = true } = opts;
   let d = "";
   for (const poly of coords) {
     for (const ring of poly) {
-      let pts: [number, number][] = ring.map(([gx, gy]) => gridToPixel(gx, gy));
+      let pts: [number, number][] = ring.map(([gx, gy]) => gridToPixel(gx, gy, step));
       if (pts.length < 2) continue;
+      if (minArea > 0 && ringArea(pts) < minArea) continue;
       if (!smooth || pts.length < 4) {
         for (let i = 0; i < pts.length; i++) {
           d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
@@ -451,11 +509,17 @@ function contourToPath(coords: number[][][][], smooth = true): string {
         continue;
       }
       const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
-      // Round corners first via Chaikin, then connect with Catmull-Rom Bezier
-      const ringPts = closed ? pts.slice(0, -1) : pts;
-      const smoothed = chaikin(ringPts, 2, closed);
+      let ringPts = closed ? pts.slice(0, -1) : pts;
+      ringPts = decimate(ringPts, tol, closed);
+      const smoothed = chaikin(ringPts, iterations, closed);
       pts = closed ? [...smoothed, smoothed[0]] : smoothed;
-      // Catmull-Rom -> Bezier
+      if (!curve) {
+        for (let i = 0; i < pts.length; i++) {
+          d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
+        }
+        if (closed) d += "Z";
+        continue;
+      }
 
       const n = closed ? pts.length - 1 : pts.length;
       const get = (i: number): [number, number] => {
@@ -524,7 +588,16 @@ function precipStyle(mm: number): { fill: string; opacity: number } | null {
 }
 
 export function buildSvg(grids: Grids, targetUtcIso: string): string {
-  const { pressure: grid, t850, precip } = grids;
+  const { pressure: coarseGrid, t850: coarseT850, precip: coarsePrecip } = grids;
+
+  // Feines Gitter: bikubisch verfeinert + leicht nachgeglättet → organische
+  // Konturen ohne rechteckige Zellstrukturen.
+  const UPSCALE = 4;
+  const grid = smooth(resample(coarseGrid, UPSCALE));
+  const t850 = smooth(resample(coarseT850, UPSCALE));
+  let precip = smooth(resample(smooth(coarsePrecip), UPSCALE));
+  precip = { ...precip, values: precip.values.map((v) => (v > 0 ? v : 0)) };
+  const fineStep = grid.step ?? STEP;
 
   // ── T850 filled bands every 2.5 °C (warm/cold air masses) ──
   const t850Thresholds: number[] = [];
@@ -572,7 +645,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   // T850 filled bands
   const t850Svg: string[] = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25, curve: false });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -582,7 +655,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40, curve: false });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -596,7 +669,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     const isBold = value % 20 === 0;
     const stroke = "#000000";
     const sw = isBold ? 1.6 : 0.9;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30 });
     if (!d) continue;
     contourSvg.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round" />`);
 
@@ -609,14 +682,14 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     }
     if (bestRing && bestRing.length > 10) {
       const mid = bestRing[Math.floor(bestRing.length / 2)];
-      const [lx, ly] = gridToPixel(mid[0], mid[1]);
+      const [lx, ly] = gridToPixel(mid[0], mid[1], fineStep);
       const txt = String(Math.round(value));
       labelSvg.push(`<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="11" font-weight="${isThousand ? "700" : "600"}" fill="${stroke}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.85" paint-order="stroke fill">${txt}</text>`);
     }
   }
 
   // Highs / Lows
-  const extrema = findExtrema(grid);
+  const extrema = findExtrema(coarseGrid);
   const extremaSvg: string[] = [];
   for (const e of extrema) {
     const [x, y] = project(e.lon, e.lat);

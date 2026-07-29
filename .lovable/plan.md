@@ -1,62 +1,25 @@
-## Ziel
+# Bodendruckkarte: organische statt würfelartige Formen
 
-1. Die eigene Karte überall klar als **„Bodendruckkarte"** benennen.
-2. Das Kartenlayout deutlich professioneller gestalten (Look Richtung amtliche Wetterkarte).
-3. Die Hoch-/Tiefdrucknamen (FU Berlin „Aktion Wetterpate") bleiben unverändert erhalten.
+## Ursache (verifiziert)
 
-## 1. Benennung
+Die Karte arbeitet auf einem sehr groben Gitter: `STEP = 2.0°` über -25…45° / 30…70° → nur 36 × 21 Gitterpunkte (`pressure-map-generator/generate.mjs`, Zeilen 34–38). `d3-contour` erzeugt darauf Konturen, die exakt auf Zellkanten laufen — also Treppen- und Kästchenformen. Beim Niederschlag ist es am schlimmsten: er wird nur mit **einem** Glättungsdurchlauf verarbeitet (`fillAndSmooth(raw.precip, 0, 1)`), und da Regenfelder fast binär sind, entstehen einzelne quadratische Blöcke pro Gitterzelle. Die vorhandene Nachbearbeitung (2× Chaikin + Catmull-Rom in `contourToPath`) rundet nur Ecken ab, kann aber die Kästchen-Struktur nicht auflösen.
 
-- `pressure-map-generator/generate.mjs`: Titel von `Bodendruck Europa — …` auf
-  `Bodendruckkarte Europa · <Datum> · 12 UTC` ändern.
-- `src/routes/_app.settings.tsx`: Labels/Überschriften vereinheitlichen
-  („Bodendruckkarte (eigenes Modell)", „Öffentliche Bild-URL der Bodendruckkarte",
-  „HTML-Einbindecode Bodendruckkarte"). Die DWD-Karte bleibt separat als
-  „DWD-Bodenanalyse (mit Fronten)".
-- Alt-Texte der Einbindecodes entsprechend anpassen (bleiben SEO-tauglich).
+## Lösung
 
-## 2. Professionellere Gestaltung (nur `generate.mjs`, SVG-Render)
+Nicht die Kontur nachträglich runden, sondern **vor** dem Contouring das Feld verfeinern.
 
-Kopfzeile
-- Klare Titelleiste: links Titel + Untertitel linksbündig statt zentriert,
-  rechts Gültigkeitszeit als eigener Block (`Gültig: Do 30.07.2026, 12 UTC`)
-  und darunter Modell-/Laufangabe.
-- Dünne Trennlinie unter dem Kopf, definierter Aussenrahmen um das Kartenfeld.
+1. **Bikubisches Upsampling** (neue Funktion `resample(grid, factor)` in `generate.mjs`): jedes Feld vor `d3contours()` um Faktor 4–6 auf ein feines Gitter interpolieren (Catmull-Rom-Interpolation in beide Achsen). Aus 36 × 21 wird z. B. 141 × 81. `gridToPixel` bekommt einen Schrittparameter, damit die feinen Gitterkoordinaten korrekt projiziert werden.
+2. **Glättung anpassen**: Niederschlag mit mehr Durchläufen (1 → 2 vor dem Upsampling, 1 weiterer nach dem Upsampling), Druck- und T850-Feld nach dem Upsampling je ein leichter Durchlauf. Ergebnis: weiche, natürlich auslaufende Ränder.
+3. **Kurvenglättung feinjustieren**: Chaikin-Iterationen von 2 auf 3 für Flächen (Niederschlag, T850), bei Isobaren bei 2 belassen, damit die Linien nicht ihre Lage verlieren.
+4. **Winzige Fragmente entfernen**: Ringe unterhalb einer Mindestfläche (ca. 25 px²) verwerfen, damit keine losen Ein-Zellen-Quadrate stehen bleiben.
+5. **Extrema-Erkennung** (`findExtrema`) weiterhin auf dem **groben** Originalgitter laufen lassen — H/T-Positionen und die FU-Berlin-Namen bleiben damit unverändert.
+6. Denselben Ablauf in `src/server/pressure-map.server.ts` (Worker-Fallback) spiegeln, damit beide Renderer identisch aussehen.
 
-Kartenfläche
-- Ozean/Land-Kontrast ruhiger: entsättigte Landfläche, feinere Küstenlinien
-  (0.6 px), Ländergrenzen dünner und heller als Küsten.
-- Gradnetz dezenter (gestrichelt, geringere Deckkraft) plus kleine
-  Gradbeschriftungen am Rahmenrand (10°W, 0°, 10°E … / 40°N, 50°N …).
-- Isobaren: Haupt-Isobaren (jede 20 hPa) kräftig, Zwischenlinien dünn;
-  Isobarenzahlen mit weissem Halo bleiben, aber Platzierung entzerren
-  (Mindestabstand zwischen Labels, keine Labels am Kartenrand).
-- Niederschlagsflächen leicht weichzeichnen/abrunden, damit die Contour-Kanten
-  weniger „technisch" wirken.
+## Prüfung
 
-Druckzentren (Namen bleiben!)
-- H/T-Symbol typografisch sauberer: Serifen-Grossbuchstabe, ohne weissen
-  Vollkreis — stattdessen dezenter Halo, damit die Isobaren durchlaufen.
-- Name weiterhin über dem Symbol, kursiv; Kerndruck darunter mit `hPa`-Einheit.
-- Kollisionsvermeidung: überlappende Beschriftungen werden vertikal versetzt.
+SVG lokal über den vorhandenen Test-Harness rendern, per Playwright als PNG aufnehmen und visuell kontrollieren: keine rechteckigen Blöcke mehr, Isobaren durchgehend rund, H/T-Namen unverändert. Danach den GitHub-Workflow „Generate pressure map“ einmal manuell auslösen.
 
-Legende / Fusszeile
-- Legendenblock in einer hellen Leiste am unteren Rand mit klarer Trennung:
-  Temperatur 850 hPa, Niederschlag 6 h, Isobarenabstand-Hinweis.
-- Fusszeile links: Quellenangabe (Open-Meteo / DWD ICON-EU, Namen FU Berlin),
-  rechts: Erstellungszeitpunkt UTC.
+## Technische Details
 
-Typografie/Farben
-- Einheitliche Schriftfamilien-Konstante statt der wiederholten Inline-Strings;
-  eine Hilfsfunktion `text(x, y, content, opts)` reduziert Duplikate.
-- Konsistente Farbpalette (Slate-Töne für Text/Rahmen, unveränderte Skalen für
-  T850 und Niederschlag, damit bestehende Legenden gültig bleiben).
-
-## Technisches
-
-- Änderungen betreffen ausschliesslich die SVG-Erzeugung in `buildSvg()` sowie
-  Beschriftungen im Frontend — keine Änderung an Datenbeschaffung, Extrema-
-  Erkennung, `fu-berlin-names.mjs`, Storage-Pfaden oder Einbind-URLs.
-- Bestehende Einbettungen in WordPress bleiben unverändert gültig
-  (gleiche Datei `europe-pressure-latest.svg`, gleiche Bildmasse).
-- Nach dem Umbau: GitHub-Action „Generate pressure map" einmal manuell starten
-  (`FORCE_REGENERATE`), damit die neue Optik sofort live ist.
+- Neue Helfer: `resample(grid, factor)`, `ringArea(pts)`; `gridToPixel(gx, gy, step)`.
+- Laufzeit/Größe: das feinere Gitter erhöht nur die Rechenzeit im Renderer (keine zusätzlichen Open-Meteo-Abfragen); die SVG-Größe steigt moderat, wird durch das Verwerfen von Kleinstringen aber teilweise wieder ausgeglichen.
