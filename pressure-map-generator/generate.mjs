@@ -355,7 +355,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     const [x1, y1] = project(lon, S), [x2, y2] = project(lon, N);
     gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.28" stroke-width="0.6" stroke-dasharray="3 4" />`);
     const lbl = lon === 0 ? "0°" : `${Math.abs(lon)}°${lon < 0 ? "W" : "E"}`;
-    gridLabels.push(text(x1, fy2 - 6, lbl, { size: 8.5, weight: "600", fill: FRAME, anchor: "middle", halo: 2.4 }));
+    gridLabels.push(text(x1, fy2 - 10, lbl, { size: 8.5, weight: "600", fill: FRAME, anchor: "middle", halo: 2.4 }));
   }
   for (let lat = 35; lat <= 65; lat += 5) {
     const [x1, y1] = project(W, lat), [x2, y2] = project(E, lat);
