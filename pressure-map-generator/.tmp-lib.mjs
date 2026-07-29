@@ -288,7 +288,7 @@ function decimate(pts, tol, closed) {
   return out.length >= 4 ? out : pts;
 }
 function contourToPath(coords, doSmooth = true, opts = {}) {
-  const { step = STEP, iterations = 2, minArea = 0, tol = 7 } = opts;
+  const { step = STEP, iterations = 2, minArea = 0, tol = 7, curve = true } = opts;
   let d = "";
   for (const poly of coords) for (const ring of poly) {
     let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy, step));
@@ -303,6 +303,12 @@ function contourToPath(coords, doSmooth = true, opts = {}) {
     ringPts = decimate(ringPts, tol, closed);
     const smoothed = chaikin(ringPts, iterations, closed);
     pts = closed ? [...smoothed, smoothed[0]] : smoothed;
+    if (!curve) {
+      // Flächen: Chaikin liefert bereits weiche Ränder – Polylinie spart Dateigrösse.
+      for (let i = 0; i < pts.length; i++) d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
+      if (closed) d += "Z";
+      continue;
+    }
     const n = closed ? pts.length - 1 : pts.length;
     const get = (i) => closed ? pts[((i % n) + n) % n] : pts[Math.max(0, Math.min(pts.length - 1, i))];
     d += "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
@@ -430,7 +436,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
 
   const t850Svg = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25 });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25, curve: false });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -438,7 +444,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40 });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40, curve: false });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }

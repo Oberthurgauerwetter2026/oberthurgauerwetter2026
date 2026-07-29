@@ -436,7 +436,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
 
   const t850Svg = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25 });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25, curve: false });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -444,7 +444,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40 });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40, curve: false });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
