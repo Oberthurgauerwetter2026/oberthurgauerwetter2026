@@ -48,8 +48,8 @@ function project(lon, lat) {
   const y = PAD.top + ((N - lat) / (N - S)) * PLOT_H;
   return [x, y];
 }
-function gridToPixel(gx, gy) {
-  return project(W + gx * STEP, N - gy * STEP);
+function gridToPixel(gx, gy, step = STEP) {
+  return project(W + gx * step, N - gy * step);
 }
 
 // ── Open-Meteo fetch ───────────────────────────────────────────────────────
