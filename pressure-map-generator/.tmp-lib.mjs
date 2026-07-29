@@ -275,8 +275,20 @@ function chaikin(pts, iterations = 2, closed = true) {
   }
   return cur;
 }
+// Punktausdünnung: das feine Gitter liefert sehr viele, dicht liegende Stützpunkte.
+// Ohne Ausdünnung wird das SVG unnötig gross – die Form bleibt identisch.
+function decimate(pts, tol, closed) {
+  if (pts.length < 8) return pts;
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i], q = out[out.length - 1];
+    if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= tol) out.push(p);
+  }
+  if (!closed && out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+  return out.length >= 4 ? out : pts;
+}
 function contourToPath(coords, doSmooth = true, opts = {}) {
-  const { step = STEP, iterations = 2, minArea = 0 } = opts;
+  const { step = STEP, iterations = 2, minArea = 0, tol = 3 } = opts;
   let d = "";
   for (const poly of coords) for (const ring of poly) {
     let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy, step));
@@ -287,7 +299,8 @@ function contourToPath(coords, doSmooth = true, opts = {}) {
       continue;
     }
     const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
-    const ringPts = closed ? pts.slice(0, -1) : pts;
+    let ringPts = closed ? pts.slice(0, -1) : pts;
+    ringPts = decimate(ringPts, tol, closed);
     const smoothed = chaikin(ringPts, iterations, closed);
     pts = closed ? [...smoothed, smoothed[0]] : smoothed;
     const n = closed ? pts.length - 1 : pts.length;
