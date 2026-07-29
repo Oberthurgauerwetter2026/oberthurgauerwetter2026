@@ -449,7 +449,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     const candidates = [0.5, 0.25, 0.75, 0.1, 0.9];
     for (const frac of candidates) {
       const pt = bestRing[Math.floor(bestRing.length * frac) % bestRing.length];
-      const [lx, ly] = gridToPixel(pt[0], pt[1]);
+      const [lx, ly] = gridToPixel(pt[0], pt[1], fineStep);
       if (lx < fx1 + LABEL_MARGIN || lx > fx2 - LABEL_MARGIN) continue;
       if (ly < fy1 + LABEL_MARGIN || ly > fy2 - LABEL_MARGIN) continue;
       if (placedLabels.some((p) => Math.hypot(p[0] - lx, p[1] - ly) < MIN_LABEL_DIST)) continue;
