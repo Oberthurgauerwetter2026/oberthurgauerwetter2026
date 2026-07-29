@@ -275,18 +275,20 @@ function chaikin(pts, iterations = 2, closed = true) {
   }
   return cur;
 }
-function contourToPath(coords, doSmooth = true) {
+function contourToPath(coords, doSmooth = true, opts = {}) {
+  const { step = STEP, iterations = 2, minArea = 0 } = opts;
   let d = "";
   for (const poly of coords) for (const ring of poly) {
-    let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy));
+    let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy, step));
     if (pts.length < 2) continue;
+    if (minArea > 0 && ringArea(pts) < minArea) continue;
     if (!doSmooth || pts.length < 4) {
       for (let i = 0; i < pts.length; i++) d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
       continue;
     }
     const closed = pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
     const ringPts = closed ? pts.slice(0, -1) : pts;
-    const smoothed = chaikin(ringPts, 2, closed);
+    const smoothed = chaikin(ringPts, iterations, closed);
     pts = closed ? [...smoothed, smoothed[0]] : smoothed;
     const n = closed ? pts.length - 1 : pts.length;
     const get = (i) => closed ? pts[((i % n) + n) % n] : pts[Math.max(0, Math.min(pts.length - 1, i))];
