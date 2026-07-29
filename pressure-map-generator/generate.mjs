@@ -438,7 +438,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of linePolys) {
     const value = poly.value;
     const isBold = value % 20 === 0;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30 });
     if (!d) continue;
     contourSvg.push(`<path d="${d}" fill="none" stroke="#1b1b1b" stroke-opacity="${isBold ? 0.95 : 0.7}" stroke-width="${isBold ? 1.5 : 0.75}" stroke-linejoin="round" stroke-linecap="round" />`);
 
