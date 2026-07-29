@@ -288,7 +288,7 @@ function decimate(pts, tol, closed) {
   return out.length >= 4 ? out : pts;
 }
 function contourToPath(coords, doSmooth = true, opts = {}) {
-  const { step = STEP, iterations = 2, minArea = 0, tol = 7 } = opts;
+  const { step = STEP, iterations = 2, minArea = 0, tol = 7, curve = true } = opts;
   let d = "";
   for (const poly of coords) for (const ring of poly) {
     let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy, step));
@@ -303,6 +303,12 @@ function contourToPath(coords, doSmooth = true, opts = {}) {
     ringPts = decimate(ringPts, tol, closed);
     const smoothed = chaikin(ringPts, iterations, closed);
     pts = closed ? [...smoothed, smoothed[0]] : smoothed;
+    if (!curve) {
+      // Flächen: Chaikin liefert bereits weiche Ränder – Polylinie spart Dateigrösse.
+      for (let i = 0; i < pts.length; i++) d += (i === 0 ? "M" : "L") + pts[i][0].toFixed(1) + "," + pts[i][1].toFixed(1);
+      if (closed) d += "Z";
+      continue;
+    }
     const n = closed ? pts.length - 1 : pts.length;
     const get = (i) => closed ? pts[((i % n) + n) % n] : pts[Math.max(0, Math.min(pts.length - 1, i))];
     d += "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
