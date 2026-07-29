@@ -739,12 +739,12 @@ function PressureMapCard({ session }: { session: any }) {
         </div>
 
         <div className="space-y-2">
-          <Label className="text-xs">Öffentliche Bild-URL der Druckkarte</Label>
+          <Label className="text-xs">Öffentliche Bild-URL der Bodendruckkarte</Label>
           <div className="flex gap-2">
             <Input readOnly value={publicMapUrl} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
             <Button type="button" variant="outline" onClick={copyUrl}>Kopieren</Button>
           </div>
-          <Label className="text-xs pt-2 block">HTML-Einbindecode</Label>
+          <Label className="text-xs pt-2 block">HTML-Einbindecode Bodendruckkarte</Label>
           <div className="flex gap-2">
             <Textarea readOnly value={pressureEmbed} rows={2} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
             <Button type="button" variant="outline" onClick={copyPressureEmbed}>Kopieren</Button>
