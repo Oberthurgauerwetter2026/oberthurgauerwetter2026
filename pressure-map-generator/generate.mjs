@@ -171,6 +171,47 @@ function fillAndSmooth(g, fallback, smoothPasses = 3) {
   for (let i = 0; i < smoothPasses; i++) cur = smooth(cur);
   return cur;
 }
+// Bikubisches (Catmull-Rom) Upsampling: löst die Kästchenstruktur des groben
+// 2°-Gitters auf, damit d3-contour organische Formen statt Treppenkanten liefert.
+function cubic(p0, p1, p2, p3, t) {
+  const a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+  const b = p0 - 2.5 * p1 + 2 * p2 - 0.5 * p3;
+  const c = -0.5 * p0 + 0.5 * p2;
+  return ((a * t + b) * t + c) * t + p1;
+}
+function resample(g, factor) {
+  if (factor <= 1) return { ...g, step: g.step ?? STEP };
+  const srcStep = g.step ?? STEP;
+  const cols = (g.cols - 1) * factor + 1;
+  const rows = (g.rows - 1) * factor + 1;
+  const at = (r, c) => {
+    const rr = Math.max(0, Math.min(g.rows - 1, r));
+    const cc = Math.max(0, Math.min(g.cols - 1, c));
+    const v = g.values[rr * g.cols + cc];
+    return Number.isFinite(v) ? v : 0;
+  };
+  const out = new Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    const sy = r / factor, r1 = Math.floor(sy), ty = sy - r1;
+    for (let c = 0; c < cols; c++) {
+      const sx = c / factor, c1 = Math.floor(sx), tx = sx - c1;
+      const col = [];
+      for (let k = -1; k <= 2; k++) {
+        col.push(cubic(at(r1 + k, c1 - 1), at(r1 + k, c1), at(r1 + k, c1 + 1), at(r1 + k, c1 + 2), tx));
+      }
+      out[r * cols + c] = cubic(col[0], col[1], col[2], col[3], ty);
+    }
+  }
+  return { values: out, cols, rows, step: srcStep / factor };
+}
+function ringArea(pts) {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(a) / 2;
+}
 function findExtrema(g) {
   const all = [];
   for (let r = 1; r < g.rows - 1; r++) for (let c = 1; c < g.cols - 1; c++) {
