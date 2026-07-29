@@ -1,0 +1,11 @@
+import { writeFileSync } from "node:fs";
+import { buildSvg, fillAndSmooth, findExtrema, COLS, ROWS, W, N, STEP } from "./.tmp-lib.mjs";
+const mk = (f) => { const v=[]; for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ v.push(f(W+c*STEP, N-r*STEP)); } return {values:v, cols:COLS, rows:ROWS}; };
+const d2=(lo,la,l0,a0)=>Math.hypot(lo-l0,(la-a0)*1.4);
+const p = mk((lo,la)=> 1013 + 22*Math.exp(-((d2(lo,la,10,52))**2)/120) - 30*Math.exp(-((d2(lo,la,-12,60))**2)/90) + 12*Math.exp(-((d2(lo,la,30,38))**2)/150));
+const t = mk((lo,la)=> 18 - (la-40)*0.9 + 4*Math.sin(lo/9));
+const pr = mk((lo,la)=> Math.max(0, 14*Math.exp(-((d2(lo,la,-6,57))**2)/40) + 8*Math.exp(-((d2(lo,la,18,47))**2)/25) - 0.6));
+const grids = { pressure: fillAndSmooth(p,1013,3), t850: fillAndSmooth(t,0,2), precip: fillAndSmooth(pr,0,2) };
+const svg = buildSvg(grids, new Date().toISOString(), findExtrema(grids.pressure));
+writeFileSync("/tmp/browser/map.svg", svg);
+console.log("ok", svg.length);
