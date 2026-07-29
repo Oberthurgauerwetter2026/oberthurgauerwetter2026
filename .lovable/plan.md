@@ -1,42 +1,36 @@
-## Problem
-
-Die Karte wird derzeit optisch geglättet, indem das grobe Datengitter künstlich verfeinert wird:
-
-- Datenabruf erfolgt auf einem 2.0°-Gitter (`STEP = 2.0` in `pressure-map-generator/generate.mjs`, gespiegelt in `src/server/pressure-map.server.ts`).
-- Danach wird bikubisch auf das 4-fache hochgerechnet (`resample(..., 4)`) und zusätzlich mit einem 3x3-Boxblur (`smooth()`) geglättet — beim Niederschlag sogar zweimal.
-
-Damit werden echte Messwerte verändert: Druckminima werden abgeflacht, Niederschlagsspitzen verschmiert, Isobaren verschoben. Die Karte sieht organisch aus, entspricht aber nicht mehr exakt den tatsächlichen Bedingungen.
-
 ## Ziel
 
-Die Karte muss die tatsächlichen Modelldaten korrekt wiedergeben — die Glättung darf nur aus **mehr echten Daten** entstehen, nicht aus erfundenen Zwischenwerten.
+Die Bodendruckkarte soll optisch der hochgeladenen Referenz (MeteoSchweiz-Druckdarstellung) entsprechen: klare, weiße Isobaren auf einem ruhigen Kartenhintergrund, Druckwerte in kleinen Label-Boxen direkt auf der Linie, sehr große H/T-Symbole mit Wertangabe.
 
-## Vorgehen
+## Was sich ändert (Darstellung, nicht Daten)
 
-1. **Echte Auflösung erhöhen**
-   - Gitter von 2.0° auf 1.0° verfeinern (ca. 61 x 31 = 1891 Punkte statt aktuell rund 500).
-   - Batch-Abruf bleibt bei 200 Punkten pro Request, also ca. 10 statt 4 Open-Meteo-Calls; bestehende Retry-/Proxy-Logik wird weiterverwendet.
-   - ICON-EU liefert nativ rund 0.0625°, ICON-D2 noch feiner — 1.0° ist also echte, keine erfundene Information.
+1. **Farbkonzept umstellen**
+   - Hintergrund/Meer: kräftiges Dunkelblau statt weiß.
+   - Landflächen: helles Salbei-/Oliv-Grün, Länder- und Küstenlinien in gedecktem Blau.
+   - Seen/Binnengewässer in der Meerfarbe.
 
-2. **Künstliche Werteveränderung entfernen**
-   - Boxblur (`smooth()`) auf Druck und Temperatur entfällt; Werte bleiben unverändert.
-   - Beim Niederschlag maximal eine sehr leichte Glättung, damit einzelne Zellenspitzen keine Nadeln erzeugen — Schwellenwerte der Legende bleiben aussagekräftig.
-   - `resample()` wird nur noch als geometrische Zwischenstufe (Faktor 2 statt 4) genutzt, damit Kontursegmente nicht der Gitterkante folgen; die Stützwerte des Originalgitters bleiben dabei exakt erhalten (Catmull-Rom läuft durch die Originalpunkte).
+2. **Isobaren im Referenz-Stil**
+   - Weiße Linien, gleichmäßige Stärke, deutlich sichtbar; Haupt-Isobaren (je 20 hPa) minimal dicker statt hart kontrastiert.
+   - Druckwerte als kleine, halbtransparente Boxen mit blauer Schrift, direkt in die Linie eingesetzt (Linie unter dem Label unterbrochen).
+   - Abstand der Labels entlang langer Linien, damit sich nichts überlagert.
 
-3. **Glättung nur noch in der Geometrie**
-   - Chaikin-Rundung und Dezimierung bleiben, aber schwächer dosiert, damit Fronten- und Isobarenverläufe nicht verwaschen.
-   - Hoch-/Tiefzentren werden weiterhin auf dem Originalgitter bestimmt, damit Position und hPa-Wert exakt bleiben; FU-Berlin-Namen bleiben unverändert.
+3. **H/T-Zentren wie in der Referenz**
+   - Sehr große, weiße, fette Buchstaben (H/T) statt der aktuellen Serifen-Variante.
+   - Kerndruckwert klein darunter, FU-Berlin-Namen bleiben erhalten.
 
-4. **Kontrolle**
-   - Vergleich der Extremwerte (min/max Druck, max Niederschlag) vor und nach dem Rendering: Abweichung muss 0 sein.
-   - Test-Render mit echten Daten und visuelle Prüfung: keine kästchenartigen Strukturen, aber Isobaren, die den realen Werten folgen.
-   - Dateigrösse und Laufzeit prüfen (Ziel: SVG unter ca. 2 MB, Action-Laufzeit im bisherigen Rahmen).
+4. **Flächen zurücknehmen**
+   - Die farbigen Temperatur-850-hPa- und Niederschlagsflächen dominieren aktuell das Bild. Vorschlag: Temperaturflächen entfernen (oder stark abgeschwächt als Option), Niederschlag optional dezent — die Referenz zeigt eine reine Druckkarte.
 
-5. **Beide Renderer synchron halten**
-   - Identische Änderungen in `pressure-map-generator/generate.mjs` (GitHub Action) und `src/server/pressure-map.server.ts` (Fallback im Backend).
+5. **Kopf, Legende, Quellenangabe** an das dunkle Layout anpassen (helle Schrift), Titel „Bodendruckkarte Europa" und DWD/Open-Meteo-Quellen bleiben.
 
-## Technische Details
+## Technische Umsetzung
 
-- Betroffene Dateien: `pressure-map-generator/generate.mjs`, `src/server/pressure-map.server.ts`
-- Keine Änderungen an Datenbank, Storage-Pfaden oder Einbettungs-URL — die Karte bleibt unter derselben öffentlichen Adresse abrufbar.
-- Mehr Abrufpunkte bedeuten etwas längere Laufzeit der GitHub Action (geschätzt +20-40 s), aber keine zusätzlichen Kosten.
+- Anpassung erfolgt in beiden Renderern parallel, damit GitHub-Action und Worker-Fallback identisch aussehen:
+  - `pressure-map-generator/generate.mjs`
+  - `src/server/pressure-map.server.ts`
+- Betroffen sind ausschließlich die Zeichenfunktionen (Hintergrund-Rect, Land-/Grenz-Pfade, Isobaren-Stroke und Label-Rendering, Extrema-Symbole, Legende). Das 1,25°-Datengitter, die Kontur-Berechnung und die Zentren-Erkennung bleiben unverändert.
+- Verifikation: lokaler Testlauf mit zwischengespeicherten Gitterdaten (kein erneuter Open-Meteo-Abruf wegen Ratelimits) und Screenshot-Kontrolle, danach einmaliger manueller Start der GitHub-Action.
+
+## Offene Entscheidung
+
+Temperaturflächen: komplett raus (näher an der Referenz) oder dezent im Hintergrund behalten? Standard im Plan: raus, Niederschlag dezent behalten.

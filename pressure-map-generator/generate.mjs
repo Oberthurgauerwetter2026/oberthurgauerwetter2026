@@ -370,15 +370,23 @@ function precipStyle(mm) {
 
 // ── Typografie ─────────────────────────────────────────────────────────────
 const FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif";
-const INK = "#0f172a";
-const INK_SOFT = "#475569";
-const INK_MUTED = "#94a3b8";
-const FRAME = "#334155";
+const INK = "#ffffff";
+const INK_SOFT = "#bcd7ec";
+const INK_MUTED = "#8fb4d2";
+const FRAME = "#7fb0d6";
+// Farbwelt nach Vorbild klassischer Bodendruckkarten (MeteoSchweiz/DWD):
+// tiefblaues Meer, helles Land, weisse Isobaren.
+const SEA = "#12507f";
+const SEA_DEEP = "#0f4570";
+const LAND = "#b9d3a0";
+const LAND_LINE = "#3f7fb5";
+const ISOBAR = "#ffffff";
+const LABEL_INK = "#12507f";
 
 function text(x, y, content, opts = {}) {
   const {
     size = 11, weight = "400", fill = INK, anchor = "start",
-    italic = false, halo = 0, letter = 0, baseline = null, family = FONT,
+    italic = false, halo = 0, haloColor = "#0f4570", letter = 0, baseline = null, family = FONT,
   } = opts;
   const attrs = [
     `x="${Number(x).toFixed(1)}"`,
@@ -392,8 +400,18 @@ function text(x, y, content, opts = {}) {
   if (italic) attrs.push(`font-style="italic"`);
   if (letter) attrs.push(`letter-spacing="${letter}"`);
   if (baseline) attrs.push(`dominant-baseline="${baseline}"`);
-  if (halo) attrs.push(`stroke="#ffffff" stroke-width="${halo}" stroke-opacity="0.9" paint-order="stroke fill"`);
+  if (halo) attrs.push(`stroke="${haloColor}" stroke-width="${halo}" stroke-opacity="0.85" paint-order="stroke fill"`);
   return `<text ${attrs.join(" ")}>${escapeXml(String(content))}</text>`;
+}
+
+// Isobaren-Wert in einer hellen Box direkt auf der Linie (Referenzstil).
+function boxedLabel(x, y, content, opts = {}) {
+  const { size = 12, weight = "600", fill = LABEL_INK, bg = "#ffffff", bgOpacity = 0.92 } = opts;
+  const str = String(content);
+  const w = str.length * size * 0.62 + size * 0.7;
+  const h = size * 1.5;
+  return `<g><rect x="${(x - w / 2).toFixed(1)}" y="${(y - h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${bg}" fill-opacity="${bgOpacity}" />` +
+    text(x, y, str, { size, weight, fill, anchor: "middle", baseline: "central" }) + `</g>`;
 }
 
 const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
@@ -427,7 +445,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   const date = new Date(targetUtcIso);
   const title = "Bodendruckkarte Europa";
   const validText = `Gültig ${WEEKDAYS[date.getUTCDay()]} ${pad2(date.getUTCDate())}.${pad2(date.getUTCMonth() + 1)}.${date.getUTCFullYear()} · ${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())} UTC`;
-  const subtitle = "Bodendruck (hPa) · Temperatur 850 hPa · Niederschlag 6 h";
+  const subtitle = "Bodendruck auf Meeresniveau (hPa) · Niederschlag 6 h";
   const modelText = "Modell DWD ICON-EU · Isobaren je 5 hPa";
 
   const oceanPath = geojsonToPath(europeOcean);
@@ -443,12 +461,12 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     const [x1, y1] = project(lon, S), [x2, y2] = project(lon, N);
     gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.28" stroke-width="0.6" stroke-dasharray="3 4" />`);
     const lbl = lon === 0 ? "0°" : `${Math.abs(lon)}°${lon < 0 ? "W" : "E"}`;
-    gridLabels.push(text(x1, fy2 - 10, lbl, { size: 8.5, weight: "600", fill: FRAME, anchor: "middle", halo: 2.4 }));
+    gridLabels.push(text(x1, fy2 - 10, lbl, { size: 8.5, weight: "600", fill: "#ffffff", anchor: "middle", halo: 2.4 }));
   }
   for (let lat = 35; lat <= 65; lat += 5) {
     const [x1, y1] = project(W, lat), [x2, y2] = project(E, lat);
     gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.28" stroke-width="0.6" stroke-dasharray="3 4" />`);
-    gridLabels.push(text(fx1 + 6, y1 - 3, `${lat}°N`, { size: 8.5, weight: "600", fill: FRAME, halo: 2.4 }));
+    gridLabels.push(text(fx1 + 6, y1 - 3, `${lat}°N`, { size: 8.5, weight: "600", fill: "#ffffff", halo: 2.4 }));
   }
 
   const t850Svg = [];
@@ -476,7 +494,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     const isBold = value % 20 === 0;
     const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30, tol: 4 });
     if (!d) continue;
-    contourSvg.push(`<path d="${d}" fill="none" stroke="#1b1b1b" stroke-opacity="${isBold ? 0.95 : 0.7}" stroke-width="${isBold ? 1.5 : 0.75}" stroke-linejoin="round" stroke-linecap="round" />`);
+    contourSvg.push(`<path d="${d}" fill="none" stroke="${ISOBAR}" stroke-opacity="${isBold ? 1 : 0.9}" stroke-width="${isBold ? 2 : 1.3}" stroke-linejoin="round" stroke-linecap="round" />`);
 
     let bestRing = null, bestLen = 0;
     for (const p of poly.coordinates) for (const r of p) if (r.length > bestLen) { bestLen = r.length; bestRing = r; }
@@ -490,9 +508,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
       if (ly < fy1 + LABEL_MARGIN || ly > fy2 - LABEL_MARGIN) continue;
       if (placedLabels.some((p) => Math.hypot(p[0] - lx, p[1] - ly) < MIN_LABEL_DIST)) continue;
       placedLabels.push([lx, ly]);
-      labelSvg.push(text(lx, ly + 3.5, Math.round(value), {
-        size: 10.5, weight: isBold ? "700" : "600", fill: "#111111", anchor: "middle", halo: 3,
-      }));
+      labelSvg.push(boxedLabel(lx, ly, Math.round(value), { size: 12, weight: isBold ? "700" : "600" }));
       break;
     }
   }
@@ -504,7 +520,8 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const e of extrema) {
     const [x, y] = project(e.lon, e.lat);
     const isH = e.type === "H";
-    const color = isH ? "#7f1d1d" : "#0d3b8a";
+    const color = "#ffffff";
+    const valueColor = isH ? "#ffe3d2" : "#d9ecff";
     // Kollisionsvermeidung: bei Überlappung Beschriftung vertikal versetzen.
     let shift = 0;
     while (placedCenters.some((p) => Math.hypot(p[0] - x, p[1] - (y + shift)) < 52) && Math.abs(shift) < 60) {
@@ -512,16 +529,15 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     }
     placedCenters.push([x, y + shift]);
     const nameSvg = e.name
-      ? text(x, y - 26 + shift, e.name, { size: 13.5, weight: "700", italic: true, fill: color, anchor: "middle", halo: 3.2 })
+      ? text(x, y - 34 + shift, e.name, { size: 14, weight: "700", italic: true, fill: color, anchor: "middle", halo: 3.2 })
       : "";
     extremaSvg.push(
       `<g>${nameSvg}` +
       text(x, y + shift, e.type, {
-        size: 36, weight: "700", fill: color, anchor: "middle", halo: 4.5, baseline: "central",
-        family: "'Times New Roman', Georgia, serif",
+        size: 52, weight: "800", fill: color, anchor: "middle", halo: 3.5, baseline: "central",
       }) +
-      text(x, y + 30 + shift, `${Math.round(e.value)} hPa`, {
-        size: 11.5, weight: "600", fill: color, anchor: "middle", halo: 3,
+      text(x, y + 38 + shift, `${Math.round(e.value)} hPa`, {
+        size: 12.5, weight: "700", fill: valueColor, anchor: "middle", halo: 3,
       }) +
       `</g>`,
     );
@@ -530,16 +546,13 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   // ── Legenden-Leiste ──────────────────────────────────────────────────────
   const barY = fy2 + 14, barH = IMG_H - (fy2 + 14) - 26;
   const lgY = barY + 26, lgH = 9;
-  const t850LgX = PAD.left + 14, t850LgW = 300, t850Segs = 48;
-  const t850Items = [];
-  for (let i = 0; i < t850Segs; i++) {
-    const t = -30 + (25 - -30) * (i / (t850Segs - 1));
-    t850Items.push(`<rect x="${(t850LgX + (t850LgW / t850Segs) * i).toFixed(1)}" y="${lgY}" width="${(t850LgW / t850Segs + 0.6).toFixed(1)}" height="${lgH}" fill="${t850Color(t)}" />`);
-  }
-  const t850Labels = [-30, -15, 0, 10, 25].map((t) => {
-    const x = t850LgX + ((t - -30) / (25 - -30)) * t850LgW;
-    return text(x, lgY + lgH + 11, `${t > 0 ? "+" : ""}${t}`, { size: 9, fill: INK_SOFT, anchor: "middle" });
-  }).join("");
+  const t850LgX = PAD.left + 14, t850LgW = 300;
+  const isoLegend = [
+    `<line x1="${t850LgX}" y1="${(lgY + 3).toFixed(1)}" x2="${t850LgX + 46}" y2="${(lgY + 3).toFixed(1)}" stroke="${ISOBAR}" stroke-width="1.3" stroke-opacity="0.9" />`,
+    text(t850LgX + 54, lgY + 6.5, "Isobare je 5 hPa", { size: 9.5, fill: INK_SOFT }),
+    `<line x1="${t850LgX}" y1="${(lgY + 18).toFixed(1)}" x2="${t850LgX + 46}" y2="${(lgY + 18).toFixed(1)}" stroke="${ISOBAR}" stroke-width="2" />`,
+    text(t850LgX + 54, lgY + 21.5, "Hauptisobare je 20 hPa", { size: 9.5, fill: INK_SOFT }),
+  ].join("");
 
   const pLgX = IMG_W - PAD.right - 14 - 270, pLgW = 270;
   const pSwatches = [{ v: 0.5, label: "0.5" }, { v: 1, label: "1" }, { v: 2, label: "2" }, { v: 5, label: "5" }, { v: 10, label: "10" }, { v: 20, label: "20+" }];
@@ -562,40 +575,38 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     <clipPath id="plot"><rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" /></clipPath>
     <filter id="soften" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="1.2" /></filter>
   </defs>
-  <rect width="${IMG_W}" height="${IMG_H}" fill="#ffffff" />
+  <rect width="${IMG_W}" height="${IMG_H}" fill="${SEA_DEEP}" />
 
   <!-- Kopf -->
   ${text(PAD.left, 30, title, { size: 23, weight: "700", fill: INK, letter: 0.2 })}
   ${text(PAD.left, 48, subtitle, { size: 11.5, fill: INK_SOFT })}
   ${text(IMG_W - PAD.right, 30, validText, { size: 13, weight: "600", fill: INK, anchor: "end" })}
   ${text(IMG_W - PAD.right, 48, modelText, { size: 11.5, fill: INK_SOFT, anchor: "end" })}
-  <line x1="${PAD.left}" y1="${fy1 - 6}" x2="${IMG_W - PAD.right}" y2="${fy1 - 6}" stroke="${FRAME}" stroke-opacity="0.35" stroke-width="1" />
+  <line x1="${PAD.left}" y1="${fy1 - 6}" x2="${IMG_W - PAD.right}" y2="${fy1 - 6}" stroke="${FRAME}" stroke-opacity="0.45" stroke-width="1" />
 
   <!-- Karte -->
   <g clip-path="url(#plot)">
-    <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#a9c6dc" />
-    <path d="${oceanPath}" fill="#8fb3cd" stroke="none" />
-    <path d="${landPath}" fill="#dbe7cd" stroke="none" />
-    <g opacity="0.58">${t850Svg.join("\n      ")}</g>
-    <g filter="url(#soften)">${precipSvg.join("\n      ")}</g>
-    <path d="${lakesPath}" fill="#a9c6dc" stroke="#6b8caa" stroke-width="0.35" />
-    <path d="${landPath}" fill="none" stroke="#44586b" stroke-width="0.6" stroke-linejoin="round" />
+    <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="${SEA}" />
+    <path d="${oceanPath}" fill="${SEA}" stroke="none" />
+    <path d="${landPath}" fill="${LAND}" stroke="none" />
+    <g opacity="0.42" filter="url(#soften)">${precipSvg.join("\n      ")}</g>
+    <path d="${lakesPath}" fill="${SEA}" stroke="${LAND_LINE}" stroke-width="0.35" />
+    <path d="${landPath}" fill="none" stroke="${LAND_LINE}" stroke-width="0.6" stroke-linejoin="round" />
     ${gridLines.join("\n    ")}
     ${contourSvg.join("\n    ")}
     ${labelSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
     ${gridLabels.join("\n    ")}
   </g>
-  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="${FRAME}" stroke-width="1.2" />
+  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="${FRAME}" stroke-opacity="0.5" stroke-width="1.2" />
 
   <!-- Legende -->
-  <rect x="${PAD.left}" y="${barY}" width="${IMG_W - PAD.left - PAD.right}" height="${barH}" fill="#f6f8fa" stroke="${FRAME}" stroke-opacity="0.18" />
-  ${text(t850LgX, lgY - 6, "Temperatur 850 hPa (°C)", { size: 10, weight: "600", fill: INK })}
-  ${t850Items.join("\n  ")}
-  ${t850Labels}
-  ${text(midX, lgY - 6, "Isobaren", { size: 10, weight: "600", fill: INK, anchor: "middle" })}
-  ${text(midX, lgY + 8, "je 5 hPa · fett je 20 hPa", { size: 9, fill: INK_SOFT, anchor: "middle" })}
-  ${text(midX, lgY + 20, "H = Hoch · T = Tief (Namen: FU Berlin)", { size: 9, fill: INK_SOFT, anchor: "middle" })}
+  <rect x="${PAD.left}" y="${barY}" width="${IMG_W - PAD.left - PAD.right}" height="${barH}" fill="#0c3b62" stroke="${FRAME}" stroke-opacity="0.3" />
+  ${text(t850LgX, lgY - 6, "Bodendruck", { size: 10, weight: "600", fill: INK })}
+  ${isoLegend}
+  ${text(midX, lgY - 6, "Druckzentren", { size: 10, weight: "600", fill: INK, anchor: "middle" })}
+  ${text(midX, lgY + 10, "H = Hoch · T = Tief", { size: 9.5, fill: INK_SOFT, anchor: "middle" })}
+  ${text(midX, lgY + 23, "Namen: Aktion Wetterpate, FU Berlin", { size: 9, fill: INK_MUTED, anchor: "middle" })}
   ${text(pLgX, lgY - 6, "Niederschlag 6 h (mm)", { size: 10, weight: "600", fill: INK })}
   ${pItems.join("\n  ")}
   ${pLabels.join("\n  ")}
