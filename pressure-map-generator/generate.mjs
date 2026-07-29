@@ -417,7 +417,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
 
   const t850Svg = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25 });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
