@@ -700,11 +700,11 @@ function PressureMapCard({ session }: { session: any }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
+        <CardTitle>Bodendruckkarte Europa (eigenes Modell)</CardTitle>
         <CardDescription>
-          Tägliche Vorhersagekarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
-          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Generierung via GitHub Action 3× täglich
-          (04:15 / 07:15 / 17:15 UTC), Skip wenn bereits aktuell.
+          Tägliche Bodendruckkarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
+          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo, Hoch-/Tiefnamen von der Aktion Wetterpate
+          (FU Berlin). Generierung via GitHub Action mehrmals täglich, Skip wenn bereits aktuell.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
