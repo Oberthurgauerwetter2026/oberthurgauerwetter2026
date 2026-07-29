@@ -288,7 +288,7 @@ function decimate(pts, tol, closed) {
   return out.length >= 4 ? out : pts;
 }
 function contourToPath(coords, doSmooth = true, opts = {}) {
-  const { step = STEP, iterations = 2, minArea = 0, tol = 3 } = opts;
+  const { step = STEP, iterations = 2, minArea = 0, tol = 7 } = opts;
   let d = "";
   for (const poly of coords) for (const ring of poly) {
     let pts = ring.map(([gx, gy]) => gridToPixel(gx, gy, step));
