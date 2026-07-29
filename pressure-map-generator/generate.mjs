@@ -39,7 +39,7 @@ const ROWS = Math.round((N - S) / STEP) + 1;
 
 const IMG_W = 1200;
 const IMG_H = 840;
-const PAD = { top: 60, right: 20, bottom: 80, left: 20 };
+const PAD = { top: 64, right: 20, bottom: 100, left: 20 };
 const PLOT_W = IMG_W - PAD.left - PAD.right;
 const PLOT_H = IMG_H - PAD.top - PAD.bottom;
 
@@ -291,6 +291,37 @@ function precipStyle(mm) {
   return { fill: "#a21caf", opacity: 0.88 };
 }
 
+// ── Typografie ─────────────────────────────────────────────────────────────
+const FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif";
+const INK = "#0f172a";
+const INK_SOFT = "#475569";
+const INK_MUTED = "#94a3b8";
+const FRAME = "#334155";
+
+function text(x, y, content, opts = {}) {
+  const {
+    size = 11, weight = "400", fill = INK, anchor = "start",
+    italic = false, halo = 0, letter = 0, baseline = null, family = FONT,
+  } = opts;
+  const attrs = [
+    `x="${Number(x).toFixed(1)}"`,
+    `y="${Number(y).toFixed(1)}"`,
+    `font-family="${family.replace(/'/g, "&apos;")}"`,
+    `font-size="${size}"`,
+    `font-weight="${weight}"`,
+    `fill="${fill}"`,
+    `text-anchor="${anchor}"`,
+  ];
+  if (italic) attrs.push(`font-style="italic"`);
+  if (letter) attrs.push(`letter-spacing="${letter}"`);
+  if (baseline) attrs.push(`dominant-baseline="${baseline}"`);
+  if (halo) attrs.push(`stroke="#ffffff" stroke-width="${halo}" stroke-opacity="0.9" paint-order="stroke fill"`);
+  return `<text ${attrs.join(" ")}>${escapeXml(String(content))}</text>`;
+}
+
+const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+function pad2(n) { return String(n).padStart(2, "0"); }
+
 function buildSvg(grids, targetUtcIso, extremaOverride) {
   const { pressure: grid, t850, precip } = grids;
 
@@ -306,21 +337,30 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   const linePolys = d3contours().size([grid.cols, grid.rows]).thresholds(lineThresholds)(grid.values);
 
   const date = new Date(targetUtcIso);
-  const title = `Bodendruck Europa — ${date.toLocaleString("de-CH", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })} UTC`;
-  const subtitle = "DWD ICON-EU · T 850 hPa (°C) · Niederschlag 6 h · Isobaren je 5 hPa";
+  const title = "Bodendruckkarte Europa";
+  const validText = `Gültig ${WEEKDAYS[date.getUTCDay()]} ${pad2(date.getUTCDate())}.${pad2(date.getUTCMonth() + 1)}.${date.getUTCFullYear()} · ${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())} UTC`;
+  const subtitle = "Bodendruck (hPa) · Temperatur 850 hPa · Niederschlag 6 h";
+  const modelText = "Modell DWD ICON-EU · Isobaren je 5 hPa";
 
   const oceanPath = geojsonToPath(europeOcean);
   const landPath = geojsonToPath(europeCountries);
   const lakesPath = geojsonToPath(europeLakes);
 
-  const gridLines = [];
+  const [fx1, fy1] = [PAD.left, PAD.top];
+  const fx2 = PAD.left + PLOT_W, fy2 = PAD.top + PLOT_H;
+
+  // Gradnetz + Randbeschriftung
+  const gridLines = [], gridLabels = [];
   for (let lon = -20; lon <= 40; lon += 10) {
     const [x1, y1] = project(lon, S), [x2, y2] = project(lon, N);
-    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.5" />`);
+    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.28" stroke-width="0.6" stroke-dasharray="3 4" />`);
+    const lbl = lon === 0 ? "0°" : `${Math.abs(lon)}°${lon < 0 ? "W" : "E"}`;
+    gridLabels.push(text(x1, fy2 - 10, lbl, { size: 8.5, weight: "600", fill: FRAME, anchor: "middle", halo: 2.4 }));
   }
   for (let lat = 35; lat <= 65; lat += 5) {
     const [x1, y1] = project(W, lat), [x2, y2] = project(E, lat);
-    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.5" />`);
+    gridLines.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.28" stroke-width="0.6" stroke-dasharray="3 4" />`);
+    gridLabels.push(text(fx1 + 6, y1 - 3, `${lat}°N`, { size: 8.5, weight: "600", fill: FRAME, halo: 2.4 }));
   }
 
   const t850Svg = [];
@@ -338,88 +378,143 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
 
+  // Isobaren + entzerrte Beschriftung
   const contourSvg = [], labelSvg = [];
+  const placedLabels = [];
+  const MIN_LABEL_DIST = 70;
+  const LABEL_MARGIN = 26;
   for (const poly of linePolys) {
     const value = poly.value;
-    const isThousand = value === 1000;
     const isBold = value % 20 === 0;
-    const stroke = "#000000";
-    const sw = isBold ? 1.6 : 0.9;
     const d = contourToPath(poly.coordinates, true);
     if (!d) continue;
-    contourSvg.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round" />`);
+    contourSvg.push(`<path d="${d}" fill="none" stroke="#1b1b1b" stroke-opacity="${isBold ? 0.95 : 0.7}" stroke-width="${isBold ? 1.5 : 0.75}" stroke-linejoin="round" stroke-linecap="round" />`);
+
     let bestRing = null, bestLen = 0;
     for (const p of poly.coordinates) for (const r of p) if (r.length > bestLen) { bestLen = r.length; bestRing = r; }
-    if (bestRing && bestRing.length > 10) {
-      const mid = bestRing[Math.floor(bestRing.length / 2)];
-      const [lx, ly] = gridToPixel(mid[0], mid[1]);
-      labelSvg.push(`<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="11" font-weight="${isThousand ? "700" : "600"}" fill="${stroke}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.85" paint-order="stroke fill">${Math.round(value)}</text>`);
+    if (!bestRing || bestRing.length <= 10) continue;
+    // Mehrere Kandidatenpositionen entlang des Rings testen.
+    const candidates = [0.5, 0.25, 0.75, 0.1, 0.9];
+    for (const frac of candidates) {
+      const pt = bestRing[Math.floor(bestRing.length * frac) % bestRing.length];
+      const [lx, ly] = gridToPixel(pt[0], pt[1]);
+      if (lx < fx1 + LABEL_MARGIN || lx > fx2 - LABEL_MARGIN) continue;
+      if (ly < fy1 + LABEL_MARGIN || ly > fy2 - LABEL_MARGIN) continue;
+      if (placedLabels.some((p) => Math.hypot(p[0] - lx, p[1] - ly) < MIN_LABEL_DIST)) continue;
+      placedLabels.push([lx, ly]);
+      labelSvg.push(text(lx, ly + 3.5, Math.round(value), {
+        size: 10.5, weight: isBold ? "700" : "600", fill: "#111111", anchor: "middle", halo: 3,
+      }));
+      break;
     }
   }
 
+  // Druckzentren — Namen bleiben erhalten (FU Berlin, Aktion Wetterpate)
   const extrema = extremaOverride ?? findExtrema(grid);
   const extremaSvg = [];
+  const placedCenters = [];
   for (const e of extrema) {
     const [x, y] = project(e.lon, e.lat);
     const isH = e.type === "H";
-    const color = isH ? "#7f0000" : "#0d47a1";
+    const color = isH ? "#7f1d1d" : "#0d3b8a";
+    // Kollisionsvermeidung: bei Überlappung Beschriftung vertikal versetzen.
+    let shift = 0;
+    while (placedCenters.some((p) => Math.hypot(p[0] - x, p[1] - (y + shift)) < 52) && Math.abs(shift) < 60) {
+      shift = shift <= 0 ? -shift + 26 : -shift;
+    }
+    placedCenters.push([x, y + shift]);
     const nameSvg = e.name
-      ? `<text x="${x.toFixed(1)}" y="${(y - 28).toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="13" font-style="italic" font-weight="700" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${escapeXml(e.name)}</text>`
+      ? text(x, y - 26 + shift, e.name, { size: 13.5, weight: "700", italic: true, fill: color, anchor: "middle", halo: 3.2 })
       : "";
-    extremaSvg.push(`<g>${nameSvg}<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="22" fill="white" fill-opacity="0.85" stroke="${color}" stroke-width="1.5" /><text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="${color}" text-anchor="middle" dominant-baseline="central">${e.type}</text><text x="${x.toFixed(1)}" y="${(y + 34).toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="${color}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.9" paint-order="stroke fill">${Math.round(e.value)}</text></g>`);
+    extremaSvg.push(
+      `<g>${nameSvg}` +
+      text(x, y + shift, e.type, {
+        size: 36, weight: "700", fill: color, anchor: "middle", halo: 4.5, baseline: "central",
+        family: "'Times New Roman', Georgia, serif",
+      }) +
+      text(x, y + 30 + shift, `${Math.round(e.value)} hPa`, {
+        size: 11.5, weight: "600", fill: color, anchor: "middle", halo: 3,
+      }) +
+      `</g>`,
+    );
   }
 
-  const lgY = IMG_H - 55, lgH = 10;
-  const t850LgX = PAD.left + 12, t850LgW = 320, t850Segs = 40;
+  // ── Legenden-Leiste ──────────────────────────────────────────────────────
+  const barY = fy2 + 14, barH = IMG_H - (fy2 + 14) - 26;
+  const lgY = barY + 26, lgH = 9;
+  const t850LgX = PAD.left + 14, t850LgW = 300, t850Segs = 48;
   const t850Items = [];
   for (let i = 0; i < t850Segs; i++) {
     const t = -30 + (25 - -30) * (i / (t850Segs - 1));
-    t850Items.push(`<rect x="${(t850LgX + (t850LgW / t850Segs) * i).toFixed(1)}" y="${lgY}" width="${(t850LgW / t850Segs + 0.5).toFixed(1)}" height="${lgH}" fill="${t850Color(t)}" />`);
+    t850Items.push(`<rect x="${(t850LgX + (t850LgW / t850Segs) * i).toFixed(1)}" y="${lgY}" width="${(t850LgW / t850Segs + 0.6).toFixed(1)}" height="${lgH}" fill="${t850Color(t)}" />`);
   }
   const t850Labels = [-30, -15, 0, 10, 25].map((t) => {
     const x = t850LgX + ((t - -30) / (25 - -30)) * t850LgW;
-    return `<text x="${x.toFixed(1)}" y="${lgY + lgH + 11}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="9" fill="#334155" text-anchor="middle">${t > 0 ? "+" : ""}${t}</text>`;
+    return text(x, lgY + lgH + 11, `${t > 0 ? "+" : ""}${t}`, { size: 9, fill: INK_SOFT, anchor: "middle" });
   }).join("");
 
-  const pLgX = IMG_W - PAD.right - 12 - 280, pLgW = 280;
+  const pLgX = IMG_W - PAD.right - 14 - 270, pLgW = 270;
   const pSwatches = [{ v: 0.5, label: "0.5" }, { v: 1, label: "1" }, { v: 2, label: "2" }, { v: 5, label: "5" }, { v: 10, label: "10" }, { v: 20, label: "20+" }];
   const pStep = pLgW / pSwatches.length;
   const pItems = [], pLabels = [];
   for (let i = 0; i < pSwatches.length; i++) {
     const s = precipStyle(pSwatches[i].v + 0.01);
     const x = pLgX + i * pStep;
-    pItems.push(`<rect x="${x.toFixed(1)}" y="${lgY}" width="${(pStep - 1).toFixed(1)}" height="${lgH}" fill="${s.fill}" fill-opacity="${s.opacity}" />`);
-    pLabels.push(`<text x="${(x + pStep / 2).toFixed(1)}" y="${lgY + lgH + 11}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="9" fill="#334155" text-anchor="middle">${pSwatches[i].label}</text>`);
+    pItems.push(`<rect x="${x.toFixed(1)}" y="${lgY}" width="${(pStep - 1.5).toFixed(1)}" height="${lgH}" fill="${s.fill}" fill-opacity="${s.opacity}" />`);
+    pLabels.push(text(x + pStep / 2, lgY + lgH + 11, pSwatches[i].label, { size: 9, fill: INK_SOFT, anchor: "middle" }));
   }
 
-  const [fx1, fy1] = [PAD.left, PAD.top];
+  const midX = (t850LgX + t850LgW + pLgX) / 2;
+  const generated = new Date();
+  const generatedText = `Erstellt ${pad2(generated.getUTCDate())}.${pad2(generated.getUTCMonth() + 1)}.${generated.getUTCFullYear()} ${pad2(generated.getUTCHours())}:${pad2(generated.getUTCMinutes())} UTC`;
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${IMG_W} ${IMG_H}" width="${IMG_W}" height="${IMG_H}">
-  <defs><clipPath id="plot"><rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" /></clipPath></defs>
+  <defs>
+    <clipPath id="plot"><rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" /></clipPath>
+    <filter id="soften" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="1.2" /></filter>
+  </defs>
   <rect width="${IMG_W}" height="${IMG_H}" fill="#ffffff" />
-  <text x="${IMG_W / 2}" y="30" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a" text-anchor="middle">${escapeXml(title)}</text>
-  <text x="${IMG_W / 2}" y="50" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="12" fill="#475569" text-anchor="middle">${escapeXml(subtitle)}</text>
+
+  <!-- Kopf -->
+  ${text(PAD.left, 30, title, { size: 23, weight: "700", fill: INK, letter: 0.2 })}
+  ${text(PAD.left, 48, subtitle, { size: 11.5, fill: INK_SOFT })}
+  ${text(IMG_W - PAD.right, 30, validText, { size: 13, weight: "600", fill: INK, anchor: "end" })}
+  ${text(IMG_W - PAD.right, 48, modelText, { size: 11.5, fill: INK_SOFT, anchor: "end" })}
+  <line x1="${PAD.left}" y1="${fy1 - 6}" x2="${IMG_W - PAD.right}" y2="${fy1 - 6}" stroke="${FRAME}" stroke-opacity="0.35" stroke-width="1" />
+
+  <!-- Karte -->
   <g clip-path="url(#plot)">
-    <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#a8c8e0" />
-    <path d="${oceanPath}" fill="#7fb0d4" stroke="none" />
-    <path d="${landPath}" fill="#D3EAC2" stroke="none" />
-    <g opacity="0.62">${t850Svg.join("\n      ")}</g>
-    <g>${precipSvg.join("\n      ")}</g>
-    <path d="${lakesPath}" fill="#a8c8e0" stroke="#6b8caa" stroke-width="0.4" />
-    <path d="${landPath}" fill="none" stroke="#3a4a5a" stroke-width="0.7" stroke-linejoin="round" />
+    <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="#a9c6dc" />
+    <path d="${oceanPath}" fill="#8fb3cd" stroke="none" />
+    <path d="${landPath}" fill="#dbe7cd" stroke="none" />
+    <g opacity="0.58">${t850Svg.join("\n      ")}</g>
+    <g filter="url(#soften)">${precipSvg.join("\n      ")}</g>
+    <path d="${lakesPath}" fill="#a9c6dc" stroke="#6b8caa" stroke-width="0.35" />
+    <path d="${landPath}" fill="none" stroke="#44586b" stroke-width="0.6" stroke-linejoin="round" />
     ${gridLines.join("\n    ")}
     ${contourSvg.join("\n    ")}
     ${labelSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
+    ${gridLabels.join("\n    ")}
   </g>
-  
+  <rect x="${fx1}" y="${fy1}" width="${PLOT_W}" height="${PLOT_H}" fill="none" stroke="${FRAME}" stroke-width="1.2" />
+
+  <!-- Legende -->
+  <rect x="${PAD.left}" y="${barY}" width="${IMG_W - PAD.left - PAD.right}" height="${barH}" fill="#f6f8fa" stroke="${FRAME}" stroke-opacity="0.18" />
+  ${text(t850LgX, lgY - 6, "Temperatur 850 hPa (°C)", { size: 10, weight: "600", fill: INK })}
   ${t850Items.join("\n  ")}
   ${t850Labels}
-  <text x="${t850LgX}" y="${lgY - 4}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#0f172a">Temperatur 850 hPa (°C)</text>
+  ${text(midX, lgY - 6, "Isobaren", { size: 10, weight: "600", fill: INK, anchor: "middle" })}
+  ${text(midX, lgY + 8, "je 5 hPa · fett je 20 hPa", { size: 9, fill: INK_SOFT, anchor: "middle" })}
+  ${text(midX, lgY + 20, "H = Hoch · T = Tief (Namen: FU Berlin)", { size: 9, fill: INK_SOFT, anchor: "middle" })}
+  ${text(pLgX, lgY - 6, "Niederschlag 6 h (mm)", { size: 10, weight: "600", fill: INK })}
   ${pItems.join("\n  ")}
   ${pLabels.join("\n  ")}
-  <text x="${pLgX}" y="${lgY - 4}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#0f172a">Niederschlag 6 h (mm)</text>
-  <text x="${IMG_W - 10}" y="${IMG_H - 10}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">Quelle: DWD ICON-EU via Open-Meteo · Namen: Aktion Wetterpate, FU Berlin · oberthurgauerwetter.ch</text>
+
+  <!-- Fuss -->
+  ${text(PAD.left, IMG_H - 10, "Quelle: DWD ICON-EU via Open-Meteo · Namen: Aktion Wetterpate, FU Berlin · oberthurgauerwetter.ch", { size: 9.5, fill: INK_MUTED })}
+  ${text(IMG_W - PAD.right, IMG_H - 10, generatedText, { size: 9.5, fill: INK_MUTED, anchor: "end" })}
 </svg>`;
 }
 

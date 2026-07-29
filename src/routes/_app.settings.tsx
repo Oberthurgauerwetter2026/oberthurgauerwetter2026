@@ -677,7 +677,7 @@ function PressureMapCard({ session }: { session: any }) {
   }
   useEffect(() => { load(); }, [session]);
 
-  const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
+  const altText = "Bodendruckkarte Europa Folgetag 12 UTC – Isobaren, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
   const publicMapUrl = `${PUBLIC_BASE}${PRESSURE_MAP_PATH}`;
   const dwdMapUrl = `${PUBLIC_BASE}${DWD_MAP_PATH}`;
 
@@ -700,11 +700,11 @@ function PressureMapCard({ session }: { session: any }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Wetterkarte Europa (Druck · T850 · Niederschlag)</CardTitle>
+        <CardTitle>Bodendruckkarte Europa (eigenes Modell)</CardTitle>
         <CardDescription>
-          Tägliche Vorhersagekarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
-          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo. Generierung via GitHub Action 3× täglich
-          (04:15 / 07:15 / 17:15 UTC), Skip wenn bereits aktuell.
+          Tägliche Bodendruckkarte für den Folgetag mit Isobaren, Temperatur in 850 hPa und 6 h-Niederschlag,
+          gültig für 12:00 UTC. Modell DWD ICON-EU via Open-Meteo, Hoch-/Tiefnamen von der Aktion Wetterpate
+          (FU Berlin). Generierung via GitHub Action mehrmals täglich, Skip wenn bereits aktuell.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -739,12 +739,12 @@ function PressureMapCard({ session }: { session: any }) {
         </div>
 
         <div className="space-y-2">
-          <Label className="text-xs">Öffentliche Bild-URL der Druckkarte</Label>
+          <Label className="text-xs">Öffentliche Bild-URL der Bodendruckkarte</Label>
           <div className="flex gap-2">
             <Input readOnly value={publicMapUrl} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
             <Button type="button" variant="outline" onClick={copyUrl}>Kopieren</Button>
           </div>
-          <Label className="text-xs pt-2 block">HTML-Einbindecode</Label>
+          <Label className="text-xs pt-2 block">HTML-Einbindecode Bodendruckkarte</Label>
           <div className="flex gap-2">
             <Textarea readOnly value={pressureEmbed} rows={2} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
             <Button type="button" variant="outline" onClick={copyPressureEmbed}>Kopieren</Button>
