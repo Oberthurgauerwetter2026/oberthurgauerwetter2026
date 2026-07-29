@@ -677,7 +677,7 @@ function PressureMapCard({ session }: { session: any }) {
   }
   useEffect(() => { load(); }, [session]);
 
-  const altText = "Wettervorhersagekarte Europa Folgetag 12 UTC – Bodendruck, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
+  const altText = "Bodendruckkarte Europa Folgetag 12 UTC – Isobaren, Temperatur 850 hPa und Niederschlag (DWD ICON-EU)";
   const publicMapUrl = `${PUBLIC_BASE}${PRESSURE_MAP_PATH}`;
   const dwdMapUrl = `${PUBLIC_BASE}${DWD_MAP_PATH}`;
 
