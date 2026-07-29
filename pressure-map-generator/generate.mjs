@@ -33,7 +33,7 @@ const europeLakes = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-lakes.json
 
 // ── Map extent ─────────────────────────────────────────────────────────────
 const W = -25, E = 45, S = 30, N = 70;
-const STEP = 2.0;
+const STEP = 1.25; // echtes Abrufgitter (1.25°) – Glättung kommt aus echten Daten, nicht aus Interpolation
 const COLS = Math.round((E - W) / STEP) + 1;
 const ROWS = Math.round((N - S) / STEP) + 1;
 
@@ -62,7 +62,7 @@ async function fetchGrids(targetUtcIso, model = "icon_seamless") {
     }
   }
   const BATCH = 200;
-  const THROTTLE_MS = 250;
+  const THROTTLE_MS = 700;
   const pressure = new Array(lats.length).fill(NaN);
   const t850 = new Array(lats.length).fill(NaN);
   const precip = new Array(lats.length).fill(NaN);
@@ -213,23 +213,38 @@ function ringArea(pts) {
   return Math.abs(a) / 2;
 }
 function findExtrema(g) {
+  // Erkennung auf einer leicht geglätteten Kopie (nur zur Ortsbestimmung),
+  // ausgegeben wird der unveränderte Originalwert an dieser Gitterzelle.
+  const det = smooth(g);
+  const R = Math.max(1, Math.round(4 / STEP)); // ~4° Suchradius
+  const PROMINENCE = 1.0; // hPa Mindestabhebung gegenüber dem Rand des Suchfensters
   const all = [];
-  for (let r = 1; r < g.rows - 1; r++) for (let c = 1; c < g.cols - 1; c++) {
-    const v = g.values[r * g.cols + c];
+  for (let r = R; r < g.rows - R; r++) for (let c = R; c < g.cols - R; c++) {
+    const v = det.values[r * g.cols + c];
     if (!Number.isFinite(v)) continue;
-    let isMax = true, isMin = true;
-    for (let dr = -1; dr <= 1 && (isMax || isMin); dr++) for (let dc = -1; dc <= 1; dc++) {
+    let isMax = true, isMin = true, ringMin = Infinity, ringMax = -Infinity;
+    for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
       if (dr === 0 && dc === 0) continue;
-      const nv = g.values[(r + dr) * g.cols + (c + dc)];
+      const nv = det.values[(r + dr) * g.cols + (c + dc)];
       if (!Number.isFinite(nv)) continue;
       if (nv >= v) isMax = false;
       if (nv <= v) isMin = false;
+      if (nv < ringMin) ringMin = nv;
+      if (nv > ringMax) ringMax = nv;
     }
-    if (isMax || isMin) all.push({ type: isMax ? "H" : "T", lon: W + c * STEP, lat: N - r * STEP, value: v, gx: c, gy: r });
+    const raw = g.values[r * g.cols + c];
+    if (!Number.isFinite(raw)) continue;
+    // Nur markante Zentren: flache Druckplateaus erzeugen keine H/T-Symbole.
+    if (isMax && v - ringMin < PROMINENCE) continue;
+    if (isMin && ringMax - v < PROMINENCE) continue;
+    if (isMax || isMin) {
+      all.push({ type: isMax ? "H" : "T", lon: W + c * STEP, lat: N - r * STEP, value: raw, gx: c, gy: r });
+    }
   }
   const kept = [];
   for (const e of all.sort((a, b) => (a.type === "H" ? -a.value : a.value) - (b.type === "H" ? -b.value : b.value))) {
-    if (kept.some((k) => Math.hypot(k.gx - e.gx, k.gy - e.gy) < 5)) continue;
+    // Mindestabstand ~15° unabhängig von der Gitterauflösung
+    if (kept.some((k) => Math.hypot((k.gx - e.gx) * STEP, (k.gy - e.gy) * STEP) < 15)) continue;
     kept.push(e);
   }
   return kept.map(({ type, lon, lat, value }) => ({ type, lon, lat, value }));
@@ -387,12 +402,14 @@ function pad2(n) { return String(n).padStart(2, "0"); }
 function buildSvg(grids, targetUtcIso, extremaOverride) {
   const { pressure: coarseGrid, t850: coarseT850, precip: coarsePrecip } = grids;
 
-  // Feines Gitter: bikubisch verfeinert + leicht nachgeglättet → organische
-  // Konturen ohne rechteckige Zellstrukturen.
-  const UPSCALE = 4;
-  const grid = smooth(resample(coarseGrid, UPSCALE));
-  const t850 = smooth(resample(coarseT850, UPSCALE));
-  let precip = smooth(resample(smooth(coarsePrecip), UPSCALE));
+  // Datentreue: Druck und Temperatur werden NICHT geglättet. Das Resampling
+  // (Catmull-Rom) läuft exakt durch die Originalstützwerte und dient nur dazu,
+  // dass Konturen nicht der Gitterkante folgen.
+  const UPSCALE = 2;
+  const grid = resample(coarseGrid, UPSCALE);
+  const t850 = resample(coarseT850, UPSCALE);
+  // Niederschlag: eine sehr leichte Glättung gegen Einzelzellen-Nadeln.
+  let precip = resample(smooth(coarsePrecip), UPSCALE);
   precip = { ...precip, values: precip.values.map((v) => (v > 0 ? v : 0)) };
   const fineStep = grid.step ?? STEP;
 
@@ -436,7 +453,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
 
   const t850Svg = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25, curve: false });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 25, tol: 4, curve: false });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -444,7 +461,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40, curve: false });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 40, tol: 4, curve: false });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -457,7 +474,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   for (const poly of linePolys) {
     const value = poly.value;
     const isBold = value % 20 === 0;
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30 });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30, tol: 4 });
     if (!d) continue;
     contourSvg.push(`<path d="${d}" fill="none" stroke="#1b1b1b" stroke-opacity="${isBold ? 0.95 : 0.7}" stroke-width="${isBold ? 1.5 : 0.75}" stroke-linejoin="round" stroke-linecap="round" />`);
 

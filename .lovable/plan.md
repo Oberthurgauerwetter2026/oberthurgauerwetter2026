@@ -1,25 +1,42 @@
-# Bodendruckkarte: organische statt würfelartige Formen
+## Problem
 
-## Ursache (verifiziert)
+Die Karte wird derzeit optisch geglättet, indem das grobe Datengitter künstlich verfeinert wird:
 
-Die Karte arbeitet auf einem sehr groben Gitter: `STEP = 2.0°` über -25…45° / 30…70° → nur 36 × 21 Gitterpunkte (`pressure-map-generator/generate.mjs`, Zeilen 34–38). `d3-contour` erzeugt darauf Konturen, die exakt auf Zellkanten laufen — also Treppen- und Kästchenformen. Beim Niederschlag ist es am schlimmsten: er wird nur mit **einem** Glättungsdurchlauf verarbeitet (`fillAndSmooth(raw.precip, 0, 1)`), und da Regenfelder fast binär sind, entstehen einzelne quadratische Blöcke pro Gitterzelle. Die vorhandene Nachbearbeitung (2× Chaikin + Catmull-Rom in `contourToPath`) rundet nur Ecken ab, kann aber die Kästchen-Struktur nicht auflösen.
+- Datenabruf erfolgt auf einem 2.0°-Gitter (`STEP = 2.0` in `pressure-map-generator/generate.mjs`, gespiegelt in `src/server/pressure-map.server.ts`).
+- Danach wird bikubisch auf das 4-fache hochgerechnet (`resample(..., 4)`) und zusätzlich mit einem 3x3-Boxblur (`smooth()`) geglättet — beim Niederschlag sogar zweimal.
 
-## Lösung
+Damit werden echte Messwerte verändert: Druckminima werden abgeflacht, Niederschlagsspitzen verschmiert, Isobaren verschoben. Die Karte sieht organisch aus, entspricht aber nicht mehr exakt den tatsächlichen Bedingungen.
 
-Nicht die Kontur nachträglich runden, sondern **vor** dem Contouring das Feld verfeinern.
+## Ziel
 
-1. **Bikubisches Upsampling** (neue Funktion `resample(grid, factor)` in `generate.mjs`): jedes Feld vor `d3contours()` um Faktor 4–6 auf ein feines Gitter interpolieren (Catmull-Rom-Interpolation in beide Achsen). Aus 36 × 21 wird z. B. 141 × 81. `gridToPixel` bekommt einen Schrittparameter, damit die feinen Gitterkoordinaten korrekt projiziert werden.
-2. **Glättung anpassen**: Niederschlag mit mehr Durchläufen (1 → 2 vor dem Upsampling, 1 weiterer nach dem Upsampling), Druck- und T850-Feld nach dem Upsampling je ein leichter Durchlauf. Ergebnis: weiche, natürlich auslaufende Ränder.
-3. **Kurvenglättung feinjustieren**: Chaikin-Iterationen von 2 auf 3 für Flächen (Niederschlag, T850), bei Isobaren bei 2 belassen, damit die Linien nicht ihre Lage verlieren.
-4. **Winzige Fragmente entfernen**: Ringe unterhalb einer Mindestfläche (ca. 25 px²) verwerfen, damit keine losen Ein-Zellen-Quadrate stehen bleiben.
-5. **Extrema-Erkennung** (`findExtrema`) weiterhin auf dem **groben** Originalgitter laufen lassen — H/T-Positionen und die FU-Berlin-Namen bleiben damit unverändert.
-6. Denselben Ablauf in `src/server/pressure-map.server.ts` (Worker-Fallback) spiegeln, damit beide Renderer identisch aussehen.
+Die Karte muss die tatsächlichen Modelldaten korrekt wiedergeben — die Glättung darf nur aus **mehr echten Daten** entstehen, nicht aus erfundenen Zwischenwerten.
 
-## Prüfung
+## Vorgehen
 
-SVG lokal über den vorhandenen Test-Harness rendern, per Playwright als PNG aufnehmen und visuell kontrollieren: keine rechteckigen Blöcke mehr, Isobaren durchgehend rund, H/T-Namen unverändert. Danach den GitHub-Workflow „Generate pressure map“ einmal manuell auslösen.
+1. **Echte Auflösung erhöhen**
+   - Gitter von 2.0° auf 1.0° verfeinern (ca. 61 x 31 = 1891 Punkte statt aktuell rund 500).
+   - Batch-Abruf bleibt bei 200 Punkten pro Request, also ca. 10 statt 4 Open-Meteo-Calls; bestehende Retry-/Proxy-Logik wird weiterverwendet.
+   - ICON-EU liefert nativ rund 0.0625°, ICON-D2 noch feiner — 1.0° ist also echte, keine erfundene Information.
+
+2. **Künstliche Werteveränderung entfernen**
+   - Boxblur (`smooth()`) auf Druck und Temperatur entfällt; Werte bleiben unverändert.
+   - Beim Niederschlag maximal eine sehr leichte Glättung, damit einzelne Zellenspitzen keine Nadeln erzeugen — Schwellenwerte der Legende bleiben aussagekräftig.
+   - `resample()` wird nur noch als geometrische Zwischenstufe (Faktor 2 statt 4) genutzt, damit Kontursegmente nicht der Gitterkante folgen; die Stützwerte des Originalgitters bleiben dabei exakt erhalten (Catmull-Rom läuft durch die Originalpunkte).
+
+3. **Glättung nur noch in der Geometrie**
+   - Chaikin-Rundung und Dezimierung bleiben, aber schwächer dosiert, damit Fronten- und Isobarenverläufe nicht verwaschen.
+   - Hoch-/Tiefzentren werden weiterhin auf dem Originalgitter bestimmt, damit Position und hPa-Wert exakt bleiben; FU-Berlin-Namen bleiben unverändert.
+
+4. **Kontrolle**
+   - Vergleich der Extremwerte (min/max Druck, max Niederschlag) vor und nach dem Rendering: Abweichung muss 0 sein.
+   - Test-Render mit echten Daten und visuelle Prüfung: keine kästchenartigen Strukturen, aber Isobaren, die den realen Werten folgen.
+   - Dateigrösse und Laufzeit prüfen (Ziel: SVG unter ca. 2 MB, Action-Laufzeit im bisherigen Rahmen).
+
+5. **Beide Renderer synchron halten**
+   - Identische Änderungen in `pressure-map-generator/generate.mjs` (GitHub Action) und `src/server/pressure-map.server.ts` (Fallback im Backend).
 
 ## Technische Details
 
-- Neue Helfer: `resample(grid, factor)`, `ringArea(pts)`; `gridToPixel(gx, gy, step)`.
-- Laufzeit/Größe: das feinere Gitter erhöht nur die Rechenzeit im Renderer (keine zusätzlichen Open-Meteo-Abfragen); die SVG-Größe steigt moderat, wird durch das Verwerfen von Kleinstringen aber teilweise wieder ausgeglichen.
+- Betroffene Dateien: `pressure-map-generator/generate.mjs`, `src/server/pressure-map.server.ts`
+- Keine Änderungen an Datenbank, Storage-Pfaden oder Einbettungs-URL — die Karte bleibt unter derselben öffentlichen Adresse abrufbar.
+- Mehr Abrufpunkte bedeuten etwas längere Laufzeit der GitHub Action (geschätzt +20-40 s), aber keine zusätzlichen Kosten.

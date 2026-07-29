@@ -13,9 +13,9 @@ import { fetchOpenMeteo } from "./openmeteo-quota.server";
 
 // Map extent
 const W = -25, E = 45, S = 30, N = 70;
-const STEP = 2.0; // degrees per grid cell
-const COLS = Math.round((E - W) / STEP) + 1; // 36
-const ROWS = Math.round((N - S) / STEP) + 1; // 21
+const STEP = 1.25; // echtes Abrufgitter (1.25°) – keine erfundenen Zwischenwerte
+const COLS = Math.round((E - W) / STEP) + 1; // 57
+const ROWS = Math.round((N - S) / STEP) + 1; // 33
 
 // Image dimensions
 const IMG_W = 1200;
@@ -161,7 +161,7 @@ async function fetchGrids(targetUtcIso: string, model: string = "icon_seamless")
     }
   }
 
-  // 756 grid points → mit BATCH=200 nur 4 OM-Calls statt 16.
+  // 1.25° Gitter (57x33 = 1881 Punkte) → mit BATCH=200 rund 10 OM-Calls.
   // Reduziert Druck auf den geteilten Cloudflare-Worker-Egress-IP, der
   // sonst mit anderen Tenants ins Open-Meteo-Tageslimit läuft.
   const BATCH = 200;
@@ -402,38 +402,47 @@ function decimate(pts: [number, number][], tol: number, closed: boolean): [numbe
   return out.length >= 4 ? out : pts;
 }
 
-// Detect local highs/lows on the grid (3x3 strict extremum + minimum spacing)
+// Detect local highs/lows (Suchradius ~4°, Mindestabhebung 1 hPa, Abstand ~15°)
 function findExtrema(g: Grid): { type: "H" | "T"; lon: number; lat: number; value: number }[] {
+  const det = smooth(g); // nur zur Ortsbestimmung, Ausgabe bleibt der Originalwert
+  const R = Math.max(1, Math.round(4 / STEP));
+  const PROMINENCE = 1.0;
   const all: { type: "H" | "T"; lon: number; lat: number; value: number; gx: number; gy: number }[] = [];
-  for (let r = 1; r < g.rows - 1; r++) {
-    for (let c = 1; c < g.cols - 1; c++) {
-      const v = g.values[r * g.cols + c];
+  for (let r = R; r < g.rows - R; r++) {
+    for (let c = R; c < g.cols - R; c++) {
+      const v = det.values[r * g.cols + c];
       if (!Number.isFinite(v)) continue;
-      let isMax = true, isMin = true;
-      for (let dr = -1; dr <= 1 && (isMax || isMin); dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
+      let isMax = true, isMin = true, ringMin = Infinity, ringMax = -Infinity;
+      for (let dr = -R; dr <= R; dr++) {
+        for (let dc = -R; dc <= R; dc++) {
           if (dr === 0 && dc === 0) continue;
-          const nv = g.values[(r + dr) * g.cols + (c + dc)];
+          const nv = det.values[(r + dr) * g.cols + (c + dc)];
           if (!Number.isFinite(nv)) continue;
           if (nv >= v) isMax = false;
           if (nv <= v) isMin = false;
+          if (nv < ringMin) ringMin = nv;
+          if (nv > ringMax) ringMax = nv;
         }
       }
+      const raw = g.values[r * g.cols + c];
+      if (!Number.isFinite(raw)) continue;
+      if (isMax && v - ringMin < PROMINENCE) continue;
+      if (isMin && ringMax - v < PROMINENCE) continue;
       if (isMax || isMin) {
         all.push({
           type: isMax ? "H" : "T",
           lon: W + c * STEP,
           lat: N - r * STEP,
-          value: v,
+          value: raw,
           gx: c, gy: r,
         });
       }
     }
   }
-  // Enforce minimum spacing (~5 grid cells)
+  // Enforce minimum spacing (~15°)
   const kept: typeof all = [];
   for (const e of all.sort((a, b) => (a.type === "H" ? -a.value : a.value) - (b.type === "H" ? -b.value : b.value))) {
-    if (kept.some((k) => Math.hypot(k.gx - e.gx, k.gy - e.gy) < 5)) continue;
+    if (kept.some((k) => Math.hypot((k.gx - e.gx) * STEP, (k.gy - e.gy) * STEP) < 15)) continue;
     kept.push(e);
   }
   return kept.map(({ type, lon, lat, value }) => ({ type, lon, lat, value }));
@@ -590,12 +599,12 @@ function precipStyle(mm: number): { fill: string; opacity: number } | null {
 export function buildSvg(grids: Grids, targetUtcIso: string): string {
   const { pressure: coarseGrid, t850: coarseT850, precip: coarsePrecip } = grids;
 
-  // Feines Gitter: bikubisch verfeinert + leicht nachgeglättet → organische
-  // Konturen ohne rechteckige Zellstrukturen.
-  const UPSCALE = 4;
-  const grid = smooth(resample(coarseGrid, UPSCALE));
-  const t850 = smooth(resample(coarseT850, UPSCALE));
-  let precip = smooth(resample(smooth(coarsePrecip), UPSCALE));
+  // Datentreue: Druck und Temperatur bleiben ungeglättet. Catmull-Rom-Resampling
+  // läuft exakt durch die Originalstützwerte und dient nur der Kontur-Geometrie.
+  const UPSCALE = 2;
+  const grid = resample(coarseGrid, UPSCALE);
+  const t850 = resample(coarseT850, UPSCALE);
+  let precip = resample(smooth(coarsePrecip), UPSCALE);
   precip = { ...precip, values: precip.values.map((v) => (v > 0 ? v : 0)) };
   const fineStep = grid.step ?? STEP;
 
@@ -645,7 +654,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   // T850 filled bands
   const t850Svg: string[] = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25, curve: false });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 25, tol: 4, curve: false });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -655,7 +664,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40, curve: false });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 40, tol: 4, curve: false });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -669,7 +678,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     const isBold = value % 20 === 0;
     const stroke = "#000000";
     const sw = isBold ? 1.6 : 0.9;
-    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30 });
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30, tol: 4 });
     if (!d) continue;
     contourSvg.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round" />`);
 
