@@ -366,7 +366,16 @@ const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 function pad2(n) { return String(n).padStart(2, "0"); }
 
 function buildSvg(grids, targetUtcIso, extremaOverride) {
-  const { pressure: grid, t850, precip } = grids;
+  const { pressure: coarseGrid, t850: coarseT850, precip: coarsePrecip } = grids;
+
+  // Feines Gitter: bikubisch verfeinert + leicht nachgeglättet → organische
+  // Konturen ohne rechteckige Zellstrukturen.
+  const UPSCALE = 5;
+  const grid = smooth(resample(coarseGrid, UPSCALE));
+  const t850 = smooth(resample(coarseT850, UPSCALE));
+  let precip = smooth(resample(smooth(coarsePrecip), UPSCALE));
+  precip = { ...precip, values: precip.values.map((v) => (v > 0 ? v : 0)) };
+  const fineStep = grid.step ?? STEP;
 
   const t850Thresholds = [];
   for (let t = -32; t <= 28; t += 2.5) t850Thresholds.push(t);
