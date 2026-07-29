@@ -347,7 +347,59 @@ function smooth(g: Grid): Grid {
       out[r * g.cols + c] = n ? s / n : NaN;
     }
   }
-  return { values: out, cols: g.cols, rows: g.rows };
+  return { values: out, cols: g.cols, rows: g.rows, step: g.step ?? STEP };
+}
+
+// Bikubisches (Catmull-Rom) Upsampling: löst die Kästchenstruktur des groben
+// 2°-Gitters auf, damit die Konturen organisch wirken.
+function cubic(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+  const b = p0 - 2.5 * p1 + 2 * p2 - 0.5 * p3;
+  const c = -0.5 * p0 + 0.5 * p2;
+  return ((a * t + b) * t + c) * t + p1;
+}
+function resample(g: Grid, factor: number): Grid {
+  if (factor <= 1) return { ...g, step: g.step ?? STEP };
+  const srcStep = g.step ?? STEP;
+  const cols = (g.cols - 1) * factor + 1;
+  const rows = (g.rows - 1) * factor + 1;
+  const at = (r: number, c: number) => {
+    const rr = Math.max(0, Math.min(g.rows - 1, r));
+    const cc = Math.max(0, Math.min(g.cols - 1, c));
+    const v = g.values[rr * g.cols + cc];
+    return Number.isFinite(v) ? v : 0;
+  };
+  const out = new Array<number>(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    const sy = r / factor, r1 = Math.floor(sy), ty = sy - r1;
+    for (let c = 0; c < cols; c++) {
+      const sx = c / factor, c1 = Math.floor(sx), tx = sx - c1;
+      const col: number[] = [];
+      for (let k = -1; k <= 2; k++) {
+        col.push(cubic(at(r1 + k, c1 - 1), at(r1 + k, c1), at(r1 + k, c1 + 1), at(r1 + k, c1 + 2), tx));
+      }
+      out[r * cols + c] = cubic(col[0], col[1], col[2], col[3], ty);
+    }
+  }
+  return { values: out, cols, rows, step: srcStep / factor };
+}
+function ringArea(pts: [number, number][]): number {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(a) / 2;
+}
+function decimate(pts: [number, number][], tol: number, closed: boolean): [number, number][] {
+  if (pts.length < 8) return pts;
+  const out: [number, number][] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i], q = out[out.length - 1];
+    if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= tol) out.push(p);
+  }
+  if (!closed && out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+  return out.length >= 4 ? out : pts;
 }
 
 // Detect local highs/lows on the grid (3x3 strict extremum + minimum spacing)
