@@ -688,7 +688,7 @@ async function main() {
     const grids = {
       pressure: fillAndSmooth(raw.pressure, 1013, 3),
       t850: fillAndSmooth(raw.t850, 0, 2),
-      precip: fillAndSmooth(raw.precip, 0, 1),
+      precip: fillAndSmooth(raw.precip, 0, 2),
     };
     const baseExtrema = findExtrema(grids.pressure);
     const namedExtrema = await attachFuBerlinNames(baseExtrema);
