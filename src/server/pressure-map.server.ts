@@ -33,9 +33,9 @@ function project(lon: number, lat: number): [number, number] {
 }
 
 // Inverse for grid-to-pixel rendering of contour shapes (which are in grid units 0..COLS,0..ROWS)
-function gridToPixel(gx: number, gy: number): [number, number] {
-  const lon = W + gx * STEP;
-  const lat = N - gy * STEP; // contour rows: 0 at top => N
+function gridToPixel(gx: number, gy: number, step: number = STEP): [number, number] {
+  const lon = W + gx * step;
+  const lat = N - gy * step; // contour rows: 0 at top => N
   return project(lon, lat);
 }
 
