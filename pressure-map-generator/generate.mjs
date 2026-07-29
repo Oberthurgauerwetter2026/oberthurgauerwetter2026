@@ -383,7 +383,7 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
 
   // Feines Gitter: bikubisch verfeinert + leicht nachgeglättet → organische
   // Konturen ohne rechteckige Zellstrukturen.
-  const UPSCALE = 5;
+  const UPSCALE = 4;
   const grid = smooth(resample(coarseGrid, UPSCALE));
   const t850 = smooth(resample(coarseT850, UPSCALE));
   let precip = smooth(resample(smooth(coarsePrecip), UPSCALE));
