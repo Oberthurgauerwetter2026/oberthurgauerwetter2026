@@ -39,7 +39,7 @@ const ROWS = Math.round((N - S) / STEP) + 1;
 
 const IMG_W = 1200;
 const IMG_H = 840;
-const PAD = { top: 60, right: 20, bottom: 80, left: 20 };
+const PAD = { top: 64, right: 20, bottom: 100, left: 20 };
 const PLOT_W = IMG_W - PAD.left - PAD.right;
 const PLOT_H = IMG_H - PAD.top - PAD.bottom;
 
