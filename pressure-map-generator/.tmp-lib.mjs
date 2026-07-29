@@ -728,11 +728,3 @@ async function main() {
 }
 
 export { buildSvg, fillAndSmooth, findExtrema, COLS, ROWS, W, E, S, N, STEP };
-  if (e instanceof PhaseError) {
-    console.error(`[gen] FAILED in phase=${e.phase} code=${e.code}: ${e.message}`);
-    if (e.cause?.stack) console.error(e.cause.stack);
-    process.exit(e.code);
-  }
-  console.error("[gen] FAILED with unexpected error:", e?.stack ?? e);
-  process.exit(99);
-});
