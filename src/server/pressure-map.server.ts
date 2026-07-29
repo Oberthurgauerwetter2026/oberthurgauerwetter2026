@@ -588,7 +588,16 @@ function precipStyle(mm: number): { fill: string; opacity: number } | null {
 }
 
 export function buildSvg(grids: Grids, targetUtcIso: string): string {
-  const { pressure: grid, t850, precip } = grids;
+  const { pressure: coarseGrid, t850: coarseT850, precip: coarsePrecip } = grids;
+
+  // Feines Gitter: bikubisch verfeinert + leicht nachgeglättet → organische
+  // Konturen ohne rechteckige Zellstrukturen.
+  const UPSCALE = 4;
+  const grid = smooth(resample(coarseGrid, UPSCALE));
+  const t850 = smooth(resample(coarseT850, UPSCALE));
+  let precip = smooth(resample(smooth(coarsePrecip), UPSCALE));
+  precip = { ...precip, values: precip.values.map((v) => (v > 0 ? v : 0)) };
+  const fineStep = grid.step ?? STEP;
 
   // ── T850 filled bands every 2.5 °C (warm/cold air masses) ──
   const t850Thresholds: number[] = [];
