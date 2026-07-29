@@ -645,7 +645,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   // T850 filled bands
   const t850Svg: string[] = [];
   for (const poly of t850Polys) {
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 25, curve: false });
     if (!d) continue;
     t850Svg.push(`<path d="${d}" fill="${t850Color(poly.value)}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -655,7 +655,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   for (const poly of precipPolys) {
     const style = precipStyle(poly.value);
     if (!style) continue;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 3, minArea: 40, curve: false });
     if (!d) continue;
     precipSvg.push(`<path d="${d}" fill="${style.fill}" fill-opacity="${style.opacity}" fill-rule="evenodd" stroke="none" />`);
   }
@@ -669,7 +669,7 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     const isBold = value % 20 === 0;
     const stroke = "#000000";
     const sw = isBold ? 1.6 : 0.9;
-    const d = contourToPath(poly.coordinates, true);
+    const d = contourToPath(poly.coordinates, true, { step: fineStep, iterations: 2, minArea: 30 });
     if (!d) continue;
     contourSvg.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round" />`);
 
@@ -682,14 +682,14 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     }
     if (bestRing && bestRing.length > 10) {
       const mid = bestRing[Math.floor(bestRing.length / 2)];
-      const [lx, ly] = gridToPixel(mid[0], mid[1]);
+      const [lx, ly] = gridToPixel(mid[0], mid[1], fineStep);
       const txt = String(Math.round(value));
       labelSvg.push(`<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;SF Pro Text&quot;, &quot;Helvetica Neue&quot;, Helvetica, Arial, sans-serif" font-size="11" font-weight="${isThousand ? "700" : "600"}" fill="${stroke}" text-anchor="middle" stroke="white" stroke-width="3" stroke-opacity="0.85" paint-order="stroke fill">${txt}</text>`);
     }
   }
 
   // Highs / Lows
-  const extrema = findExtrema(grid);
+  const extrema = findExtrema(coarseGrid);
   const extremaSvg: string[] = [];
   for (const e of extrema) {
     const [x, y] = project(e.lon, e.lat);
