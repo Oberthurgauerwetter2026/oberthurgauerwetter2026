@@ -2,7 +2,7 @@ import { createFileRoute, Outlet, Link, useNavigate, useRouterState } from "@tan
 import { useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { CloudSun, LayoutDashboard, Settings, LogOut, User } from "lucide-react";
+import { CloudSun, LayoutDashboard, Settings, LogOut, User, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_app")({
@@ -44,6 +44,7 @@ function AppLayout() {
 
   const navItems = [
     { to: "/dashboard", label: "Prognosen", icon: LayoutDashboard },
+    { to: "/modelle", label: "Modelle", icon: Layers },
     ...(isAdmin ? [{ to: "/settings", label: "Einstellungen", icon: Settings }] : []),
     { to: "/profile", label: "Profil", icon: User },
   ];
