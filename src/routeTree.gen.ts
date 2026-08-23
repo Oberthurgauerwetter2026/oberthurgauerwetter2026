@@ -18,8 +18,10 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as HooksDailyForecastRouteImport } from './routes/hooks.daily-forecast'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppProfileRouteImport } from './routes/_app.profile'
+import { Route as AppModelleRouteImport } from './routes/_app.modelle'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppForecastForecastIdRouteImport } from './routes/_app.forecast.$forecastId'
+import { Route as ApiPublicModelGridSplatRouteImport } from './routes/api/public/model-grid/$'
 import { Route as ApiPublicMapsEuropePressureLatestDotsvgRouteImport } from './routes/api/public/maps/europe-pressure-latest[.]svg'
 import { Route as ApiPublicMapsDwdBodenanalyseDotpngRouteImport } from './routes/api/public/maps/dwd-bodenanalyse[.]png'
 import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
@@ -69,6 +71,11 @@ const AppProfileRoute = AppProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => AppRoute,
 } as any)
+const AppModelleRoute = AppModelleRouteImport.update({
+  id: '/modelle',
+  path: '/modelle',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -78,6 +85,11 @@ const AppForecastForecastIdRoute = AppForecastForecastIdRouteImport.update({
   id: '/forecast/$forecastId',
   path: '/forecast/$forecastId',
   getParentRoute: () => AppRoute,
+} as any)
+const ApiPublicModelGridSplatRoute = ApiPublicModelGridSplatRouteImport.update({
+  id: '/api/public/model-grid/$',
+  path: '/api/public/model-grid/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicMapsEuropePressureLatestDotsvgRoute =
   ApiPublicMapsEuropePressureLatestDotsvgRouteImport.update({
@@ -110,6 +122,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/dashboard': typeof AppDashboardRoute
+  '/modelle': typeof AppModelleRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
@@ -118,6 +131,7 @@ export interface FileRoutesByFullPath {
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
   '/api/public/maps/dwd-bodenanalyse.png': typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
+  '/api/public/model-grid/$': typeof ApiPublicModelGridSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -126,6 +140,7 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/dashboard': typeof AppDashboardRoute
+  '/modelle': typeof AppModelleRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
@@ -134,6 +149,7 @@ export interface FileRoutesByTo {
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
   '/api/public/maps/dwd-bodenanalyse.png': typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
+  '/api/public/model-grid/$': typeof ApiPublicModelGridSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -144,6 +160,7 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/modelle': typeof AppModelleRoute
   '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
   '/hooks/daily-forecast': typeof HooksDailyForecastRoute
@@ -152,6 +169,7 @@ export interface FileRoutesById {
   '/api/public/hooks/generate-pressure-map': typeof ApiPublicHooksGeneratePressureMapRoute
   '/api/public/maps/dwd-bodenanalyse.png': typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   '/api/public/maps/europe-pressure-latest.svg': typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
+  '/api/public/model-grid/$': typeof ApiPublicModelGridSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -162,6 +180,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/dashboard'
+    | '/modelle'
     | '/profile'
     | '/settings'
     | '/hooks/daily-forecast'
@@ -170,6 +189,7 @@ export interface FileRouteTypes {
     | '/api/public/hooks/generate-pressure-map'
     | '/api/public/maps/dwd-bodenanalyse.png'
     | '/api/public/maps/europe-pressure-latest.svg'
+    | '/api/public/model-grid/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -178,6 +198,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/dashboard'
+    | '/modelle'
     | '/profile'
     | '/settings'
     | '/hooks/daily-forecast'
@@ -186,6 +207,7 @@ export interface FileRouteTypes {
     | '/api/public/hooks/generate-pressure-map'
     | '/api/public/maps/dwd-bodenanalyse.png'
     | '/api/public/maps/europe-pressure-latest.svg'
+    | '/api/public/model-grid/$'
   id:
     | '__root__'
     | '/'
@@ -195,6 +217,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/_app/dashboard'
+    | '/_app/modelle'
     | '/_app/profile'
     | '/_app/settings'
     | '/hooks/daily-forecast'
@@ -203,6 +226,7 @@ export interface FileRouteTypes {
     | '/api/public/hooks/generate-pressure-map'
     | '/api/public/maps/dwd-bodenanalyse.png'
     | '/api/public/maps/europe-pressure-latest.svg'
+    | '/api/public/model-grid/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -217,6 +241,7 @@ export interface RootRouteChildren {
   ApiPublicHooksGeneratePressureMapRoute: typeof ApiPublicHooksGeneratePressureMapRoute
   ApiPublicMapsDwdBodenanalyseDotpngRoute: typeof ApiPublicMapsDwdBodenanalyseDotpngRoute
   ApiPublicMapsEuropePressureLatestDotsvgRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRoute
+  ApiPublicModelGridSplatRoute: typeof ApiPublicModelGridSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -284,6 +309,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProfileRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/modelle': {
+      id: '/_app/modelle'
+      path: '/modelle'
+      fullPath: '/modelle'
+      preLoaderRoute: typeof AppModelleRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/dashboard': {
       id: '/_app/dashboard'
       path: '/dashboard'
@@ -297,6 +329,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/forecast/$forecastId'
       preLoaderRoute: typeof AppForecastForecastIdRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/api/public/model-grid/$': {
+      id: '/api/public/model-grid/$'
+      path: '/api/public/model-grid/$'
+      fullPath: '/api/public/model-grid/$'
+      preLoaderRoute: typeof ApiPublicModelGridSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/public/maps/europe-pressure-latest.svg': {
       id: '/api/public/maps/europe-pressure-latest.svg'
@@ -331,6 +370,7 @@ declare module '@tanstack/react-router' {
 
 interface AppRouteChildren {
   AppDashboardRoute: typeof AppDashboardRoute
+  AppModelleRoute: typeof AppModelleRoute
   AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppForecastForecastIdRoute: typeof AppForecastForecastIdRoute
@@ -338,6 +378,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppDashboardRoute: AppDashboardRoute,
+  AppModelleRoute: AppModelleRoute,
   AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppForecastForecastIdRoute: AppForecastForecastIdRoute,
@@ -360,6 +401,7 @@ const rootRouteChildren: RootRouteChildren = {
     ApiPublicMapsDwdBodenanalyseDotpngRoute,
   ApiPublicMapsEuropePressureLatestDotsvgRoute:
     ApiPublicMapsEuropePressureLatestDotsvgRoute,
+  ApiPublicModelGridSplatRoute: ApiPublicModelGridSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
