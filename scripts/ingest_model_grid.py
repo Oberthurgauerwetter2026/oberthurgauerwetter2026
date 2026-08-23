@@ -26,6 +26,7 @@ import socket
 import struct
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import boto3
@@ -69,7 +70,7 @@ VARIABLES = {
 
 MISSING = -32768
 BATCH = 100
-THROTTLE_S = 4.0
+THROTTLE_S = 1.0
 RETRY_BACKOFFS = (3, 8, 20, 45)
 
 
@@ -162,105 +163,135 @@ def encode_int16(values: list[int]) -> str:
     return base64.b64encode(buf).decode("ascii")
 
 
-def main() -> None:
-    print(f"MODEL GRID INGEST START version={VERSION}")
-    n_lat = envi("GRID_LAT", 22)
-    n_lon = envi("GRID_LON", 34)
-    days = envi("FORECAST_DAYS", 4)
-    lats, lons, pts = build_grid(n_lat, n_lon)
-    print(f"grid {n_lat}x{n_lon} = {len(pts)} points, {days} days")
+def fetch_chunk(model: str, chunk, hourly: str, days: int, start: int):
+    params = {
+        "latitude": ",".join(f"{p[0]:.4f}" for p in chunk),
+        "longitude": ",".join(f"{p[1]:.4f}" for p in chunk),
+        "hourly": hourly,
+        "forecast_days": days,
+        "timezone": "GMT",
+        "models": model,
+    }
+    time.sleep(THROTTLE_S * (start // BATCH % 3))
+    return start, fetch(f"{model}#{start}", params)
 
-    s3 = make_s3()
-    bucket = env("R2_BUCKET")
-    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
+def ingest_model(model: str, s3, bucket: str, n_lat: int, n_lon: int, days: int, pts, generated_at: str) -> dict | None:
+    print(f"== model {model}")
     hourly = ",".join(v[0] for v in VARIABLES.values())
-    time_axis: list[str] | None = None
-    model_meta = []
-
-    for model in MODELS:
-        print(f"== model {model}")
-        # locations x time raw values per variable
-        per_var: dict[str, list[list[float | None]]] = {k: [] for k in VARIABLES}
-        ok = True
-        for start in range(0, len(pts), BATCH):
-            chunk = pts[start:start + BATCH]
-            params = {
-                "latitude": ",".join(f"{p[0]:.4f}" for p in chunk),
-                "longitude": ",".join(f"{p[1]:.4f}" for p in chunk),
-                "hourly": hourly,
-                "forecast_days": days,
-                "timezone": "GMT",
-                "models": model,
-            }
-            data = fetch(f"{model}#{start}", params)
+    starts = list(range(0, len(pts), BATCH))
+    results: dict[int, list] = {}
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures = [ex.submit(fetch_chunk, model, pts[s:s + BATCH], hourly, days, s) for s in starts]
+        for f in futures:
+            start, data = f.result()
             if data is None:
-                ok = False
-                break
-            for loc in data:
-                h = loc.get("hourly") or {}
-                if time_axis is None and h.get("time"):
-                    time_axis = h["time"]
-                for var, (om_name, _scale) in VARIABLES.items():
-                    series = h.get(om_name)
-                    per_var[var].append(series if isinstance(series, list) else [])
-            time.sleep(THROTTLE_S)
+                print(f"  aborted at batch {start}")
+                return None
+            results[start] = data
 
-        if not ok or time_axis is None:
-            print(f"  skipped {model}")
+    time_axis: list[str] | None = None
+    per_var: dict[str, list[list]] = {k: [] for k in VARIABLES}
+    for start in starts:
+        for loc in results[start]:
+            h = loc.get("hourly") or {}
+            if time_axis is None and h.get("time"):
+                time_axis = h["time"]
+            for var, (om_name, _scale) in VARIABLES.items():
+                series = h.get(om_name)
+                per_var[var].append(series if isinstance(series, list) else [])
+
+    if time_axis is None:
+        print(f"  skipped {model}: no time axis")
+        return None
+
+    nt = len(time_axis)
+    available = []
+    for var, (_om, scale) in VARIABLES.items():
+        series_list = per_var[var]
+        if len(series_list) != len(pts):
             continue
+        has_any = False
+        flat: list[int] = []
+        for t in range(nt):
+            for i in range(len(pts)):
+                s = series_list[i]
+                v = s[t] if t < len(s) else None
+                if v is None:
+                    flat.append(MISSING)
+                else:
+                    has_any = True
+                    iv = int(round(v * scale))
+                    flat.append(max(-32767, min(32767, iv)))
+        if not has_any:
+            print(f"  {var}: no data")
+            continue
+        body = json.dumps({
+            "version": VERSION,
+            "model": model,
+            "variable": var,
+            "scale": scale,
+            "missing": MISSING,
+            "nt": nt,
+            "nlat": n_lat,
+            "nlon": n_lon,
+            "generatedAt": generated_at,
+            "data": encode_int16(flat),
+        }, separators=(",", ":")).encode("utf-8")
+        s3.put_object(
+            Bucket=bucket,
+            Key=f"model-grid/{model}/{var}.json",
+            Body=body,
+            ContentType="application/json",
+            CacheControl="public, max-age=300, s-maxage=600",
+        )
+        available.append(var)
+        print(f"  {var}: {len(body)} bytes")
 
-        nt = len(time_axis)
-        available = []
-        for var, (_om, scale) in VARIABLES.items():
-            series_list = per_var[var]
-            if len(series_list) != len(pts):
-                continue
-            has_any = False
-            flat: list[int] = []
-            # layout: t-major -> [t][latIdx][lonIdx]
-            for t in range(nt):
-                for i in range(len(pts)):
-                    s = series_list[i]
-                    v = s[t] if t < len(s) else None
-                    if v is None:
-                        flat.append(MISSING)
-                    else:
-                        has_any = True
-                        iv = int(round(v * scale))
-                        flat.append(max(-32767, min(32767, iv)))
-            if not has_any:
-                print(f"  {var}: no data")
-                continue
-            body = json.dumps({
-                "version": VERSION,
-                "model": model,
-                "variable": var,
-                "scale": scale,
-                "missing": MISSING,
-                "nt": nt,
-                "nlat": n_lat,
-                "nlon": n_lon,
-                "generatedAt": generated_at,
-                "data": encode_int16(flat),
-            }, separators=(",", ":")).encode("utf-8")
-            s3.put_object(
-                Bucket=bucket,
-                Key=f"model-grid/{model}/{var}.json",
-                Body=body,
-                ContentType="application/json",
-                CacheControl="public, max-age=300, s-maxage=600",
-            )
-            available.append(var)
-            print(f"  {var}: {len(body)} bytes")
+    if not available:
+        return None
 
-        if available:
-            model_meta.append({"model": model, "variables": available})
+    meta = {
+        "version": VERSION,
+        "model": model,
+        "variables": available,
+        "times": time_axis,
+        "grid": {"nlat": n_lat, "nlon": n_lon},
+        "generatedAt": generated_at,
+    }
+    s3.put_object(
+        Bucket=bucket,
+        Key=f"model-grid/_meta/{model}.json",
+        Body=json.dumps(meta, separators=(",", ":")).encode("utf-8"),
+        ContentType="application/json",
+        CacheControl="no-store",
+    )
+    return meta
+
+
+def build_index(s3, bucket: str, n_lat: int, n_lon: int) -> None:
+    lats, lons, _pts = build_grid(n_lat, n_lon)
+    model_meta = []
+    times: list[str] = []
+    newest = ""
+    for model in MODELS:
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=f"model-grid/_meta/{model}.json")
+        except Exception as e:  # noqa: BLE001
+            print(f"  no meta for {model}: {type(e).__name__}")
+            continue
+        meta = json.loads(obj["Body"].read())
+        if meta.get("version") != VERSION or not meta.get("variables"):
+            continue
+        model_meta.append({"model": model, "variables": meta["variables"]})
+        if len(meta.get("times") or []) > len(times):
+            times = meta["times"]
+        newest = max(newest, meta.get("generatedAt", ""))
 
     index = {
         "version": VERSION,
-        "generatedAt": generated_at,
-        "times": time_axis or [],
+        "generatedAt": newest or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "times": times,
         "grid": {
             "nlat": n_lat,
             "nlon": n_lon,
@@ -281,6 +312,41 @@ def main() -> None:
         CacheControl="public, max-age=120, s-maxage=300",
     )
     print(f"uploaded index.json with {len(model_meta)} models")
+
+
+def main() -> None:
+    print(f"MODEL GRID INGEST START version={VERSION}")
+    n_lat = envi("GRID_LAT", 22)
+    n_lon = envi("GRID_LON", 34)
+    days = envi("FORECAST_DAYS", 4)
+    mode = os.environ.get("MODE", "ingest").strip()
+    s3 = make_s3()
+    bucket = env("R2_BUCKET")
+
+    if mode == "index":
+        build_index(s3, bucket, n_lat, n_lon)
+        print("done")
+        return
+
+    only = os.environ.get("MODEL", "").strip()
+    models = [only] if only else MODELS
+    for m in models:
+        if m not in MODELS:
+            sys.exit(f"unknown model: {m}")
+
+    _lats, _lons, pts = build_grid(n_lat, n_lon)
+    print(f"grid {n_lat}x{n_lon} = {len(pts)} points, {days} days, models={models}")
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    ok = 0
+    for model in models:
+        if ingest_model(model, s3, bucket, n_lat, n_lon, days, pts, generated_at):
+            ok += 1
+
+    if not only:
+        build_index(s3, bucket, n_lat, n_lon)
+    if ok == 0:
+        sys.exit("no model ingested")
     print("done")
 
 
