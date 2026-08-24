@@ -16,6 +16,7 @@ import {
 
 const SWISSTOPO_GREY =
   "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg";
+const OSM_FALLBACK = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 
 export type PanelView = { lng: number; lat: number; zoom: number };
 
@@ -31,10 +32,30 @@ type Props = {
   viewOwner: string | null;
 };
 
+/** Prüft, ob der Browser überhaupt einen WebGL-Kontext liefert. */
+function detectWebGL(): boolean {
+  try {
+    const c = document.createElement("canvas");
+    return Boolean(
+      c.getContext("webgl2") ||
+        c.getContext("webgl") ||
+        (c.getContext as unknown as (t: string) => unknown).call(c, "experimental-webgl"),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, onHover, viewOwner }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MLMap | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const styleReadyRef = useRef(false);
+  const fallbackAddedRef = useRef(false);
+  const [webglOk, setWebglOk] = useState<boolean | null>(null);
+  const [mapFailed, setMapFailed] = useState(false);
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+  const fallbackUrlRef = useRef<string | null>(null);
   const [grids, setGrids] = useState<{
     primary: VariableGrid | null;
     direction: VariableGrid | null;
@@ -45,13 +66,17 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
 
   const { nlat, nlon, minLat, maxLat, minLon, maxLon } = index.grid;
 
-  // Canvas einmalig anlegen (wird von MapLibre als canvas-source verwendet)
+  // Offscreen-Canvas für das Feld (wird als Bild in die Karte gelegt)
   if (!canvasRef.current && typeof document !== "undefined") {
     const c = document.createElement("canvas");
     c.width = nlon * 8;
     c.height = nlat * 8;
     canvasRef.current = c;
   }
+
+  useEffect(() => {
+    setWebglOk(detectWebGL());
+  }, []);
 
   // Daten laden
   useEffect(() => {
@@ -75,37 +100,71 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
     };
   }, [model, def.key, def.sourceVariable, def.arrows]);
 
-  // Karte initialisieren
+  // Karte initialisieren (nur wenn WebGL verfügbar)
   useEffect(() => {
+    if (webglOk !== true) return;
     if (!containerRef.current || mapRef.current || !canvasRef.current) return;
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: {
-        version: 8,
-        sources: {
-          base: { type: "raster", tiles: [SWISSTOPO_GREY], tileSize: 256, attribution: "© swisstopo", maxzoom: 18 },
+
+    let map: MLMap;
+    try {
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: {
+          version: 8,
+          sources: {
+            base: { type: "raster", tiles: [SWISSTOPO_GREY], tileSize: 256, attribution: "© swisstopo", maxzoom: 18 },
+          },
+          layers: [{ id: "base", type: "raster", source: "base" }],
         },
-        layers: [{ id: "base", type: "raster", source: "base" }],
-      },
-      center: [view.lng, view.lat],
-      zoom: view.zoom,
-      attributionControl: { compact: true },
-    });
+        center: [view.lng, view.lat],
+        zoom: view.zoom,
+        attributionControl: { compact: true },
+      });
+    } catch {
+      setMapFailed(true);
+      return;
+    }
     mapRef.current = map;
 
     map.on("load", () => {
+      styleReadyRef.current = true;
       map.addSource("field", {
-        type: "canvas",
-        canvas: canvasRef.current!,
+        type: "image",
+        // 1x1 transparentes PNG als Platzhalter, bis das Feld gezeichnet ist
+        url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=",
         coordinates: [
           [minLon, maxLat],
           [maxLon, maxLat],
           [maxLon, minLat],
           [minLon, minLat],
         ],
-        animate: true,
       });
-      map.addLayer({ id: "field", type: "raster", source: "field", paint: { "raster-opacity": 0.78, "raster-resampling": "linear" } });
+      map.addLayer({
+        id: "field",
+        type: "raster",
+        source: "field",
+        paint: { "raster-opacity": 0.78, "raster-resampling": "linear" },
+      });
+      // Falls das Feld schon gerendert wurde, sofort übernehmen
+      if (fallbackUrlRef.current) {
+        (map.getSource("field") as maplibregl.ImageSource | undefined)?.updateImage({ url: fallbackUrlRef.current });
+      }
+    });
+
+    map.on("error", (e) => {
+      const msg = String((e as { error?: Error }).error?.message ?? "");
+      // Kachelfehler: einmalig auf OSM-Kacheln als Hintergrund ausweichen
+      if (/tile|fetch|network|Failed/i.test(msg) && !fallbackAddedRef.current && styleReadyRef.current) {
+        fallbackAddedRef.current = true;
+        try {
+          map.addSource("base-fallback", { type: "raster", tiles: [OSM_FALLBACK], tileSize: 256, attribution: "© OpenStreetMap", maxzoom: 19 });
+          map.addLayer({ id: "base-fallback", type: "raster", source: "base-fallback" }, "base");
+        } catch {
+          /* ignorieren */
+        }
+        return;
+      }
+      if (/WebGL|context|shader/i.test(msg)) setMapFailed(true);
     });
 
     const emit = () => {
@@ -117,11 +176,13 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
     map.on("mouseout", () => onHover(null));
 
     return () => {
+      styleReadyRef.current = false;
+      fallbackAddedRef.current = false;
       map.remove();
       mapRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [webglOk]);
 
   // View-Synchronisation
   useEffect(() => {
@@ -132,7 +193,8 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
     map.jumpTo({ center: [view.lng, view.lat], zoom: view.zoom });
   }, [view, viewOwner, model]);
 
-  // Feld zeichnen
+
+  // Feld zeichnen und als Bild in die Karte legen
   useEffect(() => {
     const canvas = canvasRef.current;
     const g = grids.primary;
@@ -140,7 +202,26 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (!g) return;
+
+    const publish = () => {
+      let url: string;
+      try {
+        url = canvas.toDataURL("image/png");
+      } catch {
+        return;
+      }
+      fallbackUrlRef.current = url;
+      setFallbackUrl(url);
+      const map = mapRef.current;
+      if (map && styleReadyRef.current) {
+        (map.getSource("field") as maplibregl.ImageSource | undefined)?.updateImage({ url });
+      }
+    };
+
+    if (!g) {
+      publish();
+      return;
+    }
 
     const field = buildField(def, g, timeIndex, { snowfall: grids.snowfall, precipitation: grids.precipitation });
 
@@ -201,7 +282,9 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
         }
       }
     }
-  }, [grids, def, timeIndex, nlat, nlon]);
+
+    publish();
+  }, [grids, def, timeIndex, nlat, nlon, webglOk]);
 
   const hoverValue = useMemo(() => {
     const g = grids.primary;
@@ -217,6 +300,7 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
   const range = MODEL_RANGE_HOURS[model];
   const outOfRange = grids.primary ? timeIndex >= grids.primary.nt : false;
   const beyondModel = range !== undefined && timeIndex >= range;
+  const noMap = webglOk === false || mapFailed;
 
   return (
     <div className="relative overflow-hidden rounded-lg border bg-background">
@@ -241,8 +325,28 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
           )}
         </div>
       </div>
-      <div ref={containerRef} className="h-[300px] w-full" />
-      {(loading || !grids.primary || outOfRange || beyondModel) && (
+
+      {noMap ? (
+        // Fallback ohne WebGL: Feld als Bild über neutralem Hintergrund
+        <div className="relative h-[300px] w-full bg-muted/50">
+          {fallbackUrl && (
+            <img
+              src={fallbackUrl}
+              alt={`${MODEL_LABELS[model] ?? model} – ${def.label}`}
+              className="absolute inset-0 h-full w-full object-contain opacity-90"
+            />
+          )}
+          <div className="absolute inset-x-0 bottom-2 flex justify-center px-2">
+            <Badge variant="outline" className="bg-background/90 text-center text-[11px] leading-tight">
+              Kartenhintergrund nicht verfügbar (WebGL blockiert) – Modellfeld ohne Karte dargestellt
+            </Badge>
+          </div>
+        </div>
+      ) : (
+        <div ref={containerRef} className="h-[300px] w-full" />
+      )}
+
+      {!noMap && (loading || !grids.primary || outOfRange || beyondModel) && (
         <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center">
           <Badge variant={loading ? "secondary" : "outline"} className="bg-background/90">
             {loading
