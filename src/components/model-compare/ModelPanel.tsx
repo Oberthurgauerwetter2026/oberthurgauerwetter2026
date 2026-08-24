@@ -192,7 +192,6 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
     map.jumpTo({ center: [view.lng, view.lat], zoom: view.zoom });
   }, [view, viewOwner, model]);
 
-  const fallbackUrlRef = useRef<string | null>(null);
 
   // Feld zeichnen und als Bild in die Karte legen
   useEffect(() => {
