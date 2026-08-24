@@ -55,6 +55,7 @@ export function ModelPanel({ model, def, index, timeIndex, view, hover, onView, 
   const [webglOk, setWebglOk] = useState<boolean | null>(null);
   const [mapFailed, setMapFailed] = useState(false);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+  const fallbackUrlRef = useRef<string | null>(null);
   const [grids, setGrids] = useState<{
     primary: VariableGrid | null;
     direction: VariableGrid | null;
