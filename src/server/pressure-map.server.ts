@@ -8,6 +8,8 @@ import { contours as d3contours } from "d3-contour";
 import europeCountries from "@/data/europe-countries.json";
 import europeOcean from "@/data/europe-ocean.json";
 import europeLakes from "@/data/europe-lakes.json";
+import europeCoastlines from "@/data/europe-coastlines.json";
+import europeCountryBorders from "@/data/europe-country-borders.json";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { fetchOpenMeteo } from "./openmeteo-quota.server";
 
@@ -455,7 +457,7 @@ function escapeXml(s: string): string {
 // Convert a GeoJSON feature collection to an SVG path using our projection
 function geojsonToPath(geo: any): string {
   const parts: string[] = [];
-  const drawRing = (ring: number[][]) => {
+  const drawRing = (ring: number[][], closed = true) => {
     if (!ring.length) return;
     let d = "";
     for (let i = 0; i < ring.length; i++) {
@@ -463,12 +465,17 @@ function geojsonToPath(geo: any): string {
       const [x, y] = project(lon, lat);
       d += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
     }
-    d += "Z";
+    if (closed) d += "Z";
     parts.push(d);
   };
   for (const f of geo.features) {
     const geom = f.geometry;
     if (!geom) continue;
+    if (geom.type === "LineString") { drawRing(geom.coordinates, false); continue; }
+    if (geom.type === "MultiLineString") {
+      for (const line of geom.coordinates) drawRing(line, false);
+      continue;
+    }
     if (geom.type === "Polygon") {
       for (const ring of geom.coordinates) drawRing(ring);
     } else if (geom.type === "MultiPolygon") {
@@ -616,7 +623,7 @@ function geoOverlaySvg(): { seas: string; cities: string } {
   });
   const cities = CITIES.map(([n, lon, lat]) => {
     const [x, y] = project(lon, lat);
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2" fill="#1f2937" stroke="#ffffff" stroke-width="0.8"/><text x="${(x + 4).toFixed(1)}" y="${(y - 3).toFixed(1)}" font-family="${F}" font-size="8.5" fill="#1f2937" fill-opacity="0.8" paint-order="stroke" stroke="#ffffff" stroke-opacity="0.7" stroke-width="2">${n}</text>`;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#1f2937" stroke="#ffffff" stroke-width="1.2"/><text x="${(x + 6).toFixed(1)}" y="${(y - 5).toFixed(1)}" font-family="${F}" font-size="11" font-weight="600" fill="#1f2937" paint-order="stroke" stroke="#ffffff" stroke-opacity="0.95" stroke-width="3" stroke-linejoin="round">${n}</text>`;
   });
   return { seas: seas.join("\n    "), cities: cities.join("\n    ") };
 }
@@ -662,6 +669,8 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
   const oceanPath = geojsonToPath(europeOcean as any);
   const landPath = geojsonToPath(europeCountries as any);
   const lakesPath = geojsonToPath(europeLakes as any);
+  const coastlinePath = geojsonToPath(europeCoastlines);
+  const borderPath = geojsonToPath(europeCountryBorders);
 
   // Lat/lon graticule
   const gridLines: string[] = [];
@@ -790,14 +799,15 @@ export function buildSvg(grids: Grids, targetUtcIso: string): string {
     </g>
     <!-- Seen -->
     <path d="${lakesPath}" fill="#12507f" stroke="#3f7fb5" stroke-width="0.4" />
-    <!-- Ländergrenzen oben drauf -->
-    <path d="${landPath}" fill="none" stroke="#3f7fb5" stroke-width="0.7" stroke-linejoin="round" />
+    <!-- Landesgrenzen dezent, Küsten klar durchgezogen -->
+    <path d="${borderPath}" fill="none" stroke="#2e4f38" stroke-opacity="0.65" stroke-width="0.5" stroke-dasharray="2.5 2" stroke-linejoin="round" />
+    <path d="${coastlinePath}" fill="none" stroke="#0b3a5e" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round" />
     ${geoOverlaySvg().seas}
     <!-- Graticule -->
     ${gridLines.join("\n    ")}
     <!-- Isobaren -->
-    ${geoOverlaySvg().cities}
     ${contourSvg.join("\n    ")}
+    ${geoOverlaySvg().cities}
     ${labelSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
   </g>
