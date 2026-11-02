@@ -9,37 +9,31 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SignupRouteImport } from './routes/signup'
-import { Route as ResetPasswordRouteImport } from './routes/reset-password'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
-import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as HooksDailyForecastRouteImport } from './routes/hooks.daily-forecast'
-import { Route as AppSettingsRouteImport } from './routes/_app.settings'
-import { Route as AppProfileRouteImport } from './routes/_app.profile'
-import { Route as AppModelleRouteImport } from './routes/_app.modelle'
+import { Route as AppRouteImport } from './routes/_app'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppModelleRouteImport } from './routes/_app.modelle'
+import { Route as AppProfileRouteImport } from './routes/_app.profile'
+import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as HooksDailyForecastRouteImport } from './routes/hooks.daily-forecast'
 import { Route as AppForecastForecastIdRouteImport } from './routes/_app.forecast.$forecastId'
-import { Route as ApiPublicModelGridSplatRouteImport } from './routes/api/public/model-grid/$'
-import { Route as ApiPublicMapsEuropePressureLatestDotsvgRouteImport } from './routes/api/public/maps/europe-pressure-latest[.]svg'
-import { Route as ApiPublicMapsDwdBodenanalyseDotpngRouteImport } from './routes/api/public/maps/dwd-bodenanalyse[.]png'
-import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
 import { Route as ApiPublicDebugR2CacheRouteImport } from './routes/api/public/debug/r2-cache'
+import { Route as ApiPublicHooksGeneratePressureMapRouteImport } from './routes/api/public/hooks/generate-pressure-map'
+import { Route as ApiPublicMapsDwdBodenanalyseDotpngRouteImport } from './routes/api/public/maps/dwd-bodenanalyse[.]png'
+import { Route as ApiPublicMapsEuropePressureLatestDotsvgRouteImport } from './routes/api/public/maps/europe-pressure-latest[.]svg'
+import { Route as ApiPublicModelGridSplatRouteImport } from './routes/api/public/model-grid/$'
 
-const SignupRoute = SignupRouteImport.update({
-  id: '/signup',
-  path: '/signup',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ResetPasswordRoute = ResetPasswordRouteImport.update({
-  id: '/reset-password',
-  path: '/reset-password',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -47,28 +41,24 @@ const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
   path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppRoute = AppRouteImport.update({
-  id: '/_app',
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const HooksDailyForecastRoute = HooksDailyForecastRouteImport.update({
-  id: '/hooks/daily-forecast',
-  path: '/hooks/daily-forecast',
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppSettingsRoute = AppSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppProfileRoute = AppProfileRouteImport.update({
-  id: '/profile',
-  path: '/profile',
+const AppDashboardRoute = AppDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => AppRoute,
 } as any)
 const AppModelleRoute = AppModelleRouteImport.update({
@@ -76,25 +66,35 @@ const AppModelleRoute = AppModelleRouteImport.update({
   path: '/modelle',
   getParentRoute: () => AppRoute,
 } as any)
-const AppDashboardRoute = AppDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
+const AppProfileRoute = AppProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
   getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const HooksDailyForecastRoute = HooksDailyForecastRouteImport.update({
+  id: '/hooks/daily-forecast',
+  path: '/hooks/daily-forecast',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AppForecastForecastIdRoute = AppForecastForecastIdRouteImport.update({
   id: '/forecast/$forecastId',
   path: '/forecast/$forecastId',
   getParentRoute: () => AppRoute,
 } as any)
-const ApiPublicModelGridSplatRoute = ApiPublicModelGridSplatRouteImport.update({
-  id: '/api/public/model-grid/$',
-  path: '/api/public/model-grid/$',
+const ApiPublicDebugR2CacheRoute = ApiPublicDebugR2CacheRouteImport.update({
+  id: '/api/public/debug/r2-cache',
+  path: '/api/public/debug/r2-cache',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiPublicMapsEuropePressureLatestDotsvgRoute =
-  ApiPublicMapsEuropePressureLatestDotsvgRouteImport.update({
-    id: '/api/public/maps/europe-pressure-latest.svg',
-    path: '/api/public/maps/europe-pressure-latest.svg',
+const ApiPublicHooksGeneratePressureMapRoute =
+  ApiPublicHooksGeneratePressureMapRouteImport.update({
+    id: '/api/public/hooks/generate-pressure-map',
+    path: '/api/public/hooks/generate-pressure-map',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiPublicMapsDwdBodenanalyseDotpngRoute =
@@ -103,15 +103,15 @@ const ApiPublicMapsDwdBodenanalyseDotpngRoute =
     path: '/api/public/maps/dwd-bodenanalyse.png',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiPublicHooksGeneratePressureMapRoute =
-  ApiPublicHooksGeneratePressureMapRouteImport.update({
-    id: '/api/public/hooks/generate-pressure-map',
-    path: '/api/public/hooks/generate-pressure-map',
+const ApiPublicMapsEuropePressureLatestDotsvgRoute =
+  ApiPublicMapsEuropePressureLatestDotsvgRouteImport.update({
+    id: '/api/public/maps/europe-pressure-latest.svg',
+    path: '/api/public/maps/europe-pressure-latest.svg',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiPublicDebugR2CacheRoute = ApiPublicDebugR2CacheRouteImport.update({
-  id: '/api/public/debug/r2-cache',
-  path: '/api/public/debug/r2-cache',
+const ApiPublicModelGridSplatRoute = ApiPublicModelGridSplatRouteImport.update({
+  id: '/api/public/model-grid/$',
+  path: '/api/public/model-grid/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -246,32 +246,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/signup': {
-      id: '/signup'
-      path: '/signup'
-      fullPath: '/signup'
-      preLoaderRoute: typeof SignupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reset-password': {
-      id: '/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof ResetPasswordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/forgot-password': {
-      id: '/forgot-password'
-      path: '/forgot-password'
-      fullPath: '/forgot-password'
-      preLoaderRoute: typeof ForgotPasswordRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app': {
@@ -281,32 +260,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/hooks/daily-forecast': {
-      id: '/hooks/daily-forecast'
-      path: '/hooks/daily-forecast'
-      fullPath: '/hooks/daily-forecast'
-      preLoaderRoute: typeof HooksDailyForecastRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/settings': {
-      id: '/_app/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AppSettingsRouteImport
-      parentRoute: typeof AppRoute
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_app/profile': {
-      id: '/_app/profile'
-      path: '/profile'
-      fullPath: '/profile'
-      preLoaderRoute: typeof AppProfileRouteImport
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/dashboard': {
+      id: '/_app/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AppDashboardRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/modelle': {
@@ -316,12 +302,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppModelleRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/dashboard': {
-      id: '/_app/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof AppDashboardRouteImport
+    '/_app/profile': {
+      id: '/_app/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AppProfileRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/hooks/daily-forecast': {
+      id: '/hooks/daily-forecast'
+      path: '/hooks/daily-forecast'
+      fullPath: '/hooks/daily-forecast'
+      preLoaderRoute: typeof HooksDailyForecastRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/forecast/$forecastId': {
       id: '/_app/forecast/$forecastId'
@@ -330,25 +330,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppForecastForecastIdRouteImport
       parentRoute: typeof AppRoute
     }
-    '/api/public/model-grid/$': {
-      id: '/api/public/model-grid/$'
-      path: '/api/public/model-grid/$'
-      fullPath: '/api/public/model-grid/$'
-      preLoaderRoute: typeof ApiPublicModelGridSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/maps/europe-pressure-latest.svg': {
-      id: '/api/public/maps/europe-pressure-latest.svg'
-      path: '/api/public/maps/europe-pressure-latest.svg'
-      fullPath: '/api/public/maps/europe-pressure-latest.svg'
-      preLoaderRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/maps/dwd-bodenanalyse.png': {
-      id: '/api/public/maps/dwd-bodenanalyse.png'
-      path: '/api/public/maps/dwd-bodenanalyse.png'
-      fullPath: '/api/public/maps/dwd-bodenanalyse.png'
-      preLoaderRoute: typeof ApiPublicMapsDwdBodenanalyseDotpngRouteImport
+    '/api/public/debug/r2-cache': {
+      id: '/api/public/debug/r2-cache'
+      path: '/api/public/debug/r2-cache'
+      fullPath: '/api/public/debug/r2-cache'
+      preLoaderRoute: typeof ApiPublicDebugR2CacheRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/hooks/generate-pressure-map': {
@@ -358,11 +344,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksGeneratePressureMapRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/public/debug/r2-cache': {
-      id: '/api/public/debug/r2-cache'
-      path: '/api/public/debug/r2-cache'
-      fullPath: '/api/public/debug/r2-cache'
-      preLoaderRoute: typeof ApiPublicDebugR2CacheRouteImport
+    '/api/public/maps/dwd-bodenanalyse.png': {
+      id: '/api/public/maps/dwd-bodenanalyse.png'
+      path: '/api/public/maps/dwd-bodenanalyse.png'
+      fullPath: '/api/public/maps/dwd-bodenanalyse.png'
+      preLoaderRoute: typeof ApiPublicMapsDwdBodenanalyseDotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/maps/europe-pressure-latest.svg': {
+      id: '/api/public/maps/europe-pressure-latest.svg'
+      path: '/api/public/maps/europe-pressure-latest.svg'
+      fullPath: '/api/public/maps/europe-pressure-latest.svg'
+      preLoaderRoute: typeof ApiPublicMapsEuropePressureLatestDotsvgRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/model-grid/$': {
+      id: '/api/public/model-grid/$'
+      path: '/api/public/model-grid/$'
+      fullPath: '/api/public/model-grid/$'
+      preLoaderRoute: typeof ApiPublicModelGridSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
