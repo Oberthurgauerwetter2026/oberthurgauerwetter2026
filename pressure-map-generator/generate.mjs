@@ -415,6 +415,31 @@ function boxedLabel(x, y, content, opts = {}) {
 }
 
 const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+const SEA_LABELS = [
+  ["NORDATLANTIK", -17, 47, 13, 0], ["EUROPÄISCHES NORDMEER", 2, 67.5, 11, 0], ["BARENTSSEE", 38, 69.3, 10, 0],
+  ["NORDSEE", 3.2, 56.3, 10, 0], ["OSTSEE", 19.3, 57.6, 9.5, -35], ["GOLF VON BISKAYA", -5.8, 45.3, 8.5, 0],
+  ["MITTELMEER", 17.5, 34.6, 12, 0], ["SCHWARZES MEER", 34, 43.2, 9.5, 0],
+];
+const CITIES = [
+  ["London", -0.13, 51.5], ["Paris", 2.35, 48.86], ["Madrid", -3.7, 40.42], ["Rom", 12.5, 41.9],
+  ["Berlin", 13.4, 52.52], ["Zürich", 8.54, 47.37], ["Wien", 16.37, 48.21], ["Warschau", 21.01, 52.23],
+  ["Stockholm", 18.07, 59.33], ["Oslo", 10.75, 59.91], ["Kiew", 30.52, 50.45], ["Istanbul", 28.98, 41.01],
+  ["Reykjavík", -21.9, 64.15], ["Lissabon", -9.14, 38.72], ["Moskau", 37.62, 55.75], ["Athen", 23.73, 37.98],
+];
+function geoOverlaySvg() {
+  const F = `-apple-system, 'SF Pro Text', 'SF Pro Display', system-ui, sans-serif`;
+  const seas = SEA_LABELS.map(([n, lon, lat, size, rot]) => {
+    const [x, y] = project(lon, lat);
+    const spaced = String(n).split("").join("\u2009");
+    return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" transform="rotate(${rot} ${x.toFixed(1)} ${y.toFixed(1)})" text-anchor="middle" font-family="${F}" font-size="${size}" font-style="italic" font-weight="500" letter-spacing="1.5" fill="#cfe6f7" fill-opacity="0.72" paint-order="stroke" stroke="#0b3a5e" stroke-opacity="0.5" stroke-width="2">${n}</text>`;
+  });
+  const cities = CITIES.map(([n, lon, lat]) => {
+    const [x, y] = project(lon, lat);
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2" fill="#1f2937" stroke="#ffffff" stroke-width="0.8"/><text x="${(x + 4).toFixed(1)}" y="${(y - 3).toFixed(1)}" font-family="${F}" font-size="8.5" fill="#1f2937" fill-opacity="0.8" paint-order="stroke" stroke="#ffffff" stroke-opacity="0.7" stroke-width="2">${n}</text>`;
+  });
+  return { seas: seas.join("\n    "), cities: cities.join("\n    ") };
+}
+
 function pad2(n) { return String(n).padStart(2, "0"); }
 
 function buildSvg(grids, targetUtcIso, extremaOverride) {
@@ -592,7 +617,9 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     <g opacity="0.42" filter="url(#soften)">${precipSvg.join("\n      ")}</g>
     <path d="${lakesPath}" fill="${SEA}" stroke="${LAND_LINE}" stroke-width="0.35" />
     <path d="${landPath}" fill="none" stroke="${LAND_LINE}" stroke-width="0.6" stroke-linejoin="round" />
+    ${geoOverlaySvg().seas}
     ${gridLines.join("\n    ")}
+    ${geoOverlaySvg().cities}
     ${contourSvg.join("\n    ")}
     ${labelSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
