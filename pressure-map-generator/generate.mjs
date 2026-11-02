@@ -30,6 +30,8 @@ const DATA_DIR = existsSync(resolve(__dirname, "../src/data/europe-countries.jso
 const europeCountries = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-countries.json"), "utf8"));
 const europeOcean = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-ocean.json"), "utf8"));
 const europeLakes = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-lakes.json"), "utf8"));
+const europeCoastlines = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-coastlines.json"), "utf8"));
+const europeCountryBorders = JSON.parse(readFileSync(resolve(DATA_DIR, "europe-country-borders.json"), "utf8"));
 
 // ── Map extent ─────────────────────────────────────────────────────────────
 const W = -25, E = 45, S = 30, N = 70;
@@ -254,7 +256,7 @@ function findExtrema(g) {
 function escapeXml(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function geojsonToPath(geo) {
   const parts = [];
-  const drawRing = (ring) => {
+  const drawRing = (ring, closed = true) => {
     if (!ring.length) return;
     let d = "";
     for (let i = 0; i < ring.length; i++) {
@@ -262,12 +264,17 @@ function geojsonToPath(geo) {
       const [x, y] = project(lon, lat);
       d += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
     }
-    d += "Z";
+    if (closed) d += "Z";
     parts.push(d);
   };
   for (const f of geo.features) {
     const geom = f.geometry;
     if (!geom) continue;
+    if (geom.type === "LineString") { drawRing(geom.coordinates, false); continue; }
+    if (geom.type === "MultiLineString") {
+      for (const line of geom.coordinates) drawRing(line, false);
+      continue;
+    }
     if (geom.type === "Polygon") for (const ring of geom.coordinates) drawRing(ring);
     else if (geom.type === "MultiPolygon") for (const poly of geom.coordinates) for (const ring of poly) drawRing(ring);
   }
@@ -435,7 +442,7 @@ function geoOverlaySvg() {
   });
   const cities = CITIES.map(([n, lon, lat]) => {
     const [x, y] = project(lon, lat);
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2" fill="#1f2937" stroke="#ffffff" stroke-width="0.8"/><text x="${(x + 4).toFixed(1)}" y="${(y - 3).toFixed(1)}" font-family="${F}" font-size="8.5" fill="#1f2937" fill-opacity="0.8" paint-order="stroke" stroke="#ffffff" stroke-opacity="0.7" stroke-width="2">${n}</text>`;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#1f2937" stroke="#ffffff" stroke-width="1.2"/><text x="${(x + 6).toFixed(1)}" y="${(y - 5).toFixed(1)}" font-family="${F}" font-size="11" font-weight="600" fill="#1f2937" paint-order="stroke" stroke="#ffffff" stroke-opacity="0.95" stroke-width="3" stroke-linejoin="round">${n}</text>`;
   });
   return { seas: seas.join("\n    "), cities: cities.join("\n    ") };
 }
@@ -476,6 +483,8 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
   const oceanPath = geojsonToPath(europeOcean);
   const landPath = geojsonToPath(europeCountries);
   const lakesPath = geojsonToPath(europeLakes);
+  const coastlinePath = geojsonToPath(europeCoastlines);
+  const borderPath = geojsonToPath(europeCountryBorders);
 
   const [fx1, fy1] = [PAD.left, PAD.top];
   const fx2 = PAD.left + PLOT_W, fy2 = PAD.top + PLOT_H;
@@ -616,11 +625,12 @@ function buildSvg(grids, targetUtcIso, extremaOverride) {
     <path d="${landPath}" fill="${LAND}" stroke="none" />
     <g opacity="0.42" filter="url(#soften)">${precipSvg.join("\n      ")}</g>
     <path d="${lakesPath}" fill="${SEA}" stroke="${LAND_LINE}" stroke-width="0.35" />
-    <path d="${landPath}" fill="none" stroke="${LAND_LINE}" stroke-width="0.6" stroke-linejoin="round" />
+    <path d="${borderPath}" fill="none" stroke="#2e4f38" stroke-opacity="0.65" stroke-width="0.5" stroke-dasharray="2.5 2" stroke-linejoin="round" />
+    <path d="${coastlinePath}" fill="none" stroke="#0b3a5e" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round" />
     ${geoOverlaySvg().seas}
     ${gridLines.join("\n    ")}
-    ${geoOverlaySvg().cities}
     ${contourSvg.join("\n    ")}
+    ${geoOverlaySvg().cities}
     ${labelSvg.join("\n    ")}
     ${extremaSvg.join("\n    ")}
     ${gridLabels.join("\n    ")}
