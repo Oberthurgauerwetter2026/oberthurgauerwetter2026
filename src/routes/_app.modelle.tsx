@@ -37,7 +37,7 @@ export const Route = createFileRoute("/_app/modelle")({
   component: ModelComparePage,
 });
 
-const DEFAULT_MODELS = ["meteoswiss_icon_ch1", "meteoswiss_icon_ch2", "icon_d2", "meteofrance_arome_france_hd"];
+const DEFAULT_MODELS = ["meteoswiss_icon_ch1", "meteoswiss_icon_ch2", "icon_d2", "meteofrance_arome_france"];
 const LAYOUTS: Record<string, { cols: string; count: number; label: string }> = {
   "2": { cols: "sm:grid-cols-2", count: 2, label: "2 Panels" },
   "4": { cols: "sm:grid-cols-2", count: 4, label: "4 Panels" },

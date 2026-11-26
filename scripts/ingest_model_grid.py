@@ -44,7 +44,6 @@ MODELS = [
     "meteoswiss_icon_ch1",
     "meteoswiss_icon_ch2",
     "icon_d2",
-    "meteofrance_arome_france_hd",
     "meteofrance_arome_france",
     "meteofrance_arpege_europe",
     "icon_eu",
