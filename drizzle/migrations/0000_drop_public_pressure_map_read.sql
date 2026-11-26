@@ -1,0 +1,1 @@
+DROP POLICY IF EXISTS "Public read pressure map file" ON storage.objects;

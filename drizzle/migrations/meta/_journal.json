@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1795710298250,
+      "tag": "0000_drop_public_pressure_map_read",
+      "breakpoints": true
+    }
+  ]
+}
